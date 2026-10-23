@@ -87,7 +87,13 @@ def oauth_result(data: dict, username: str) -> dict:
             raise ValueError
         credential = {key: data[key] for key in ("access_token", "refresh_token", "id_token")}
         auth = claims.get("https://api.openai.com/auth", {})
-        credential["account_id"] = auth.get("chatgpt_account_id") if isinstance(auth, dict) else None
+        account_id = auth.get("chatgpt_account_id") if isinstance(auth, dict) else None
+        if not account_id:
+            access_auth = _claims(data["access_token"]).get("https://api.openai.com/auth", {})
+            account_id = access_auth.get("chatgpt_account_id") if isinstance(access_auth, dict) else None
+        if not isinstance(account_id, str) or not account_id:
+            raise ValueError
+        credential["account_id"] = account_id
         return {"credential_type": "codex_oauth", "credential": credential,
                 "expires_at": time.time() + lifetime, "identity": email}
     except (ValueError, TypeError, KeyError, OverflowError):
