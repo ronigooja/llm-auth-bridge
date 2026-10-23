@@ -38,6 +38,29 @@ type Task = {
   takeover_available?: boolean;
 };
 type Page = "accounts" | "targets" | "tasks" | "settings";
+type TaskEvent = {
+  event_id: string;
+  task_id: number;
+  state: string;
+  phase?: string;
+  message?: string;
+  created_at?: string;
+};
+function restoredNavigation(): { page: Page; task: number | null } {
+  const match = window.location.hash.match(
+    /^#(accounts|targets|tasks|settings)(?:\/(\d+))?$/,
+  );
+  return {
+    page: (match?.[1] as Page) || "accounts",
+    task: match?.[1] === "tasks" && match[2] ? Number(match[2]) : null,
+  };
+}
+const terminalStates = new Set([
+  "succeeded",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
 const labels: Record<string, string> = {
   queued: "排队中",
   running: "正在登录",
@@ -219,14 +242,29 @@ export function App() {
     "loading",
   );
   const [sessionError, setSessionError] = useState("");
-  const [page, setPage] = useState<Page>("accounts");
+  const [page, setPage] = useState<Page>(() => restoredNavigation().page);
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [targets, setTargets] = useState<Target[] | null>(null);
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [modal, setModal] = useState<ReactNode>(null);
-  const [selectedTask, setSelectedTask] = useState<number | null>(null);
+  const [selectedTask, setSelectedTask] = useState<number | null>(
+    () => restoredNavigation().task,
+  );
+  useEffect(() => {
+    const hash = `#${page}${page === "tasks" && selectedTask !== null ? `/${selectedTask}` : ""}`;
+    window.history.replaceState(null, "", hash);
+  }, [page, selectedTask]);
+  useEffect(() => {
+    const restore = () => {
+      const nav = restoredNavigation();
+      setPage(nav.page);
+      setSelectedTask(nav.task);
+    };
+    window.addEventListener("hashchange", restore);
+    return () => window.removeEventListener("hashchange", restore);
+  }, []);
   const m = useMutation();
   async function checkSession() {
     setSession("loading");
@@ -824,7 +862,7 @@ function ImportAccounts({
           e.preventDefault();
           void m.run(async () => {
             const v = await api<{ records: typeof records }>(
-              "/accounts/import/preview",
+              "/import/preview",
               "POST",
               { text },
             );
@@ -872,7 +910,7 @@ function ImportAccounts({
               }
               onClick={() =>
                 void m.run(async () => {
-                  await api("/accounts/import/confirm", "POST", { text });
+                  await api("/import/confirm", "POST", { text });
                   setText("");
                   await saved();
                 })
@@ -1109,6 +1147,9 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
   const [task, setTask] = useState<Task | null>(null);
   const [error, setError] = useState("");
   const [streamError, setStreamError] = useState("");
+  const [history, setHistory] = useState<TaskEvent[]>([]);
+  const [historyError, setHistoryError] = useState("");
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [code, setCode] = useState("");
   const [submission, setSubmission] = useState(() => crypto.randomUUID());
   const [takeover, setTakeover] = useState<string | null>(null);
@@ -1116,29 +1157,99 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
   async function load() {
     try {
       const v = await api<Task & { task?: Task }>(`/tasks/${id}`);
-      setTask(v.task || v);
+      const current = v.task || v;
+      setTask(current);
       setError("");
+      return current;
     } catch (e) {
       setError(message(e));
     }
   }
+  function mergeHistory(items: TaskEvent[]) {
+    setHistory((old) =>
+      Array.from(
+        new Map(
+          [...old, ...items].map((item) => [item.event_id, item]),
+        ).values(),
+      ).sort((a, b) => Number(a.event_id) - Number(b.event_id)),
+    );
+  }
+  async function loadHistory() {
+    try {
+      const result = await api<{
+        events: (Omit<TaskEvent, "event_id"> & { event_id: string | number })[];
+      }>(`/tasks/${id}/history`);
+      if (!Array.isArray(result.events)) throw new Error("无法读取执行记录");
+      mergeHistory(
+        result.events.map((item) => ({
+          ...item,
+          task_id: id,
+          event_id: String(item.event_id),
+        })),
+      );
+      setHistoryLoaded(true);
+      setHistoryError("");
+    } catch (e) {
+      setHistoryError(message(e));
+    }
+  }
   useEffect(() => {
-    void load();
+    void loadHistory();
     const events = new EventSource(`/api/v1/tasks/${id}/events`, {
       withCredentials: true,
     });
+    let ended = false;
+    void load().then((current) => {
+      if (current && terminalStates.has(current.state)) {
+        ended = true;
+        events.close();
+        setStreamError("");
+      }
+    });
     events.addEventListener("task", (e) => {
       try {
-        const v = JSON.parse((e as MessageEvent).data);
-        setTask((old) => ({ ...old, ...v }));
+        const event = e as MessageEvent;
+        const v = JSON.parse(event.data);
+        if (v.task_id !== undefined && v.task_id !== id)
+          throw new Error("Invalid task event");
+        if (typeof v.state !== "string") throw new Error("Invalid task state");
+        const item: TaskEvent = {
+          event_id: String(v.event_id ?? event.lastEventId),
+          task_id: id,
+          state: v.state,
+          phase: v.phase,
+          message: v.message,
+        };
+        mergeHistory([item]);
+        // Event IDs identify log rows, never the task itself.
+        setTask(
+          (old) =>
+            ({
+              ...old,
+              id,
+              state: v.state,
+              phase: v.phase,
+              message: v.message,
+              ...(v.takeover_available !== undefined
+                ? { takeover_available: !!v.takeover_available }
+                : {}),
+            }) as Task,
+        );
         setStreamError("");
+        if (terminalStates.has(v.state)) {
+          ended = true;
+          events.close();
+        }
+        void load();
         updated();
       } catch {
         setStreamError("无法读取任务更新，请刷新。");
       }
     });
     events.onopen = () => setStreamError("");
-    events.onerror = () => setStreamError("实时连接已断开，正在重连…");
+    events.onerror = () => {
+      if (!ended) setStreamError("实时连接已断开，正在重连…");
+    };
     return () => events.close();
   }, [id]);
   async function action(name: string, body?: unknown) {
@@ -1263,6 +1374,29 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
             </p>
           )}
           <ErrorBox error={m.error} />
+          <section className="event-history" aria-label="执行记录">
+            <h3>执行记录</h3>
+            <ol role="log" aria-live="polite" aria-relevant="additions">
+              {history.map((item) => (
+                <li key={item.event_id}>
+                  <span className="event-number">#{item.event_id}</span>
+                  <div>
+                    <Status value={item.state} />
+                    <span className="event-phase">
+                      {label(item.phase || item.state)}
+                    </span>
+                    {item.message && <p>{item.message}</p>}
+                  </div>
+                </li>
+              ))}
+            </ol>
+            <ErrorBox error={historyError} retry={() => void loadHistory()} />
+            {!history.length && !historyError && (
+              <p className="muted">
+                {historyLoaded ? "还没有执行记录。" : "正在读取执行记录…"}
+              </p>
+            )}
+          </section>
         </>
       )}
     </section>
@@ -1365,7 +1499,7 @@ function Settings() {
                   })
                 }
               />
-              维护模式（暂停新任务）
+              自动维护网页会话
             </label>
             <Field title="任务记录保留天数">
               <input

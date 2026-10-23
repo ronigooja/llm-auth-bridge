@@ -12,6 +12,7 @@ const response = (data: unknown, status = 200) =>
     }),
   );
 beforeEach(() => {
+  window.history.replaceState(null, "", "/");
   vi.stubGlobal("fetch", vi.fn());
 });
 afterEach(() => {
@@ -132,5 +133,144 @@ describe("management interactions", () => {
     });
     expect(screen.getByRole("button", { name: "接管浏览器" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "取消任务" })).toBeTruthy();
+  });
+  it("previews and confirms import using the exact versioned import contract", async () => {
+    const calls: { path: string; init?: RequestInit }[] = [];
+    const text = "synthetic@example.test----synthetic-password";
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const path = String(input);
+      calls.push({ path, init });
+      if (path === "/api/v1/auth/session")
+        return response({ csrf_token: "synthetic-token" });
+      if (path === "/api/v1/accounts") return response({ accounts: [] });
+      if (path === "/api/v1/targets") return response({ targets: [] });
+      if (path === "/api/v1/tasks") return response({ tasks: [] });
+      if (path === "/api/v1/import/preview")
+        return response({ records: [{ line: 1, valid: true }] });
+      if (path === "/api/v1/import/confirm")
+        return response({ imported: ["synthetic@example.test"] });
+      return response({ detail: "Unexpected endpoint" }, 404);
+    });
+    render(<App />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "导入账号" }));
+    await user.type(screen.getByLabelText("账号文本"), text);
+    await user.click(screen.getByRole("button", { name: "预览导入" }));
+    await user.click(await screen.findByRole("button", { name: "确认导入" }));
+    await waitFor(() =>
+      expect(
+        calls.filter((c) => c.path.startsWith("/api/v1/import/")),
+      ).toHaveLength(2),
+    );
+    for (const suffix of ["preview", "confirm"]) {
+      const call = calls.find((c) => c.path === `/api/v1/import/${suffix}`)!;
+      expect(call.init?.method).toBe("POST");
+      expect(call.init?.headers).toMatchObject({
+        "X-CSRF-Token": "synthetic-token",
+      });
+      expect(JSON.parse(String(call.init?.body))).toEqual({ text });
+    }
+    expect(calls.some((c) => c.path.includes("/accounts/import/"))).toBe(false);
+  });
+  it("restores the selected task, merges persisted logs, and closes a terminal SSE stream", async () => {
+    window.history.replaceState(null, "", "/#tasks/7");
+    const task = {
+      id: 7,
+      account_id: 2,
+      target_id: 3,
+      state: "running",
+      takeover_available: false,
+    };
+    let emit: ((event: MessageEvent) => void) | undefined;
+    let current: SyntheticEvents | undefined;
+    const close = vi.fn();
+    class SyntheticEvents {
+      onerror?: () => void;
+      constructor() {
+        current = this;
+      }
+      addEventListener(_name: string, listener: (event: MessageEvent) => void) {
+        emit = listener;
+      }
+      close = close;
+    }
+    vi.stubGlobal("EventSource", SyntheticEvents);
+    vi.mocked(fetch).mockImplementation((input) => {
+      const path = String(input);
+      if (path.endsWith("/auth/session"))
+        return response({ csrf_token: "synthetic-token" });
+      if (path.endsWith("/accounts")) return response({ accounts: [] });
+      if (path.endsWith("/targets")) return response({ targets: [] });
+      if (path.endsWith("/tasks")) return response({ tasks: [task] });
+      if (path.endsWith("/history"))
+        return response({
+          events: [
+            {
+              id: 7,
+              event_id: 41,
+              state: "running",
+              takeover_available: false,
+              phase: "browser",
+              message: "Browser ready",
+            },
+          ],
+        });
+      return response(task);
+    });
+    const view = render(<App />);
+    expect(
+      await screen.findByRole("heading", { name: "任务 #7" }),
+    ).toBeTruthy();
+    expect(await screen.findByText("Browser ready")).toBeTruthy();
+    const { act } = await import("@testing-library/react");
+    await act(async () => {
+      task.takeover_available = true;
+      emit!(
+        new MessageEvent("task", {
+          lastEventId: "41",
+          data: JSON.stringify({
+            id: 7,
+            task_id: 7,
+            event_id: 41,
+            state: "running",
+            phase: "browser",
+            message: "Browser ready",
+            takeover_available: true,
+          }),
+        }),
+      );
+    });
+    expect(screen.getAllByText("Browser ready")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "接管浏览器" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    await act(async () => {
+      task.state = "succeeded";
+      emit!(
+        new MessageEvent("task", {
+          lastEventId: "42",
+          data: JSON.stringify({
+            id: 7,
+            task_id: 7,
+            event_id: 42,
+            state: "succeeded",
+            phase: "verified",
+            message: "Synchronization complete",
+          }),
+        }),
+      );
+      current?.onerror?.();
+    });
+    expect(close).toHaveBeenCalled();
+    expect(screen.queryByText("实时连接已断开，正在重连…")).toBeNull();
+    expect(screen.getByText("Synchronization complete")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "任务 #42" })).toBeNull();
+    expect(window.location.hash).toBe("#tasks/7");
+    view.unmount();
+    render(<App />);
+    expect(
+      await screen.findByRole("heading", { name: "任务 #7" }),
+    ).toBeTruthy();
   });
 });
