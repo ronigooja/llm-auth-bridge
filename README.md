@@ -25,3 +25,5 @@ The service binds to `127.0.0.1:8000`. Put it behind an existing HTTPS proxy or 
 
 See [architecture](docs/architecture.md), [authentication](docs/authentication.md), [integrations](docs/integrations.md), and [development](docs/development.md).
 
+The interface rules are documented in [UI guidelines](docs/ui-guidelines.md).
+
