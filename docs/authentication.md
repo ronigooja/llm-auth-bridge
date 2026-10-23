@@ -1,6 +1,21 @@
 # Authentication flow
 
-Imports use `account----password----totp_secret[----mailbox_url]`. The fourth field is an HTTPS mailbox entry point and is never interpreted as a proxy. Import preview reports malformed and duplicate rows before confirmation. Secrets are encrypted with AES-GCM.
+Import lines are `account----password----totp_secret[----mailbox_url]`; the fourth field is a mailbox URL, never a proxy. Preview checks in-file and existing case-insensitive identities. Confirmation rejects any invalid row and commits all records atomically. Imported accounts start without a route or binding; choose direct/proxy and bind a target before starting a task. Optional TOTP seeds must decode as base32 with at least ten bytes. HTTPS mailbox URLs are the default; HTTP requires explicit account configuration. Local/private mailbox literals and unsafe schemes are rejected.
 
-Login tasks must have an explicit direct or proxy route. TOTP is attempted only within a bounded time window. Mailbox reading uses an isolated context, records a baseline, and accepts only a message whose sender, recipient, purpose, and timestamp match the request. Ambiguous or changed pages transition to `waiting_human`; the user can enter a code or take over the already-running browser.
+OpenAI's adapter launches a headed browser in the worker's virtual screen. Stable inputs/forms identify email, password, TOTP, email-code and consent steps. Unknown, CAPTCHA, third-party and device steps pause for manual review instead of repeated clicking. TOTP waits for at least five seconds of validity, attempts at most two distinct windows, then pauses. Password submission is not blindly repeated. Account identity must match the imported username before any result is accepted.
 
+Codex uses generated state and PKCE S256, exact localhost callback interception, and one bounded code exchange through the account route. Invalid/duplicate callback parameters fail; uncertain exchanges are not replayed. ChatGPT Web uses the browser-context session endpoint and checks session email, token and expiry. Maintenance reuses only an existing authenticated session; absence/expiry becomes `reauth_required` and requires administrator-triggered login.
+
+## Routing and isolation
+
+Direct is explicit: httpx ignores environment proxy settings and Chromium uses no proxy. HTTP, HTTPS and authenticated SOCKS5 use GOST 3.3.1 as a local HTTP bridge for both Chromium and token exchange. Upstream credentials live only in a restricted temporary config, never process arguments or logs. A failed proxy fails the task. TLS proxy certificates are verified. Chromium disables nonproxied WebRTC UDP, background networking and service workers. The local callback is intercepted before network access. Each run uses a new context and closes it on termination; saved state is encrypted by the worker. No persistent plaintext profile is used. The production browser enables the Chromium sandbox; container sandbox runtime acceptance remains unverified.
+
+## Webmail boundary
+
+No site-specific webmail adapter is enabled because no test mailbox/deployed site contract was supplied. `app/mailbox.py` supplies public-address URL checks and conservative fresh-message selection by baseline ID, sender, recipient, purpose and timestamp. Ambiguous messages return no code. These are extension primitives, **not an implemented generic mail reader**. DNS validation alone does not prevent rebinding; a future automatic adapter must also pin resolved addresses or enforce egress filtering across every redirect. Do not enable arbitrary mailbox navigation without that boundary.
+
+At present, email-code challenges offer code entry and same-session provider takeover. The configured mailbox URL is encrypted and is not navigated automatically. Automatic mail polling, isolated mailbox browser operation and a real site's redirect/list/detail contract remain pending serial real-account acceptance. No mailbox content is saved.
+
+## Human operation
+
+Task actions submit a code, request takeover, continue, cancel or retry sync. Starting takeover pauses automation at the next bounded checkpoint. The noVNC iframe uses the authenticated app WebSocket path, checks Origin, and binds access to the live waiting task. Continue closes that access and re-identifies the page. Cancellation closes the browser. Waiting expires after thirty minutes, producing an interrupted task that can be restarted. OTP commands are encrypted, omitted from logs, and cleared when consumed.

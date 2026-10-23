@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./main";
 
@@ -333,4 +333,35 @@ describe("management interactions", () => {
     );
     prompt.mockRestore();
   });
+});
+
+
+it("keeps account editor busy until new route and bindings finish refreshing", async () => {
+  let updated = false;
+  let release: ((value: Response) => void) | undefined;
+  const account = { id: 1, username: "synthetic@example.test", status: "new", route_type: "unset", target_ids: [], has_password: true, has_totp: false, has_mailbox: false };
+  vi.mocked(fetch).mockImplementation((input, init) => {
+    const path = String(input);
+    if (path.endsWith("/auth/session")) return response({ csrf_token: "synthetic-token" });
+    if (path.endsWith("/accounts/1") && init?.method === "PATCH") { updated = true; return response({}); }
+    if (path.endsWith("/accounts")) {
+      if (updated) return new Promise<Response>((resolve) => { release = resolve; });
+      return response({ accounts: [account] });
+    }
+    if (path.endsWith("/targets")) return response({ targets: [{ id: 1, name: "Synthetic CPA", kind: "cliproxyapi", verification: "unverified" }] });
+    return response({ tasks: [] });
+  });
+  render(<App />);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "编辑与绑定" }));
+  await user.selectOptions(screen.getByLabelText("网络路由"), "direct");
+  await user.click(screen.getByLabelText("Synthetic CPA"));
+  await user.click(screen.getByRole("button", { name: "保存账号" }));
+  await waitFor(() => expect(release).toBeTypeOf("function"));
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "保存中…" })).toHaveProperty("disabled", true);
+  release!(new Response(JSON.stringify({ accounts: [{ ...account, route_type: "direct", target_ids: [1] }] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await user.click(screen.getByRole("button", { name: "开始登录" }));
+  expect(within(screen.getByRole("dialog")).getByRole("button", { name: "开始登录" })).toHaveProperty("disabled", false);
 });

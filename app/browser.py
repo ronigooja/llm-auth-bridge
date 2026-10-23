@@ -4,6 +4,7 @@ Provider markup and downstream credentials remain unverified until serial real
 account acceptance. Unknown pages pause the same browser for human takeover.
 No traces, HAR, videos, screenshots, or browser state files are created.
 """
+
 import base64
 import hashlib
 import json
@@ -19,8 +20,10 @@ from .totp import generate_code, seconds_remaining
 AUTH_ORIGIN = "https://auth.openai.com"
 CHATGPT_ORIGIN = "https://chatgpt.com"
 BROWSER_ARGS = [
-    "--disable-dev-shm-usage", "--disable-background-networking",
-    "--disable-component-update", "--disable-domain-reliability",
+    "--disable-dev-shm-usage",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-domain-reliability",
     "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
     "--webrtc-ip-handling-policy=disable_non_proxied_udp",
 ]
@@ -39,28 +42,52 @@ class ReauthenticationRequired(BrowserError):
 
 def pkce_pair() -> tuple[str, str]:
     verifier = secrets.token_urlsafe(48)
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+        .rstrip(b"=")
+        .decode()
+    )
     return verifier, challenge
 
 
 def authorization_url(state: str, challenge: str) -> str:
-    return AUTH_ORIGIN + "/oauth/authorize?" + urlencode({
-        "client_id": CLIENT_ID, "redirect_uri": REDIRECT_URI, "response_type": "code",
-        "scope": "openid profile email offline_access", "state": state,
-        "code_challenge": challenge, "code_challenge_method": "S256",
-        "id_token_add_organizations": "true", "codex_cli_simplified_flow": "true",
-    })
+    return (
+        AUTH_ORIGIN
+        + "/oauth/authorize?"
+        + urlencode(
+            {
+                "client_id": CLIENT_ID,
+                "redirect_uri": REDIRECT_URI,
+                "response_type": "code",
+                "scope": "openid profile email offline_access",
+                "state": state,
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "id_token_add_organizations": "true",
+                "codex_cli_simplified_flow": "true",
+            }
+        )
+    )
 
 
 def validate_callback(url: str, state: str) -> str:
     try:
         parsed = urlsplit(url)
         expected = urlsplit(REDIRECT_URI)
-        if (parsed.scheme, parsed.netloc, parsed.path) != (expected.scheme, expected.netloc, expected.path):
+        if (parsed.scheme, parsed.netloc, parsed.path) != (
+            expected.scheme,
+            expected.netloc,
+            expected.path,
+        ):
             raise ValueError
         values = parse_qs(parsed.query, keep_blank_values=True)
-        if (values.get("state") != [state] or len(values.get("code", [])) != 1
-                or not values["code"][0] or "error" in values or parsed.fragment):
+        if (
+            values.get("state") != [state]
+            or len(values.get("code", [])) != 1
+            or not values["code"][0]
+            or "error" in values
+            or parsed.fragment
+        ):
             raise ValueError
         return values["code"][0]
     except (ValueError, TypeError):
@@ -70,7 +97,9 @@ def validate_callback(url: str, state: str) -> str:
 def _claims(token: str) -> dict:
     try:
         payload = token.split(".")[1]
-        value = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        value = json.loads(
+            base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+        )
         if not isinstance(value, dict):
             raise ValueError
         return value
@@ -82,7 +111,10 @@ def oauth_result(data: dict, username: str) -> dict:
     try:
         if not isinstance(data, dict):
             raise ValueError
-        if not all(isinstance(data.get(k), str) and data[k] for k in ("access_token", "refresh_token", "id_token")):
+        if not all(
+            isinstance(data.get(k), str) and data[k]
+            for k in ("access_token", "refresh_token", "id_token")
+        ):
             raise ValueError
         claims = _claims(data["id_token"])
         email = claims.get("email")
@@ -91,17 +123,29 @@ def oauth_result(data: dict, username: str) -> dict:
         lifetime = float(data["expires_in"])
         if not 0 < lifetime < 366 * 86400:
             raise ValueError
-        credential = {key: data[key] for key in ("access_token", "refresh_token", "id_token")}
+        credential = {
+            key: data[key] for key in ("access_token", "refresh_token", "id_token")
+        }
         auth = claims.get("https://api.openai.com/auth", {})
         account_id = auth.get("chatgpt_account_id") if isinstance(auth, dict) else None
         if not account_id:
-            access_auth = _claims(data["access_token"]).get("https://api.openai.com/auth", {})
-            account_id = access_auth.get("chatgpt_account_id") if isinstance(access_auth, dict) else None
+            access_auth = _claims(data["access_token"]).get(
+                "https://api.openai.com/auth", {}
+            )
+            account_id = (
+                access_auth.get("chatgpt_account_id")
+                if isinstance(access_auth, dict)
+                else None
+            )
         if not isinstance(account_id, str) or not account_id:
             raise ValueError
         credential["account_id"] = account_id
-        return {"credential_type": "codex_oauth", "credential": credential,
-                "expires_at": time.time() + lifetime, "identity": email}
+        return {
+            "credential_type": "codex_oauth",
+            "credential": credential,
+            "expires_at": time.time() + lifetime,
+            "identity": email,
+        }
     except (ValueError, TypeError, KeyError, OverflowError):
         raise BrowserError("Provider returned an invalid credential") from None
 
@@ -119,8 +163,12 @@ def session_result(data: dict, username: str) -> dict:
         expires = float(claims["exp"])
         if not math.isfinite(expires) or expires <= time.time():
             raise ValueError
-        return {"credential_type": "chatgpt_web", "credential": {"access_token": token},
-                "expires_at": expires, "identity": email}
+        return {
+            "credential_type": "chatgpt_web",
+            "credential": {"access_token": token},
+            "expires_at": expires,
+            "identity": email,
+        }
     except (KeyError, ValueError, TypeError, OverflowError):
         raise BrowserError("Provider returned an invalid browser session") from None
 
@@ -137,16 +185,31 @@ def _visible(page, selector):
 def detect_state(page) -> str:
     """Prioritize the most specific known challenge; unknown markup is manual."""
     parsed = urlsplit(page.url)
-    if parsed.hostname not in ("auth.openai.com", "auth0.openai.com", "chatgpt.com") or parsed.scheme != "https":
+    if (
+        parsed.hostname not in ("auth.openai.com", "auth0.openai.com", "chatgpt.com")
+        or parsed.scheme != "https"
+    ):
         return "unknown"
-    if _visible(page, 'input[autocomplete="one-time-code"], input[name="code"], input[name="otp"]'):
+    if _visible(
+        page,
+        'input[autocomplete="one-time-code"], input[name="code"], input[name="otp"]',
+    ):
         text = page.locator("body").inner_text().casefold()
-        return "totp" if any(word in text for word in ("authenticator", "authentication app", "验证器")) else "email_code"
+        return (
+            "totp"
+            if any(
+                word in text
+                for word in ("authenticator", "authentication app", "验证器")
+            )
+            else "email_code"
+        )
     if _visible(page, 'input[type="password"]'):
         return "password"
     if _visible(page, 'input[type="email"], input[name="username"]'):
         return "email"
-    if parsed.hostname == "chatgpt.com" and _visible(page, 'button[data-testid="login-button"]'):
+    if parsed.hostname == "chatgpt.com" and _visible(
+        page, 'button[data-testid="login-button"]'
+    ):
         return "login"
     if parsed.hostname == "auth.openai.com" and "consent" in parsed.path:
         return "consent"
@@ -173,7 +236,9 @@ def _human(control, reason: str) -> str | None:
 
 
 def _get_session(context, username: str) -> dict | None:
-    response = context.request.get(CHATGPT_ORIGIN + "/api/auth/session", timeout=10000, max_redirects=0)
+    response = context.request.get(
+        CHATGPT_ORIGIN + "/api/auth/session", timeout=10000, max_redirects=0
+    )
     if response.status != 200:
         return None
     data = response.json()
@@ -182,7 +247,9 @@ def _get_session(context, username: str) -> dict | None:
     return session_result(data, username)
 
 
-def run_login(account: dict, target: dict, control, saved_state: dict | None = None) -> dict:
+def run_login(
+    account: dict, target: dict, control, saved_state: dict | None = None
+) -> dict:
     """Run one login while the worker holds its global browser lock.
 
     All provider data is kept in memory. The worker encrypts save_state/result.
@@ -202,15 +269,29 @@ def run_login(account: dict, target: dict, control, saved_state: dict | None = N
         with sync_playwright() as playwright:
             browser = None
             try:
-                browser = playwright.chromium.launch(headless=False, chromium_sandbox=True, proxy=route.playwright_proxy,
+                browser = playwright.chromium.launch(
+                    headless=False,
+                    chromium_sandbox=True,
+                    proxy=route.playwright_proxy,
                     env={**os.environ, "DISPLAY": os.getenv("DISPLAY", ":99")},
-                    args=BROWSER_ARGS + (["--no-proxy-server"] if route.playwright_proxy is None else ["--proxy-bypass-list=<-loopback>"]))
-                context = browser.new_context(storage_state=saved_state, accept_downloads=False,
-                                              service_workers="block")
+                    args=BROWSER_ARGS
+                    + (
+                        ["--no-proxy-server"]
+                        if route.playwright_proxy is None
+                        else ["--proxy-bypass-list=<-loopback>"]
+                    ),
+                )
+                context = browser.new_context(
+                    storage_state=saved_state,
+                    accept_downloads=False,
+                    service_workers="block",
+                )
                 context.set_default_timeout(10000)
                 page = context.new_page()
                 if hasattr(control, "browser_ready"):
-                    control.browser_ready(int(os.getenv("BRIDGE_WEBSOCKIFY_PORT", "6080")))
+                    control.browser_ready(
+                        int(os.getenv("BRIDGE_WEBSOCKIFY_PORT", "6080"))
+                    )
                 control.phase("browser", "Browser ready")
                 captured = []
                 verifier, challenge = pkce_pair()
@@ -218,20 +299,34 @@ def run_login(account: dict, target: dict, control, saved_state: dict | None = N
 
                 def intercept(request_route):
                     captured.append(request_route.request.url)
-                    request_route.fulfill(status=200, content_type="text/plain", body="Authorization received. Return to the bridge.")
+                    request_route.fulfill(
+                        status=200,
+                        content_type="text/plain",
+                        body="Authorization received. Return to the bridge.",
+                    )
 
                 context.route(REDIRECT_URI + "**", intercept)
                 if kind == "cliproxyapi":
-                    page.goto(authorization_url(state, challenge), wait_until="domcontentloaded", timeout=30000)
+                    page.goto(
+                        authorization_url(state, challenge),
+                        wait_until="domcontentloaded",
+                        timeout=30000,
+                    )
                 else:
-                    page.goto(CHATGPT_ORIGIN, wait_until="domcontentloaded", timeout=30000)
+                    page.goto(
+                        CHATGPT_ORIGIN, wait_until="domcontentloaded", timeout=30000
+                    )
                     result = _get_session(context, account["username"])
                     if result:
                         _save(context, control)
                         return result
                     if account.get("_maintenance"):
                         raise ReauthenticationRequired()
-                    page.goto(CHATGPT_ORIGIN + "/auth/login", wait_until="domcontentloaded", timeout=30000)
+                    page.goto(
+                        CHATGPT_ORIGIN + "/auth/login",
+                        wait_until="domcontentloaded",
+                        timeout=30000,
+                    )
                 submitted = set()
                 totp_attempts = 0
                 manual_rounds = 0
@@ -241,15 +336,25 @@ def run_login(account: dict, target: dict, control, saved_state: dict | None = N
                     if captured:
                         code = validate_callback(captured[0], state)
                         control.phase("token_exchange", "Exchanging authorization code")
-                        response = route.session.post(AUTH_ORIGIN + "/oauth/token", data={
-                            "grant_type": "authorization_code", "client_id": CLIENT_ID,
-                            "code": code, "redirect_uri": REDIRECT_URI, "code_verifier": verifier})
+                        response = route.session.post(
+                            AUTH_ORIGIN + "/oauth/token",
+                            data={
+                                "grant_type": "authorization_code",
+                                "client_id": CLIENT_ID,
+                                "code": code,
+                                "redirect_uri": REDIRECT_URI,
+                                "code_verifier": verifier,
+                            },
+                        )
                         if response.status_code != 200:
                             raise BrowserError("OAuth token exchange failed")
                         result = oauth_result(response.json(), account["username"])
                         _save(context, control)
                         return result
-                    if kind == "chatgpt-web-voice" and urlsplit(page.url).hostname == "chatgpt.com":
+                    if (
+                        kind == "chatgpt-web-voice"
+                        and urlsplit(page.url).hostname == "chatgpt.com"
+                    ):
                         result = _get_session(context, account["username"])
                         if result:
                             _save(context, control)
@@ -258,12 +363,20 @@ def run_login(account: dict, target: dict, control, saved_state: dict | None = N
                     marker = (stage, urlsplit(page.url).path)
                     if stage == "login" and marker not in submitted:
                         control.phase("login", "Opening account sign in")
-                        _visible(page, 'button[data-testid="login-button"]').click(timeout=10000)
+                        _visible(page, 'button[data-testid="login-button"]').click(
+                            timeout=10000
+                        )
                         submitted.add(marker)
                     elif stage in ("email", "password") and marker not in submitted:
                         control.phase(stage, "Submitting account " + stage)
-                        selector = 'input[type="email"], input[name="username"]' if stage == "email" else 'input[type="password"]'
-                        _visible(page, selector).fill(account["username" if stage == "email" else "password"])
+                        selector = (
+                            'input[type="email"], input[name="username"]'
+                            if stage == "email"
+                            else 'input[type="password"]'
+                        )
+                        _visible(page, selector).fill(
+                            account["username" if stage == "email" else "password"]
+                        )
                         _submit(page)
                         submitted.add(marker)
                     elif stage == "totp" and account.get("totp") and totp_attempts < 2:
@@ -274,7 +387,10 @@ def run_login(account: dict, target: dict, control, saved_state: dict | None = N
                         code = generate_code(account["totp"])
                         if ("totp_code", code) not in submitted:
                             control.phase("totp", "Submitting authenticator code")
-                            _visible(page, 'input[autocomplete="one-time-code"], input[name="code"], input[name="otp"]').fill(code)
+                            _visible(
+                                page,
+                                'input[autocomplete="one-time-code"], input[name="code"], input[name="otp"]',
+                            ).fill(code)
                             _submit(page)
                             submitted.add(("totp_code", code))
                             totp_attempts += 1
@@ -294,23 +410,42 @@ def run_login(account: dict, target: dict, control, saved_state: dict | None = N
                             page.wait_for_timeout(500)
                             continue
                         _save(context, control)
-                        reason = "Enter the email verification code or take over the browser" if stage == "email_code" else "Review the browser and continue after completing the login step"
+                        reason = (
+                            "Enter the email verification code or take over the browser"
+                            if stage == "email_code"
+                            else "Review the browser and continue after completing the login step"
+                        )
                         code = _human(control, reason)
                         if code:
-                            if not code.isascii() or not code.isdigit() or len(code) not in (6, 8):
-                                raise BrowserError("Verification code must contain six or eight digits")
-                            field = _visible(page, 'input[autocomplete="one-time-code"], input[name="code"], input[name="otp"]')
+                            if (
+                                not code.isascii()
+                                or not code.isdigit()
+                                or len(code) not in (6, 8)
+                            ):
+                                raise BrowserError(
+                                    "Verification code must contain six or eight digits"
+                                )
+                            field = _visible(
+                                page,
+                                'input[autocomplete="one-time-code"], input[name="code"], input[name="otp"]',
+                            )
                             if field is None:
-                                raise BrowserError("No supported verification code field is available")
+                                raise BrowserError(
+                                    "No supported verification code field is available"
+                                )
                             field.fill(code)
                             _submit(page)
                         manual_rounds += 1
                         if manual_rounds > 30:
-                            raise BrowserError("Login requires a new task after repeated manual steps")
+                            raise BrowserError(
+                                "Login requires a new task after repeated manual steps"
+                            )
                         started = time.monotonic()
                     page.wait_for_timeout(500)
             except (PlaywrightError, httpx.HTTPError, json.JSONDecodeError):
-                raise BrowserError("Browser authentication failed; review the account and route") from None
+                raise BrowserError(
+                    "Browser authentication failed; review the account and route"
+                ) from None
             finally:
                 if browser is not None:
                     try:

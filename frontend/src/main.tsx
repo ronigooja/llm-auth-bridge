@@ -322,8 +322,8 @@ export function App() {
   }, [session]);
   const close = () => setModal(null);
   const saved = async () => {
-    close();
     await refresh();
+    close();
   };
   if (session === "loading")
     return (

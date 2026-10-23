@@ -21,3 +21,13 @@ Browser entrypoint: `run_login(account: dict, target: dict, control, saved_state
 Integration entrypoint: `sync_credential(target: dict, result: dict, account: dict, remote_id: str | None = None) -> dict` returns `{remote_id,verified:bool}`. `test_connection(target: dict) -> dict` returns `{reachable,verification:'unverified'}`. target includes kind,config; account includes username,route_type,proxy. Never infer direct from an empty downstream proxy. Unknown downstream contracts fail closed with actionable safe exception. No fabricated successful verification.
 
 Persisted task states: queued,running,waiting_human,sync_pending,succeeded,failed,cancelled,interrupted. Config versions freeze at enqueue; edits before claim interrupt task. Browser credential result encrypted; sync_pending frees browser. Main performs only serial credential verification.
+
+## Integrated amendments
+
+- GET /tasks/{id}/history returns `{events}` with persisted event_id, task id in `id`, state, phase, message, takeover_available, created_at. SSE uses the same data and its own monotonic wire id.
+- Task detail adds account_username; public task records include remote_id for reconciliation audit.
+- POST /tasks/{id}/discard-sync accepts `{confirmation: exact account username}` for an idle pending sync. It deletes local pending material after explicit operator confirmation, retains remote ID/audit, marks interrupted/remote_outcome_unknown and account sync_unknown, and never deletes a downstream account. Ordinary cancellation conflicts after a possible remote write.
+- A pending target may update administrator credentials/name while preserving base_url, allow_http, kind and compatibility; retry uses the corrected target version without repeating login.
+- Target config `compatibility` accepts cpa-auth-files-v1 (CPA default) or explicitly selected bridge-v1 (voice). The voice client requires that server contract and is not native gateway support.
+- Account optional nested proxy secrets preserve omitted fields; explicit null clears an optional secret. Current account/target identity/route cannot change during pending synchronization.
+- `maintenance_enabled` enables automatic saved-session maintenance and never pauses manual task admission.

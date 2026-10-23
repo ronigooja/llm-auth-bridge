@@ -1,12 +1,14 @@
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+
 @dataclass
 class ImportRecord:
     username: str
     password: str
     totp: str
     mailbox_url: str | None = None
+
 
 def parse_line(line: str) -> ImportRecord:
     fields = line.rstrip("\n").split("----")
@@ -17,16 +19,25 @@ def parse_line(line: str) -> ImportRecord:
         raise ValueError("mailbox_url must be an HTTP(S) URL")
     return ImportRecord(*fields[:3], mailbox)
 
+
 def preview(text: str) -> list[dict]:
-    seen = set(); result = []
+    seen = set()
+    result = []
     for number, line in enumerate(text.splitlines(), 1):
-        if not line.strip(): continue
+        if not line.strip():
+            continue
         try:
             r = parse_line(line)
-            duplicate = r.username in seen
-            seen.add(r.username)
-            result.append({"line": number, "account": r.username, "valid": not duplicate, "duplicate": duplicate})
+            duplicate = r.username.casefold() in seen
+            seen.add(r.username.casefold())
+            result.append(
+                {
+                    "line": number,
+                    "account": r.username,
+                    "valid": not duplicate,
+                    "duplicate": duplicate,
+                }
+            )
         except ValueError as exc:
             result.append({"line": number, "valid": False, "error": str(exc)})
     return result
-

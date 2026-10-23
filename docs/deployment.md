@@ -11,7 +11,7 @@ Create a dedicated encryption key and administrator password file outside versio
 ```sh
 mkdir -p .secrets
 chmod 700 .secrets
-openssl rand -base64 32 > .secrets/master_key
+openssl rand -out .secrets/master_key 32
 chmod 600 .secrets/master_key
 # Create .secrets/admin_password with a password manager or a local editor.
 docker compose build
@@ -43,7 +43,7 @@ Publish HTTPS through a reverse proxy to `127.0.0.1:8000`. Forward WebSocket upg
 
 Use the Settings screen to inspect worker/browser availability, enable maintenance mode, set retention, and change the administrator password. Task progress reconnects using SSE. Takeover uses the app's authenticated WebSocket proxy and the bundled noVNC client. Browser tracing, HAR, and video are not enabled.
 
-Before upgrading, enable maintenance mode, wait for active work to finish, and stop both services. Back up the database with the CLI to a mounted directory writable by UID 10001:
+Before upgrading, disable scheduled maintenance, wait for active work to finish, and stop both services. Back up the database with the CLI to a mounted directory writable by UID 10001:
 
 ```sh
 mkdir -p backups
@@ -55,9 +55,10 @@ docker compose run --rm --no-deps app python -m app.cli migrate
 docker compose up -d
 ```
 
-To restore, stop both services first and run:
+To restore, stop both services first. The destination must be absent. Preserve the current database and its sidecars in a separate directory before restoration:
 
 ```sh
+docker compose run --rm --no-deps app sh -c 'mkdir /data/pre-restore && mv /data/app.sqlite3* /data/pre-restore/'
 docker compose run --rm --no-deps -v "$PWD/backups:/backups:ro" app python -m app.cli restore /backups/bridge.sqlite3
 docker compose up -d
 ```
@@ -78,3 +79,9 @@ npm run build
 ```
 
 The backend serves `frontend/dist`; `npm run dev` is intended for UI development with an explicitly configured same-origin API proxy. Do not expose the Vite server as a production deployment.
+
+For the original unversioned scaffold database, retain its original 32-byte key and run `init` once to migrate and register the administrator. Later upgrades use `migrate`. Never generate a replacement key for an existing encrypted database. Initialization refuses that case. Restore archives must use a fresh destination directory; choose a new archive name if `/data/pre-restore` already exists.
+
+The worker mounts `/tmp` as a private tmpfs for temporary profiles, GOST configuration and display sockets, with 1 GiB shared memory. Both services run as UID 10001 without published VNC ports. Compose health checks test app readiness and recent worker heartbeat; worker shutdown has a sixty-second grace period. Browser sandbox success must still be verified on the deployment host. `/readyz` is a database/key readiness check; it does not attest provider or downstream availability.
+
+Backup archives are normalized to SQLite DELETE journal mode so a single archive can be mounted read-only. Restore re-enables WAL on the new writable database. The backup/restore tests include an unprivileged reader of a read-only archive directory.

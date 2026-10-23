@@ -67,7 +67,13 @@ websockify 0.0.0.0:6080 localhost:5900 &
 web_pid=$!
 python -m app.worker &
 worker_pid=$!
-trap 'kill "$worker_pid" "$web_pid" "$vnc_pid" "$xvfb_pid" 2>/dev/null || true' TERM INT EXIT
+cleanup() {
+  trap - TERM INT EXIT
+  kill "$worker_pid" 2>/dev/null || true
+  wait "$worker_pid" 2>/dev/null || true
+  kill "$web_pid" "$vnc_pid" "$xvfb_pid" 2>/dev/null || true
+}
+trap cleanup TERM INT EXIT
 wait "$worker_pid"
 SCRIPT
 chmod 755 /usr/local/bin/bridge-worker

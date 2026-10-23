@@ -3,7 +3,12 @@ import json
 import httpx
 import pytest
 
-from app.integrations import IntegrationError, _digest, sync_credential, test_connection as connection
+from app.integrations import (
+    IntegrationError,
+    _digest,
+    sync_credential,
+    test_connection as connection,
+)
 
 
 @pytest.fixture
@@ -13,14 +18,28 @@ def account():
 
 @pytest.fixture
 def cpa():
-    return {"kind": "cliproxyapi", "config": {"base_url": "https://target.test", "management_key": "synthetic-admin"}}
+    return {
+        "kind": "cliproxyapi",
+        "config": {
+            "base_url": "https://target.test",
+            "management_key": "synthetic-admin",
+        },
+    }
 
 
 @pytest.fixture
 def result(account):
-    return {"credential_type": "codex_oauth", "identity": account["username"], "expires_at": 1800000000,
-            "credential": {"access_token": "synthetic-access", "refresh_token": "synthetic-refresh",
-                           "id_token": "synthetic-id", "account_id": "synthetic-account"}}
+    return {
+        "credential_type": "codex_oauth",
+        "identity": account["username"],
+        "expires_at": 1800000000,
+        "credential": {
+            "access_token": "synthetic-access",
+            "refresh_token": "synthetic-refresh",
+            "id_token": "synthetic-id",
+            "account_id": "synthetic-account",
+        },
+    }
 
 
 class CPA:
@@ -41,15 +60,30 @@ class CPA:
                 payload = self.alter(payload)
             self.files[name] = payload
             if self.lose_response:
-                raise httpx.ReadTimeout("synthetic-secret-must-never-escape", request=request)
+                raise httpx.ReadTimeout(
+                    "synthetic-secret-must-never-escape", request=request
+                )
             return httpx.Response(200, json={"status": "ok"})
         if request.url.path.endswith("download"):
-            return httpx.Response(200, json=self.files[name]) if name in self.files else httpx.Response(404)
-        return httpx.Response(200, json={"files": [{"name": name} for name in self.files]})
+            return (
+                httpx.Response(200, json=self.files[name])
+                if name in self.files
+                else httpx.Response(404)
+            )
+        return httpx.Response(
+            200, json={"files": [{"name": name} for name in self.files]}
+        )
 
 
 def run(cpa, result, account, server, rid=None):
-    return sync_credential(cpa, result, account, rid, _transport=httpx.MockTransport(server), _sleep=lambda _: None)
+    return sync_credential(
+        cpa,
+        result,
+        account,
+        rid,
+        _transport=httpx.MockTransport(server),
+        _sleep=lambda _: None,
+    )
 
 
 def test_cpa_upload_readback_and_repeat(cpa, result, account):
@@ -69,8 +103,15 @@ def test_cpa_upload_readback_and_repeat(cpa, result, account):
 
 def test_existing_remote_id_updated_not_duplicated(cpa, result, account):
     server = CPA()
-    server.files["existing.json"] = {"type": "codex", "email": account["username"], "access_token": "old"}
-    assert run(cpa, result, account, server, "existing.json")["remote_id"] == "existing.json"
+    server.files["existing.json"] = {
+        "type": "codex",
+        "email": account["username"],
+        "access_token": "old",
+    }
+    assert (
+        run(cpa, result, account, server, "existing.json")["remote_id"]
+        == "existing.json"
+    )
     assert list(server.files) == ["existing.json"]
 
 
@@ -89,8 +130,15 @@ def test_conflicting_remote_identity_is_not_overwritten(cpa, result, account):
     assert not any(r.method == "POST" for r in server.requests)
 
 
-@pytest.mark.parametrize("change", [lambda p: {**p, "proxy_url": ""}, lambda p: {**p, "access_token": "wrong"},
-                                     lambda p: {**p, "account_id": "wrong"}, lambda p: {**p, "email": "wrong"}])
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda p: {**p, "proxy_url": ""},
+        lambda p: {**p, "access_token": "wrong"},
+        lambda p: {**p, "account_id": "wrong"},
+        lambda p: {**p, "email": "wrong"},
+    ],
+)
 def test_readback_mismatch_fails_closed(cpa, result, account, change):
     server = CPA()
     server.alter = change
@@ -100,21 +148,40 @@ def test_readback_mismatch_fails_closed(cpa, result, account, change):
 
 
 def test_proxy_credentials_encoded_and_verified(cpa, result, account):
-    account.update(route_type="proxy", proxy={"server": "socks5h://proxy.test:1080", "username": "u@", "password": "p:/"})
+    account.update(
+        route_type="proxy",
+        proxy={
+            "server": "socks5h://proxy.test:1080",
+            "username": "u@",
+            "password": "p:/",
+        },
+    )
     server = CPA()
     remote = run(cpa, result, account, server)
-    assert server.files[remote["remote_id"]]["proxy_url"] == "socks5h://u%40:p%3A%2F@proxy.test:1080"
+    assert (
+        server.files[remote["remote_id"]]["proxy_url"]
+        == "socks5h://u%40:p%3A%2F@proxy.test:1080"
+    )
 
 
-@pytest.mark.parametrize("route,proxy", [("unset", None), ("proxy", {}), ("proxy", {"server": "http://user:secret@proxy.test"}),
-                                         ("proxy", {"server": "http://proxy.test:0"})])
+@pytest.mark.parametrize(
+    "route,proxy",
+    [
+        ("unset", None),
+        ("proxy", {}),
+        ("proxy", {"server": "http://user:secret@proxy.test"}),
+        ("proxy", {"server": "http://proxy.test:0"}),
+    ],
+)
 def test_implicit_or_invalid_route_rejected(cpa, result, account, route, proxy):
     account.update(route_type=route, proxy=proxy)
     with pytest.raises(IntegrationError):
         run(cpa, result, account, CPA())
 
 
-@pytest.mark.parametrize("bad", ["../outside.json", "secret?key.json", "not-json", "a/b.json"])
+@pytest.mark.parametrize(
+    "bad", ["../outside.json", "secret?key.json", "not-json", "a/b.json"]
+)
 def test_remote_id_never_becomes_path_or_query_injection(cpa, result, account, bad):
     with pytest.raises(IntegrationError):
         run(cpa, result, account, CPA(), bad)
@@ -140,16 +207,33 @@ def test_missing_oauth_fields_rejected(cpa, result, account):
 
 def test_connection_is_management_only_unverified(cpa):
     server = CPA()
-    assert connection(cpa, _transport=httpx.MockTransport(server)) == {"reachable": True, "verification": "unverified"}
+    assert connection(cpa, _transport=httpx.MockTransport(server)) == {
+        "reachable": True,
+        "verification": "unverified",
+    }
     assert all(r.method == "GET" for r in server.requests)
 
 
-@pytest.mark.parametrize("status,message", [(401, "authentication"), (403, "authentication"), (302, "rejected"), (429, "rate limited")])
+@pytest.mark.parametrize(
+    "status,message",
+    [
+        (401, "authentication"),
+        (403, "authentication"),
+        (302, "rejected"),
+        (429, "rate limited"),
+    ],
+)
 def test_errors_are_safe_bounded_and_redirects_not_followed(cpa, status, message):
     calls = []
+
     def handler(request):
         calls.append(request)
-        return httpx.Response(status, text="synthetic-credential-do-not-leak", headers={"Location": "https://evil.test"})
+        return httpx.Response(
+            status,
+            text="synthetic-credential-do-not-leak",
+            headers={"Location": "https://evil.test"},
+        )
+
     with pytest.raises(IntegrationError, match=message) as exc:
         connection(cpa, _transport=httpx.MockTransport(handler), _sleep=lambda _: None)
     assert "synthetic-credential" not in str(exc.value)
@@ -159,9 +243,13 @@ def test_errors_are_safe_bounded_and_redirects_not_followed(cpa, status, message
 
 def test_transport_failures_safe_and_bounded(cpa):
     calls = []
+
     def handler(request):
         calls.append(request)
-        raise httpx.ConnectError("https://secret-user:secret-password@host", request=request)
+        raise httpx.ConnectError(
+            "https://secret-user:secret-password@host", request=request
+        )
+
     with pytest.raises(IntegrationError) as exc:
         connection(cpa, _transport=httpx.MockTransport(handler), _sleep=lambda _: None)
     assert "secret" not in str(exc.value)
@@ -171,11 +259,25 @@ def test_transport_failures_safe_and_bounded(cpa):
 def test_retry_after_long_delay_does_not_block(cpa):
     sleeps = []
     with pytest.raises(IntegrationError, match="retry later"):
-        connection(cpa, _transport=httpx.MockTransport(lambda _: httpx.Response(429, headers={"Retry-After": "600"})), _sleep=sleeps.append)
+        connection(
+            cpa,
+            _transport=httpx.MockTransport(
+                lambda _: httpx.Response(429, headers={"Retry-After": "600"})
+            ),
+            _sleep=sleeps.append,
+        )
     assert sleeps == []
 
 
-@pytest.mark.parametrize("url", ["http://target.test", "https://user:pass@target.test", "https://target.test?key=secret", "https://target.test/#secret"])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://target.test",
+        "https://user:pass@target.test",
+        "https://target.test?key=secret",
+        "https://target.test/#secret",
+    ],
+)
 def test_target_url_validation(cpa, url):
     cpa["config"]["base_url"] = url
     with pytest.raises(IntegrationError):
@@ -190,9 +292,11 @@ def test_target_http_requires_explicit_opt_in(cpa):
 def test_client_ignores_environment_proxy(cpa, monkeypatch):
     original = httpx.Client
     seen = []
+
     def factory(**kwargs):
         seen.append(kwargs)
         return original(**kwargs)
+
     monkeypatch.setattr(httpx, "Client", factory)
     monkeypatch.setenv("HTTPS_PROXY", "http://untrusted-proxy.test")
     connection(cpa, _transport=httpx.MockTransport(CPA()))
@@ -203,8 +307,15 @@ def test_client_ignores_environment_proxy(cpa, monkeypatch):
 
 @pytest.fixture
 def voice():
-    return {"kind": "chatgpt-web-voice", "config": {"base_url": "https://voice.test", "admin_username": "synthetic-user",
-            "admin_password": "synthetic-password", "compatibility": "bridge-v1"}}
+    return {
+        "kind": "chatgpt-web-voice",
+        "config": {
+            "base_url": "https://voice.test",
+            "admin_username": "synthetic-user",
+            "admin_password": "synthetic-password",
+            "compatibility": "bridge-v1",
+        },
+    }
 
 
 def test_voice_requires_explicit_compatible_contract(voice):
@@ -215,11 +326,19 @@ def test_voice_requires_explicit_compatible_contract(voice):
 
 def test_voice_stable_upsert_and_digest_readback(voice, account):
     state, requests = {}, []
+
     def handler(request):
         requests.append(request)
         assert request.headers["Authorization"].startswith("Basic ")
         if request.url.path.endswith("capabilities"):
-            return httpx.Response(200, json={"protocol": "bridge-v1", "explicit_route": True, "credential_digest": True})
+            return httpx.Response(
+                200,
+                json={
+                    "protocol": "bridge-v1",
+                    "explicit_route": True,
+                    "credential_digest": True,
+                },
+            )
         rid = request.url.path.split("/")[-1]
         if request.method == "PUT":
             p = json.loads(request.content)
@@ -227,19 +346,39 @@ def test_voice_stable_upsert_and_digest_readback(voice, account):
             assert p["route"] == {"type": "direct"}
             state[rid] = {**p, "credential_digest": _digest(p.pop("credential"))}
             raise httpx.ReadTimeout("lost", request=request)
-        return httpx.Response(200, json=state[rid]) if rid in state else httpx.Response(404)
-    result = {"credential_type": "chatgpt_web", "identity": account["username"], "expires_at": None,
-              "credential": {"access_token": "synthetic-web", "refresh_token": "must-not-export"}}
+        return (
+            httpx.Response(200, json=state[rid])
+            if rid in state
+            else httpx.Response(404)
+        )
+
+    result = {
+        "credential_type": "chatgpt_web",
+        "identity": account["username"],
+        "expires_at": None,
+        "credential": {
+            "access_token": "synthetic-web",
+            "refresh_token": "must-not-export",
+        },
+    }
     transport = httpx.MockTransport(handler)
     first = sync_credential(voice, result, account, _transport=transport)
     assert first["verified"]
-    assert sync_credential(voice, result, account, _transport=httpx.MockTransport(handler)) == first
+    assert (
+        sync_credential(voice, result, account, _transport=httpx.MockTransport(handler))
+        == first
+    )
     assert len([r for r in requests if r.method == "PUT"]) == 1
 
 
 def test_voice_capability_claims_mandatory(voice):
     with pytest.raises(IntegrationError, match="compatibility API"):
-        connection(voice, _transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"protocol": "bridge-v1"})))
+        connection(
+            voice,
+            _transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, json={"protocol": "bridge-v1"})
+            ),
+        )
 
 
 def test_existing_cpa_email_filename_reused(cpa, result, account):
@@ -267,7 +406,9 @@ def test_reconciliation_does_not_overwrite_remote_token_rotation(cpa, result, ac
     server = CPA()
     first = run(cpa, result, account, server)
     record = server.files[first["remote_id"]]
-    record.update(access_token="remote-rotated-access", refresh_token="remote-rotated-refresh")
+    record.update(
+        access_token="remote-rotated-access", refresh_token="remote-rotated-refresh"
+    )
     result["_reconcile_only"] = True
     before = len(server.requests)
     with pytest.raises(IntegrationError, match="avoid overwriting rotated credentials"):
@@ -290,7 +431,9 @@ def test_rotation_immediately_after_upload_prevents_second_write(cpa, result, ac
     with pytest.raises(IntegrationError, match="avoid overwriting rotated credentials"):
         run(cpa, result, account, server)
     assert len([r for r in server.requests if r.method == "POST"]) == 1
-    assert next(iter(server.files.values()))["refresh_token"] == "remote-rotated-refresh"
+    assert (
+        next(iter(server.files.values()))["refresh_token"] == "remote-rotated-refresh"
+    )
 
 
 def test_reconciliation_matching_remote_requires_no_write(cpa, result, account):
@@ -324,7 +467,9 @@ def test_write_mismatch_reports_possible_write(cpa, result, account):
     assert exc.value.write_possible is True
 
 
-def test_reconciliation_conflict_preserves_possible_historical_write(cpa, result, account):
+def test_reconciliation_conflict_preserves_possible_historical_write(
+    cpa, result, account
+):
     server = CPA()
     first = run(cpa, result, account, server)
     server.files[first["remote_id"]]["refresh_token"] = "rotated"
@@ -335,7 +480,9 @@ def test_reconciliation_conflict_preserves_possible_historical_write(cpa, result
 
 
 @pytest.mark.parametrize("failure", ["auth", "config"])
-def test_reconciliation_preflight_failure_preserves_historical_uncertainty(cpa, result, account, failure):
+def test_reconciliation_preflight_failure_preserves_historical_uncertainty(
+    cpa, result, account, failure
+):
     result["_reconcile_only"] = True
     if failure == "config":
         cpa["config"]["base_url"] = "invalid"
@@ -344,19 +491,25 @@ def test_reconciliation_preflight_failure_preserves_historical_uncertainty(cpa, 
     assert exc.value.write_possible is True
 
 
-def test_lost_write_response_without_readback_reports_possible_write(cpa, result, account):
+def test_lost_write_response_without_readback_reports_possible_write(
+    cpa, result, account
+):
     def handler(request):
         if request.method == "POST":
             raise httpx.ReadTimeout("synthetic-secret", request=request)
         return httpx.Response(404)
+
     with pytest.raises(IntegrationError) as exc:
         run(cpa, result, account, handler)
     assert exc.value.write_possible is True
 
 
-def test_first_preflight_transport_failure_reports_no_possible_write(cpa, result, account):
+def test_first_preflight_transport_failure_reports_no_possible_write(
+    cpa, result, account
+):
     def handler(request):
         raise httpx.ConnectError("synthetic-secret", request=request)
+
     with pytest.raises(IntegrationError) as exc:
         run(cpa, result, account, handler)
     assert exc.value.write_possible is False

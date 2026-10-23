@@ -1,2 +1,1 @@
-"""LLM Auth Bridge application."""
 
