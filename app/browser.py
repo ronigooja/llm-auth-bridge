@@ -18,6 +18,12 @@ from .totp import generate_code, seconds_remaining
 
 AUTH_ORIGIN = "https://auth.openai.com"
 CHATGPT_ORIGIN = "https://chatgpt.com"
+BROWSER_ARGS = [
+    "--disable-dev-shm-usage", "--disable-background-networking",
+    "--disable-component-update", "--disable-domain-reliability",
+    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+    "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+]
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 REDIRECT_URI = "http://localhost:1455/auth/callback"
 
@@ -196,9 +202,9 @@ def run_login(account: dict, target: dict, control, saved_state: dict | None = N
         with sync_playwright() as playwright:
             browser = None
             try:
-                browser = playwright.chromium.launch(headless=False, proxy=route.playwright_proxy,
+                browser = playwright.chromium.launch(headless=False, chromium_sandbox=True, proxy=route.playwright_proxy,
                     env={**os.environ, "DISPLAY": os.getenv("DISPLAY", ":99")},
-                    args=["--disable-dev-shm-usage"] + (["--no-proxy-server"] if route.playwright_proxy is None else []))
+                    args=BROWSER_ARGS + (["--no-proxy-server"] if route.playwright_proxy is None else ["--proxy-bypass-list=<-loopback>"]))
                 context = browser.new_context(storage_state=saved_state, accept_downloads=False,
                                               service_workers="block")
                 context.set_default_timeout(10000)
@@ -273,7 +279,10 @@ def run_login(account: dict, target: dict, control, saved_state: dict | None = N
                             submitted.add(("totp_code", code))
                             totp_attempts += 1
                         else:
-                            stage = "unknown"
+                            # Keep the same challenge open until the next TOTP
+                            # window; checkpoint on each half-second iteration.
+                            page.wait_for_timeout(500)
+                            continue
                     elif stage == "consent" and marker not in submitted:
                         control.phase("consent", "Confirming requested authorization")
                         _submit(page)
