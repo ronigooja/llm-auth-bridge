@@ -1,0 +1,7 @@
+.git
+auth.txt
+.env
+data
+browser-data
+__pycache__
+

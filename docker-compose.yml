@@ -1,0 +1,26 @@
+services:
+  app:
+    build: .
+    ports: ["127.0.0.1:8000:8000"]
+    environment:
+      LLM_AUTH_DB: /data/app.sqlite3
+      LLM_AUTH_MASTER_KEY_FILE: /run/secrets/master_key
+    volumes:
+      - app-data:/data
+    secrets: [master_key]
+    depends_on: [worker]
+  worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    environment:
+      LLM_AUTH_DB: /data/app.sqlite3
+      LLM_AUTH_MASTER_KEY_FILE: /run/secrets/master_key
+    volumes:
+      - app-data:/data
+    secrets: [master_key]
+secrets:
+  master_key:
+    file: .secrets/master_key
+volumes:
+  app-data:
+

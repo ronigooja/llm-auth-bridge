@@ -1,0 +1,13 @@
+auth.txt
+*.sqlite3
+*.db
+.env
+.secrets/
+data/
+browser-data/
+__pycache__/
+.pytest_cache/
+.venv/
+frontend/node_modules/
+frontend/dist/
+
