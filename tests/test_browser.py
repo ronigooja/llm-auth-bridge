@@ -30,7 +30,7 @@ def test_oauth_rejects_invalid_callback(url):
 
 def test_oauth_valid_and_identity():
     assert validate_callback(REDIRECT_URI + "?state=state&code=synthetic", "state") == "synthetic"
-    data = {"access_token": "synthetic-access", "refresh_token": "synthetic-refresh", "id_token": token({"email": "synthetic@example.com"}), "expires_in": 3600}
+    data = {"access_token": "synthetic-access", "refresh_token": "synthetic-refresh", "id_token": token({"email": "synthetic@example.com", "https://api.openai.com/auth": {"chatgpt_account_id": "synthetic-account"}}), "expires_in": 3600}
     assert oauth_result(data, "synthetic@example.com")["credential_type"] == "codex_oauth"
     with pytest.raises(BrowserError, match="identity does not match"):
         oauth_result(data, "different@example.com")
