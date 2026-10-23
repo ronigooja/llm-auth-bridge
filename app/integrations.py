@@ -99,7 +99,7 @@ class _Adapter:
                 raise IntegrationError("Configure the voice administrator username and password.")
             auth = httpx.BasicAuth(config["admin_username"], config["admin_password"])
         else:
-            if config.get("compatibility", "cpa-auth-files-v1") != "cpa-auth-files-v1":
+            if (config.get("compatibility") or "cpa-auth-files-v1") != "cpa-auth-files-v1":
                 raise IntegrationError("Select the documented cpa-auth-files-v1 compatibility contract.")
             if not _text(config.get("management_key")):
                 raise IntegrationError("Configure the CLIProxyAPI management key.")
@@ -249,6 +249,8 @@ def sync_credential(target: dict, result: dict, account: dict, remote_id: str | 
                 raise IntegrationError("Remote record identity differs; reconcile the stored remote ID before retrying.")
         if _matches(existing, payload, adapter.compat):
             return {"remote_id": rid, "verified": True}
+        if existing is not None and result.get("_reconcile_only") is True:
+            raise IntegrationError("Remote credential or route changed after an earlier synchronization attempt; synchronization remains pending to avoid overwriting rotated credentials.")
         for attempt in range(2):
             failure = None
             try:
@@ -265,6 +267,9 @@ def sync_credential(target: dict, result: dict, account: dict, remote_id: str | 
                 found_identity = _identity(current, adapter.compat)
                 if not _text(found_identity) or found_identity.casefold() != identity.casefold():
                     raise IntegrationError("Remote record identity differs; reconcile the stored remote ID before retrying.")
+                # The server may already have refreshed a just-uploaded token. Never
+                # replay the old refresh token over a present, nonmatching record.
+                raise IntegrationError("Remote credential or route differs after synchronization; synchronization remains pending to avoid overwriting rotated credentials.")
             if failure is not None:
                 # Authentication, rate limits and incompatible contracts must not be retried here.
                 raise failure from None
