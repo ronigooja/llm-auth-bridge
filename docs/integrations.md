@@ -24,7 +24,7 @@ Configuration:
 }
 ```
 
-`compatibility` defaults to `cpa-auth-files-v1`. Management requests use `Authorization: Bearer <management_key>`:
+`compatibility` defaults to `cpa-auth-files-v1` when absent or null. Management requests use `Authorization: Bearer <management_key>`:
 
 - Connection test: `GET /v0/management/auth-files`, requiring an object with a `files` array.
 - Read/reconciliation: `GET /v0/management/auth-files/download?name=<remote_id>`; HTTP 404 means the named record does not exist.
@@ -32,7 +32,7 @@ Configuration:
 
 Only browser results typed `codex_oauth` are accepted. The payload includes `type: codex`, `email`, `access_token`, `refresh_token`, `id_token`, `account_id`, optional RFC 3339 `expired`, and `proxy_url`. The browser must have completed its PKCE exchange through the account route. Direct accounts use the explicit `proxy_url: "direct"` sentinel; proxied accounts use a full validated proxy URL. Blank `proxy_url` would inherit the downstream global proxy and is never emitted or accepted as proof of direct routing.
 
-New filenames are `bridge-<32-character identity/kind hash>.json`; usernames and credentials do not appear in filenames. Existing persisted filenames are reused after strict filename validation. A preexisting record with a different identity is never overwritten. Downloaded JSON must match every emitted field before synchronization succeeds. This verifies stored configuration; it does not prove the downstream service's actual egress IP, runtime policy overrides, or account usability. Deployments must separately accept their downstream runtime behavior.
+New filenames are `bridge-<32-character identity/kind hash>.json`; usernames and credentials do not appear in filenames. Existing persisted filenames are reused after strict filename validation. A preexisting record with a different identity is never overwritten. Downloaded JSON must match every emitted field before synchronization succeeds. On a subsequent worker attempt, the worker passes `result["_reconcile_only"] = true`: an existing mismatched credential or route then produces a safe pending conflict and is never overwritten, because the remote service may have rotated its refresh token after a lost response. An absent record can still be uploaded. A fresh browser authorization may intentionally replace an existing record for the same identity. After any write, a present but mismatched record immediately stops synchronization without a second write; a freshly rotated token must not be replaced by the old local token. This verifies stored configuration; it does not prove the downstream service's actual egress IP, runtime policy overrides, or account usability. Deployments must separately accept their downstream runtime behavior.
 
 Public source reviewed on 2026-10-23: [router-for-me/CLIProxyAPI at d946c4f](https://github.com/router-for-me/CLIProxyAPI/tree/d946c4fba6fc9a5cfbca1f3d85184d62ad2fb683), particularly `internal/api/handlers/management/auth_files_crud.go`, `internal/auth/codex/token.go`, `internal/watcher/synthesizer/file.go`, `sdk/proxyutil/proxy.go`, and `internal/runtime/executor/helps/proxy_helpers.go`. These establish raw JSON upload/download, token storage fields, per-account `proxy_url`, and the explicit `direct` sentinel. Older or modified servers may differ; incompatible responses fail closed.
 

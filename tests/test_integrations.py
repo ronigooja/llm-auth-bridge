@@ -256,3 +256,47 @@ def test_cpa_existing_other_credential_type_not_overwritten(cpa, result, account
     with pytest.raises(IntegrationError, match="credential type"):
         run(cpa, result, account, server, "existing.json")
     assert not any(r.method == "POST" for r in server.requests)
+
+
+def test_cpa_null_compatibility_uses_native_default(cpa):
+    cpa["config"]["compatibility"] = None
+    assert connection(cpa, _transport=httpx.MockTransport(CPA()))["reachable"]
+
+
+def test_reconciliation_does_not_overwrite_remote_token_rotation(cpa, result, account):
+    server = CPA()
+    first = run(cpa, result, account, server)
+    record = server.files[first["remote_id"]]
+    record.update(access_token="remote-rotated-access", refresh_token="remote-rotated-refresh")
+    result["_reconcile_only"] = True
+    before = len(server.requests)
+    with pytest.raises(IntegrationError, match="avoid overwriting rotated credentials"):
+        run(cpa, result, account, server, first["remote_id"])
+    assert not any(r.method == "POST" for r in server.requests[before:])
+    assert record["refresh_token"] == "remote-rotated-refresh"
+
+
+def test_reconciliation_can_upload_when_remote_record_absent(cpa, result, account):
+    server = CPA()
+    result["_reconcile_only"] = True
+    assert run(cpa, result, account, server)["verified"]
+    assert len([r for r in server.requests if r.method == "POST"]) == 1
+
+
+def test_rotation_immediately_after_upload_prevents_second_write(cpa, result, account):
+    server = CPA()
+    server.alter = lambda p: {**p, "refresh_token": "remote-rotated-refresh"}
+    server.lose_response = True
+    with pytest.raises(IntegrationError, match="avoid overwriting rotated credentials"):
+        run(cpa, result, account, server)
+    assert len([r for r in server.requests if r.method == "POST"]) == 1
+    assert next(iter(server.files.values()))["refresh_token"] == "remote-rotated-refresh"
+
+
+def test_reconciliation_matching_remote_requires_no_write(cpa, result, account):
+    server = CPA()
+    first = run(cpa, result, account, server)
+    result["_reconcile_only"] = True
+    before = len(server.requests)
+    assert run(cpa, result, account, server, first["remote_id"]) == first
+    assert not any(r.method == "POST" for r in server.requests[before:])
