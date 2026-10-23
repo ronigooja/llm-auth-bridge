@@ -50,8 +50,8 @@ def test_browser_session_identity_and_expiry():
         session_result(data, "synthetic@example.com")
 
 
-@pytest.mark.parametrize("maintenance", [False, True])
-def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, maintenance):
+@pytest.mark.parametrize("mode", ["manual", "maintenance", "cancel"])
+def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, mode):
     from contextlib import contextmanager
     from types import SimpleNamespace
     import app.browser as module
@@ -100,9 +100,12 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, maintenan
 
     result = {"credential_type": "chatgpt_web", "credential": {"access_token": "synthetic"}, "identity": "synthetic@example.com", "expires_at": None}
     resumed = False
+    class Cancelled(Exception):
+        pass
     class Control:
         def checkpoint(self):
-            pass
+            if mode == "cancel" and any(isinstance(e, tuple) and e[0] == "ready" for e in events):
+                raise Cancelled("synthetic cancellation")
         def phase(self, *args):
             pass
         def save_state(self, state):
@@ -123,18 +126,23 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, maintenan
     monkeypatch.setattr(module, "_get_session", lambda *a: result if resumed else None)
     moments = iter([0, 10, 10])
     monkeypatch.setattr(module.time, "monotonic", lambda: next(moments))
-    account = {"username": "synthetic@example.com", "password": "synthetic", "_maintenance": maintenance}
-    if maintenance:
+    account = {"username": "synthetic@example.com", "password": "synthetic", "_maintenance": mode == "maintenance"}
+    if mode == "maintenance":
         with pytest.raises(module.ReauthenticationRequired, match="^reauth_required$"):
+            module.run_login(account, {"kind": "chatgpt-web-voice"}, Control())
+    elif mode == "cancel":
+        with pytest.raises(Cancelled):
             module.run_login(account, {"kind": "chatgpt-web-voice"}, Control())
     else:
         assert module.run_login(account, {"kind": "chatgpt-web-voice"}, Control()) == result
     assert sum(isinstance(e, tuple) and e[0] == "launch" for e in events) == 1
     assert sum(isinstance(e, tuple) and e[0] == "context" for e in events) == 1
-    assert ("manual" in events) is not maintenance
+    assert ("manual" in events) == (mode == "manual")
     assert events[-2:] == ["closed", "control_closed"]
     launch = next(e[1] for e in events if isinstance(e, tuple) and e[0] == "launch")
     assert "--no-proxy-server" in launch["args"]
+    assert launch["chromium_sandbox"] is True
+    assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in launch["args"]
 
 
 def test_cancellation_is_not_converted_to_login_error():
