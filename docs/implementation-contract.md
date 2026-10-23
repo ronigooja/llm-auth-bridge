@@ -1,0 +1,23 @@
+# Implementation contract
+
+This document freezes the initial implementation boundary. All integrations remain unverified until real service acceptance.
+
+## HTTP
+
+All business endpoints use `/api/v1`, an HttpOnly `bridge_session` cookie, and `X-CSRF-Token` on mutations. `POST /auth/login` accepts `{password}` and returns `{csrf_token}`; `GET /auth/session` returns the same. `POST /auth/logout`; `POST /auth/password` accepts `{current_password,new_password}`. Errors use `{detail: safe English message}`.
+
+`GET /accounts`, `/targets`, `/tasks` return objects keyed by the plural resource. Account public fields: id, username, status, route_type (unset/direct/proxy), version, target_ids, has_password, has_totp, has_mailbox, created_at, updated_at. POST /accounts accepts username,password,totp?,mailbox_url?,allow_http_mailbox?,route_type?,proxy?,target_ids?. PATCH /accounts/{id} accepts the same optional fields; explicit null clears optional secrets, omitted preserves. proxy is `{server,username?,password?}`. DELETE resources returns `{deleted:true}`. Import preview/confirm accept `{text}`; preview returns `{records:[{line,account?,valid,duplicate?,error?}]}`, confirm `{imported:[username]}`.
+
+Target POST/PATCH accepts `{kind,name,config}`; kinds `cliproxyapi`, `chatgpt-web-voice`. Config: base_url, management_key (CPA) or admin_username/admin_password (voice), optional allow_http. Public fields exclude config secrets and include verification (`unverified`). POST /targets/{id}/test performs a connection test.
+
+POST /accounts/{id}/tasks accepts `{target_id,idempotency_key?}`. GET /tasks/{id} returns public task, GET /tasks/{id}/events streams SSE `id`, `event: task`, `data: {id,state,phase,message}`; Last-Event-ID resumes. POST task actions: /cancel, /takeover, /continue, /code `{code,submission_id}`, /retry-sync. GET /runtime returns worker_alive,browser_available,maintenance_enabled,version. PATCH /settings accepts maintenance_enabled and retention_days. GET /settings returns those. GET /tasks/{id}/takeover is authenticated WebSocket (same-origin).
+
+## Worker and adapters
+
+Main owns app/config.py, crypto.py, db.py, main.py, models.py, queue.py, worker.py, cli.py and API tests. Browser agent owns app/browser.py, app/routing.py, app/mailbox.py, app/totp.py, tests/test_browser*.py and tests/test_routing*.py. Integration agent owns app/integrations.py, tests/test_integrations.py. UI agent owns frontend/, Dockerfile, docker-compose.yml, .dockerignore, .github/, docs/deployment.md. Other docs remain main-owned.
+
+Browser entrypoint: `run_login(account: dict, target: dict, control, saved_state: dict | None = None) -> dict`. Account has decrypted username,password,totp,mailbox_url,allow_http_mailbox,route_type,proxy. Target has kind and config. control exposes `phase(name,message)`, `checkpoint()` (raises on cancellation/lease loss), `wait_human(reason) -> str | None` (code or continuation), `save_state(dict)`. Browser result is `{credential_type:'codex_oauth'|'chatgpt_web',credential:dict,expires_at:float|None,identity:str}`. Exceptions safe fixed messages only; no secrets. Optional control `browser_ready(port)` and `browser_closed()` support takeover. Blocking sync Playwright allowed. Same worker owns global browser file lock.
+
+Integration entrypoint: `sync_credential(target: dict, result: dict, account: dict, remote_id: str | None = None) -> dict` returns `{remote_id,verified:bool}`. `test_connection(target: dict) -> dict` returns `{reachable,verification:'unverified'}`. target includes kind,config; account includes username,route_type,proxy. Never infer direct from an empty downstream proxy. Unknown downstream contracts fail closed with actionable safe exception. No fabricated successful verification.
+
+Persisted task states: queued,running,waiting_human,sync_pending,succeeded,failed,cancelled,interrupted. Config versions freeze at enqueue; edits before claim interrupt task. Browser credential result encrypted; sync_pending frees browser. Main performs only serial credential verification.
