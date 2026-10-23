@@ -11,7 +11,11 @@ import httpx
 
 
 class IntegrationError(RuntimeError):
-    """A fixed, safe message suitable for task events and API errors."""
+    """A fixed safe message, with a conservative remote-write uncertainty flag."""
+
+    def __init__(self, message: str, *, write_possible: bool = False):
+        super().__init__(message)
+        self.write_possible = write_possible
 
 
 _EXPECTED = {"cliproxyapi": "codex_oauth", "chatgpt-web-voice": "chatgpt_web"}
@@ -231,13 +235,16 @@ def sync_credential(target: dict, result: dict, account: dict, remote_id: str | 
     ``verified`` attests remote storage identity, route, and credential consistency.
     It does not attest real-account usability; deployment verification remains unverified.
     """
-    kind = target.get("kind")
-    if kind not in _EXPECTED:
-        raise IntegrationError("Unsupported target kind.")
-    identity, payload = _prepare(kind, result, account)
-    rid = _remote_id(remote_id, identity, kind)
-    adapter = _Adapter(target, _transport, _sleep)
+    write_started = False
+    historical_write_possible = isinstance(result, dict) and result.get("_reconcile_only") is True
+    adapter = None
     try:
+        kind = target.get("kind")
+        if kind not in _EXPECTED:
+            raise IntegrationError("Unsupported target kind.")
+        identity, payload = _prepare(kind, result, account)
+        rid = _remote_id(remote_id, identity, kind)
+        adapter = _Adapter(target, _transport, _sleep)
         if adapter.compat:
             adapter.check()
         existing = adapter.read(rid)
@@ -254,6 +261,7 @@ def sync_credential(target: dict, result: dict, account: dict, remote_id: str | 
         for attempt in range(2):
             failure = None
             try:
+                write_started = True
                 response = adapter.write(rid, payload)
                 if response.status_code == 404:
                     raise IntegrationError("Target write endpoint is unavailable; check its compatibility contract.")
@@ -276,8 +284,12 @@ def sync_credential(target: dict, result: dict, account: dict, remote_id: str | 
             if attempt == 0:
                 adapter.sleep(0.5)
         raise IntegrationError("Target readback did not confirm credential, identity and explicit route; synchronization remains pending.")
+    except IntegrationError as exc:
+        exc.write_possible = exc.write_possible or write_started or historical_write_possible
+        raise
     finally:
-        adapter.close()
+        if adapter is not None:
+            adapter.close()
 
 
 def test_connection(target: dict, *, _transport=None, _sleep=time.sleep) -> dict:
