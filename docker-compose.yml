@@ -1,26 +1,41 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      target: app
+    init: true
+    restart: unless-stopped
     ports: ["127.0.0.1:8000:8000"]
     environment:
       LLM_AUTH_DB: /data/app.sqlite3
       LLM_AUTH_MASTER_KEY_FILE: /run/secrets/master_key
+      LLM_AUTH_LOCK_FILE: /data/browser.lock
+      LLM_AUTH_SECURE_COOKIE: ${LLM_AUTH_SECURE_COOKIE:-true}
+      LLM_AUTH_TAKEOVER_URL: ws://worker:6080/websockify
     volumes:
       - app-data:/data
     secrets: [master_key]
     depends_on: [worker]
+    security_opt: ["no-new-privileges:true"]
   worker:
-    build: .
-    command: ["python", "-m", "app.worker"]
+    build:
+      context: .
+      target: worker
+    init: true
+    restart: unless-stopped
+    shm_size: 1gb
     environment:
       LLM_AUTH_DB: /data/app.sqlite3
       LLM_AUTH_MASTER_KEY_FILE: /run/secrets/master_key
+      LLM_AUTH_LOCK_FILE: /data/browser.lock
+      LLM_AUTH_SECURE_COOKIE: ${LLM_AUTH_SECURE_COOKIE:-true}
+      DISPLAY: :99
     volumes:
       - app-data:/data
     secrets: [master_key]
+    security_opt: ["no-new-privileges:true"]
 secrets:
   master_key:
     file: .secrets/master_key
 volumes:
   app-data:
-
