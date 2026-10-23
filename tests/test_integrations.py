@@ -300,3 +300,63 @@ def test_reconciliation_matching_remote_requires_no_write(cpa, result, account):
     before = len(server.requests)
     assert run(cpa, result, account, server, first["remote_id"]) == first
     assert not any(r.method == "POST" for r in server.requests[before:])
+
+
+def test_first_preflight_auth_failure_reports_no_possible_write(cpa, result, account):
+    with pytest.raises(IntegrationError) as exc:
+        run(cpa, result, account, lambda _: httpx.Response(401))
+    assert exc.value.write_possible is False
+
+
+def test_first_preflight_config_failure_reports_no_possible_write(cpa, result, account):
+    cpa["config"]["base_url"] = "invalid"
+    with pytest.raises(IntegrationError) as exc:
+        run(cpa, result, account, CPA())
+    assert exc.value.write_possible is False
+
+
+def test_write_mismatch_reports_possible_write(cpa, result, account):
+    server = CPA()
+    server.alter = lambda p: {**p, "refresh_token": "rotated"}
+    server.lose_response = True
+    with pytest.raises(IntegrationError) as exc:
+        run(cpa, result, account, server)
+    assert exc.value.write_possible is True
+
+
+def test_reconciliation_conflict_preserves_possible_historical_write(cpa, result, account):
+    server = CPA()
+    first = run(cpa, result, account, server)
+    server.files[first["remote_id"]]["refresh_token"] = "rotated"
+    result["_reconcile_only"] = True
+    with pytest.raises(IntegrationError) as exc:
+        run(cpa, result, account, server, first["remote_id"])
+    assert exc.value.write_possible is True
+
+
+@pytest.mark.parametrize("failure", ["auth", "config"])
+def test_reconciliation_preflight_failure_preserves_historical_uncertainty(cpa, result, account, failure):
+    result["_reconcile_only"] = True
+    if failure == "config":
+        cpa["config"]["base_url"] = "invalid"
+    with pytest.raises(IntegrationError) as exc:
+        run(cpa, result, account, lambda _: httpx.Response(401))
+    assert exc.value.write_possible is True
+
+
+def test_lost_write_response_without_readback_reports_possible_write(cpa, result, account):
+    def handler(request):
+        if request.method == "POST":
+            raise httpx.ReadTimeout("synthetic-secret", request=request)
+        return httpx.Response(404)
+    with pytest.raises(IntegrationError) as exc:
+        run(cpa, result, account, handler)
+    assert exc.value.write_possible is True
+
+
+def test_first_preflight_transport_failure_reports_no_possible_write(cpa, result, account):
+    def handler(request):
+        raise httpx.ConnectError("synthetic-secret", request=request)
+    with pytest.raises(IntegrationError) as exc:
+        run(cpa, result, account, handler)
+    assert exc.value.write_possible is False
