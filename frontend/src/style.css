@@ -546,3 +546,8 @@ dd {
   font-size: 13px;
   overflow-wrap: anywhere;
 }
+
+.discard-sync {
+  display: block;
+  margin-top: 16px;
+}

@@ -273,4 +273,64 @@ describe("management interactions", () => {
       await screen.findByRole("heading", { name: "任务 #7" }),
     ).toBeTruthy();
   });
+  it("requires the exact account identity before discarding an uncertain sync result", async () => {
+    window.history.replaceState(null, "", "/#tasks/9");
+    const task = {
+      id: 9,
+      account_id: 2,
+      account_username: "synthetic@example.test",
+      target_id: 3,
+      state: "sync_pending",
+      phase: "sync_failed",
+    };
+    const calls: { path: string; init?: RequestInit }[] = [];
+    class SyntheticEvents {
+      addEventListener() {}
+      close() {}
+    }
+    vi.stubGlobal("EventSource", SyntheticEvents);
+    const prompt = vi
+      .spyOn(window, "prompt")
+      .mockReturnValueOnce("wrong@example.test")
+      .mockReturnValueOnce(task.account_username);
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const path = String(input);
+      calls.push({ path, init });
+      if (path.endsWith("/auth/session"))
+        return response({ csrf_token: "synthetic-token" });
+      if (path.endsWith("/accounts")) return response({ accounts: [] });
+      if (path.endsWith("/targets")) return response({ targets: [] });
+      if (path.endsWith("/tasks")) return response({ tasks: [task] });
+      if (path.endsWith("/history")) return response({ events: [] });
+      return response(task);
+    });
+    render(<App />);
+    const user = userEvent.setup();
+    const discard = await screen.findByRole("button", {
+      name: "放弃本地同步结果",
+    });
+    expect(
+      screen.getByRole("button", { name: "重试同步" }).className,
+    ).toContain("primary");
+    await user.click(discard);
+    expect(
+      await screen.findByText("账号邮箱不匹配，未放弃同步结果。"),
+    ).toBeTruthy();
+    expect(calls.some((c) => c.path.endsWith("/discard-sync"))).toBe(false);
+    await user.click(discard);
+    await waitFor(() =>
+      expect(calls.some((c) => c.path === "/api/v1/tasks/9/discard-sync")).toBe(
+        true,
+      ),
+    );
+    const call = calls.find((c) => c.path === "/api/v1/tasks/9/discard-sync")!;
+    expect(call.init?.method).toBe("POST");
+    expect(JSON.parse(String(call.init?.body))).toEqual({
+      confirmation: task.account_username,
+    });
+    expect(prompt).toHaveBeenLastCalledWith(
+      expect.stringContaining("此操作不会删除目标服务中的账号"),
+    );
+    prompt.mockRestore();
+  });
 });

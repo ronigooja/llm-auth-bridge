@@ -30,6 +30,7 @@ type Target = {
 type Task = {
   id: number;
   account_id: number;
+  account_username?: string;
   target_id: number;
   state: string;
   phase?: string;
@@ -74,6 +75,8 @@ const labels: Record<string, string> = {
   token_exchange: "正在获取认证凭据",
   resuming: "正在检查浏览器",
   sync_failed: "同步失败",
+  sync_unknown: "同步结果待确认",
+  remote_outcome_unknown: "目标同步结果待确认",
   sync_pending: "等待同步",
   succeeded: "已完成",
   failed: "失败",
@@ -1349,6 +1352,27 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
               onClick={() => void action("retry-sync")}
             >
               重试同步
+            </button>
+          )}
+          {task.state === "sync_pending" && task.phase === "sync_failed" && (
+            <button
+              className="danger discard-sync"
+              disabled={m.busy || !task.account_username}
+              onClick={() => {
+                const confirmation = window.prompt(
+                  `放弃账号 ${task.account_username} 的本地同步结果？目标服务可能已创建该账号，此操作不会删除目标服务中的账号。之后可以重新开始登录。请输入完整账号邮箱确认：`,
+                );
+                if (confirmation === null) return;
+                if (confirmation !== task.account_username) {
+                  void m.run(async () => {
+                    throw new Error("账号邮箱不匹配，未放弃同步结果。");
+                  });
+                  return;
+                }
+                void action("discard-sync", { confirmation });
+              }}
+            >
+              放弃本地同步结果
             </button>
           )}
           {active && (
