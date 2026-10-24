@@ -71,7 +71,17 @@ class CPA:
                 else httpx.Response(404)
             )
         return httpx.Response(
-            200, json={"files": [{"name": name} for name in self.files]}
+            200,
+            json={
+                "files": [
+                    {
+                        "name": filename,
+                        "email": payload.get("email"),
+                        "type": payload.get("type"),
+                    }
+                    for filename, payload in self.files.items()
+                ]
+            },
         )
 
 
@@ -113,6 +123,18 @@ def test_existing_remote_id_updated_not_duplicated(cpa, result, account):
         == "existing.json"
     )
     assert list(server.files) == ["existing.json"]
+
+
+def test_existing_cpa_email_file_reused_without_local_sync_id(cpa, result, account):
+    server = CPA()
+    legacy = "codex-legacy-account-plus.json"
+    server.files[legacy] = {
+        "type": "codex",
+        "email": account["username"],
+        "access_token": "old",
+    }
+    assert run(cpa, result, account, server)["remote_id"] == legacy
+    assert list(server.files) == [legacy]
 
 
 def test_lost_write_response_reconciles_without_duplicate(cpa, result, account):
