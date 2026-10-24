@@ -7,6 +7,7 @@ setting is not used by run_login, which requires the production sandbox.
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
+import json
 import shutil
 import threading
 from urllib.parse import urlsplit
@@ -122,7 +123,14 @@ def test_explicit_direct_route_reaches_real_fixture_despite_proxy_environment(
         assert 'name="username"' in response.text
 
 
-@pytest.mark.parametrize("scenario", ["rejected_password", "email_code", "changed_challenge"])
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "rejected_password", "email_code", "changed_challenge",
+        "delayed_spa", "delayed_navigation", "delayed_pending_email",
+        "direct_password", "otp_only", "existing_session",
+    ],
+)
 def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
     """Exercise the real adapter against intercepted provider pages only."""
     from types import SimpleNamespace
@@ -136,12 +144,41 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
     pages = {
         "/": "<p>Signed out</p>",
         "/auth/login": '<form action="/password"><input type="email" name="username"><button type="submit">Continue</button></form>',
-        "/password": '<form action="/code"><input type="password" name="password"><button type="submit">Continue</button></form>',
+        "/password": (
+            '<form method="get" action="/code">'
+            '<input type="email" name="username" value="synthetic@example.com" readonly>'
+            '<label for="password">Password</label>'
+            '<input id="password" type="password" name="password" '
+            'autocomplete="current-password" required>'
+            '<button type="submit" name="intent" value="validate">Continue</button></form>'
+        ),
         "/code": '<form action="/done"><input name="code" autocomplete="one-time-code"><button type="submit">Continue</button></form>',
         "/done": "<p>Done</p>",
     }
     if scenario == "rejected_password":
         pages["/password"] = '<form onsubmit="event.preventDefault(); document.querySelector(\'p\').textContent=\'Incorrect password\'"><input type="password" name="code"><button type="submit">Continue</button></form><p></p>'
+
+    if scenario in ("delayed_spa", "delayed_navigation", "delayed_pending_email"):
+        # The provider may retain the email form or show an intermediate page
+        # while resolving the next challenge, exceeding the old four-second pause.
+        transition = (
+            "document.body.innerHTML=" + json.dumps(pages["/password"])
+            if scenario == "delayed_spa"
+            else "window.location.href='/password'"
+        )
+        loading = (
+            "document.body.innerHTML='<p>Loading sign in</p>'; "
+            if scenario != "delayed_pending_email" else ""
+        )
+        handler = "event.preventDefault(); " + loading + "setTimeout(() => {" + transition + "}, 5500)"
+        pages["/auth/login"] = (
+            '<form onsubmit="' + handler.replace('"', '&quot;') + '">'
+            '<input type="email" name="username"><button type="submit">Continue</button></form>'
+        )
+    elif scenario == "direct_password":
+        pages["/auth/login"] = pages["/password"]
+    elif scenario == "otp_only":
+        pages["/auth/login"] = pages["/code"]
 
     with real_browser() as browser:
 
@@ -194,6 +231,8 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
                 nonlocal completed
                 page = page_holder[0]
                 waits.append((phase, detect_state(page), reason))
+                if scenario in ("delayed_spa", "delayed_navigation", "delayed_pending_email") and phase != "email_code_required":
+                    pytest.fail("The adapter paused before submitting the delayed password form")
                 if scenario == "rejected_password":
                     assert "Incorrect password" in page.locator("body").inner_text()
                     assert "verification code" not in reason
@@ -213,7 +252,7 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
         monkeypatch.setattr(playwright.sync_api, "sync_playwright", fake_playwright)
         monkeypatch.setattr(module, "account_route", fake_route)
         def fake_session(*args):
-            if completed or (
+            if scenario == "existing_session" or completed or (
                 page_holder and urlsplit(page_holder[0].url).path == "/done"
             ):
                 return credential
@@ -225,7 +264,10 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
             {"kind": "chatgpt-web-voice"},
             Control(),
         ) == credential
-    assert phases.count("password") == 1
+    if scenario not in ("rejected_password", "changed_challenge", "otp_only", "existing_session"):
+        assert any("password=synthetic-password" in url for url in inputs)
+    assert phases.count("password") == (0 if scenario in ("otp_only", "existing_session") else 1)
+    assert phases.count("email") == (0 if scenario in ("direct_password", "otp_only", "existing_session") else 1)
     if scenario == "rejected_password":
         assert [w[:2] for w in waits] == [("password_required", "password")]
     elif scenario == "changed_challenge":
@@ -233,6 +275,8 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
             ("email_code_required", "email_code"),
             ("password_required", "password"),
         ]
+    elif scenario == "existing_session":
+        assert not waits
     else:
         assert [w[:2] for w in waits] == [("email_code_required", "email_code")]
         assert any("code=123456" in url for url in inputs)

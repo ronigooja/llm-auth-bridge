@@ -27,6 +27,10 @@ BROWSER_ARGS = [
     "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
     "--webrtc-ip-handling-policy=disable_non_proxied_udp",
 ]
+# Unknown/loading pages and submitted navigation controls need a longer window
+# than a password/code form that remains available for review.
+TRANSITION_WAIT_SECONDS = 30
+CHALLENGE_SETTLE_SECONDS = 4
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 REDIRECT_URI = "http://localhost:1455/auth/callback"
 
@@ -409,9 +413,18 @@ def run_login(
                         submitted.add(marker)
                         started = time.monotonic()
                     else:
-                        # Permit navigation/rendering to settle, without blindly
-                        # repeating passwords or guessing an unfamiliar control.
-                        if time.monotonic() - started < 4:
+                        # Email/login/consent may remain visible while a request
+                        # is pending, or disappear during SPA hydration. Pausing
+                        # here freezes classification until Continue, so keep
+                        # observing these transitions before requesting takeover.
+                        # Password/code forms retain their short review window;
+                        # submitted credentials are never repeated automatically.
+                        settle_seconds = (
+                            TRANSITION_WAIT_SECONDS
+                            if stage in ("unknown", "email", "login", "consent")
+                            else CHALLENGE_SETTLE_SECONDS
+                        )
+                        if time.monotonic() - started < settle_seconds:
                             page.wait_for_timeout(500)
                             continue
                         _save(context, control)

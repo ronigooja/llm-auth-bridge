@@ -194,7 +194,7 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, mode):
     monkeypatch.setattr(module, "account_route", fake_route)
     monkeypatch.setattr(module, "detect_state", lambda p: "unknown")
     monkeypatch.setattr(module, "_get_session", lambda *a: result if resumed else None)
-    moments = iter([0, 10, 10])
+    moments = iter([0, 31, 31])
     monkeypatch.setattr(module.time, "monotonic", lambda: next(moments))
     account = {
         "username": "synthetic@example.com",
