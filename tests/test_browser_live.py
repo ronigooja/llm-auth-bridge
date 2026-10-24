@@ -333,6 +333,8 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
         ('<h1>Authentication app</h1>', "totp"),
         ('<p>Enter the code sent via SMS</p>', "verification_code"),
         ('<p>Enter verification code</p>', "verification_code"),
+        ('<p>Enter verification code<span hidden>Use your authenticator app</span></p>', "verification_code"),
+        ('<p>Enter verification code<span style="display:none">Use your authenticator app</span></p>', "verification_code"),
         ('<p>Enter your email code or code from your authenticator app</p>', "verification_code"),
     ],
 )
@@ -355,5 +357,15 @@ def test_submit_skips_disabled_transition_button():
         page.set_content('<form onsubmit="event.preventDefault(); document.body.dataset.submitted=1">'
                          '<button type="submit" disabled>Loading</button>'
                          '<button type="submit">Continue</button></form>')
+        _submit(page)
+        assert page.locator("body").get_attribute("data-submitted") == "1"
+
+
+def test_submit_waits_for_only_pending_button():
+    with real_browser() as browser:
+        page = browser.new_page()
+        page.set_content('<form onsubmit="event.preventDefault(); document.body.dataset.submitted=1">'
+                         '<button type="submit" disabled>Continue</button></form>'
+                         '<script>setTimeout(() => document.querySelector("button").disabled=false, 1500)</script>')
         _submit(page)
         assert page.locator("body").get_attribute("data-submitted") == "1"

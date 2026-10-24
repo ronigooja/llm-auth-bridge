@@ -202,9 +202,23 @@ def _code_kind(field) -> str:
     # text. Ambiguous/unsupported delivery methods require a manual code.
     instructions = field.evaluate(r"""field => {
         const clean = node => {
-            const copy = node.cloneNode(true);
-            copy.querySelectorAll('a, button, nav, footer, script, style').forEach(n => n.remove());
-            return copy.textContent.trim().toLowerCase();
+            const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+            const text = [];
+            while (walker.nextNode()) {
+                let parent = walker.currentNode.parentElement;
+                let visible = true;
+                while (parent) {
+                    const style = getComputedStyle(parent);
+                    if (parent.matches('a, button, nav, footer, script, style')
+                        || style.display === 'none' || style.visibility === 'hidden') {
+                        visible = false;
+                        break;
+                    }
+                    parent = parent.parentElement;
+                }
+                if (visible) text.push(walker.currentNode.textContent);
+            }
+            return text.join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
         };
         const form = field.closest('form');
         const nodes = [
@@ -268,6 +282,10 @@ def detect_state(page) -> str:
 
 def _submit(page):
     button = _visible(page, 'button[type="submit"]:enabled, input[type="submit"]:enabled')
+    if button is None:
+        # A sole pending button can become enabled after field validation.
+        # Playwright's click waits for that state instead of failing immediately.
+        button = _visible(page, 'button[type="submit"], input[type="submit"]')
     if button is None:
         raise BrowserError("Login form requires manual review")
     button.click(timeout=10000)
