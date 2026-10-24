@@ -211,12 +211,47 @@ class Worker:
                     from .integrations import sync_credential
 
                     syncer = sync_credential
-                synced = syncer(
-                    target,
-                    result,
-                    account,
-                    old["remote_id"] if old else task.get("remote_id"),
-                )
+                stable_remote_id = old["remote_id"] if old else task.get("remote_id")
+                if self.syncer:
+                    if stable_remote_id is None:
+                        from .integrations import _remote_id
+
+                        stable_remote_id = _remote_id(
+                            None, result["identity"], target["kind"]
+                        )
+                        with database(self.settings.db_path) as conn:
+                            conn.execute("BEGIN IMMEDIATE")
+                            owned = self.queue.owned(
+                                conn, task["id"], task["execution_id"]
+                            )
+                            if owned["cancel_requested"]:
+                                raise Cancelled()
+                            conn.execute(
+                                "UPDATE tasks SET remote_id=? WHERE id=? AND execution_id=?",
+                                (stable_remote_id, task["id"], task["execution_id"]),
+                            )
+                    synced = syncer(target, result, account, stable_remote_id)
+                else:
+                    def persist_remote_id(remote_id):
+                        with database(self.settings.db_path) as conn:
+                            conn.execute("BEGIN IMMEDIATE")
+                            owned = self.queue.owned(
+                                conn, task["id"], task["execution_id"]
+                            )
+                            if owned["cancel_requested"]:
+                                raise Cancelled()
+                            conn.execute(
+                                "UPDATE tasks SET remote_id=? WHERE id=? AND execution_id=?",
+                                (remote_id, task["id"], task["execution_id"]),
+                            )
+
+                    synced = syncer(
+                        target,
+                        result,
+                        account,
+                        stable_remote_id,
+                        _on_remote_id=persist_remote_id,
+                    )
                 if not synced.get("verified"):
                     raise ValueError("downstream did not verify credentials")
                 with database(self.settings.db_path) as conn:

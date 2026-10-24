@@ -269,21 +269,16 @@ class Queue:
                 "INSERT OR REPLACE INTO pending_credentials(task_id,result_cipher) VALUES(?,?)",
                 (task_id, encrypt(json.dumps(result), self.key)),
             )
-            from .integrations import _remote_id
-
             old = conn.execute(
                 "SELECT remote_id FROM syncs WHERE account_id=? AND target_id=?",
                 (row["account_id"], row["target_id"]),
             ).fetchone()
-            target = conn.execute(
-                "SELECT kind FROM targets WHERE id=?", (row["target_id"],)
-            ).fetchone()
-            remote_id = _remote_id(
-                old[0] if old else None, result["identity"], target["kind"]
-            )
-            conn.execute(
-                "UPDATE tasks SET remote_id=? WHERE id=?", (remote_id, task_id)
-            )
+            # Keep a known stable ID, but let the integration discover legacy
+            # remote filenames before it creates a deterministic new one.
+            if old and old[0]:
+                conn.execute(
+                    "UPDATE tasks SET remote_id=? WHERE id=?", (old[0], task_id)
+                )
             conn.execute(
                 "UPDATE tasks SET state='sync_pending',phase='sync_ready',message='Credentials ready for synchronization',execution_id=NULL,lease_until=NULL,takeover_available=0,command_cipher=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND execution_id=?",
                 (task_id, execution_id),

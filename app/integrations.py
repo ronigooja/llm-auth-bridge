@@ -266,9 +266,11 @@ class _Adapter:
         if self.compat:
             return None
         response = self.request("GET", _CPA_PATH)
-        if response.status_code == 404:
-            return None
         data = self.data(response)
+        if response.status_code == 404 or not isinstance(data.get("files"), list):
+            raise IntegrationError(
+                "CLIProxyAPI auth-files API is unavailable or incompatible."
+            )
         matches = [
             item.get("name")
             for item in data.get("files", [])
@@ -377,6 +379,7 @@ def sync_credential(
     *,
     _transport=None,
     _sleep=time.sleep,
+    _on_remote_id=None,
 ) -> dict:
     """Upload and read back a credential; retrying reuses the same remote record.
 
@@ -399,6 +402,11 @@ def sync_credential(
         if remote_id is None:
             remote_id = adapter.find_by_identity(identity)
         rid = _remote_id(remote_id, identity, kind)
+        # The queue persists this selected ID before any write. If a later
+        # response is lost, retries reconcile the same remote object and keep
+        # the existing refresh-token uncertainty rules.
+        if _on_remote_id is not None:
+            _on_remote_id(rid)
         existing = adapter.read(rid)
         if existing is not None:
             if not adapter.compat and existing.get("type") != "codex":
@@ -419,11 +427,17 @@ def sync_credential(
             raise IntegrationError(
                 "Remote credential or route changed after an earlier synchronization attempt; synchronization remains pending to avoid overwriting rotated credentials."
             )
+        write_payload = payload
+        if existing is not None and not adapter.compat:
+            # CLIProxyAPI auth files can carry runtime settings such as
+            # priority, weight, and disabled. A credential refresh should
+            # replace the credential fields while retaining those settings.
+            write_payload = {**existing, **payload}
         for attempt in range(2):
             failure = None
             try:
                 write_started = True
-                response = adapter.write(rid, payload)
+                response = adapter.write(rid, write_payload)
                 if response.status_code == 404:
                     raise IntegrationError(
                         "Target write endpoint is unavailable; check its compatibility contract."
