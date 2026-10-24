@@ -1,0 +1,1896 @@
+diff --git a/docs/BRIDGE_V1.md b/docs/BRIDGE_V1.md
+new file mode 100644
+index 0000000..a984b6f
+--- /dev/null
++++ b/docs/BRIDGE_V1.md
+@@ -0,0 +1,50 @@
++# bridge-v1 compatibility API
++
++This fork adds a credential synchronization surface for llm-auth-bridge. It has
++synthetic contract coverage and is **unverified with real provider accounts**.
++Administrator Basic authentication is required for all `/bridge/v1/` routes;
++browser cookies and downstream API keys do not authorize this surface. Existing
++native administrator and downstream routes retain their original authentication.
++
++`GET /bridge/v1/capabilities` returns `protocol: bridge-v1`, `explicit_route: true`
++and `credential_digest: true`.
++
++`PUT /bridge/v1/accounts/{remote_id}` accepts an object containing `identity`,
++`credential_type: chatgpt_web`, `credential: {access_token, device_id?}`, `route`
++and optional numeric or null `expires_at`. Route is exactly `{type: direct}` or
++`{type: proxy, url: <full URL>}`. Proxy schemes are http, https, socks5 and socks5h.
++Refresh tokens and unknown fields are rejected. Bodies are limited to 1 MiB.
++Remote IDs contain only ASCII letters, digits, `-_.@+`, have at most 200 characters,
++and may not begin with a dot or contain consecutive dots.
++
++Supply an `Idempotency-Key` of at most 512 bytes. Same key and canonical request
++replays read current state without rewriting credentials. Same key with a changed
++request returns 409. Each remote ID maps atomically to one native account. Identity
++changes and tokens already belonging to another native account return 409; native
++accounts are never silently adopted. Successful fresh PUTs for the same identity
++may intentionally replace the credential and route. Native disabled status is
++preserved on updates. Deleting a native account deletes its bridge mapping; a
++historical idempotency-key replay cannot recreate it.
++
++`GET /bridge/v1/accounts/{remote_id}` returns 404 when absent and otherwise reports
++`identity`, `credential_type`, `route` and `credential_digest`. Exact proxy
++credentials are visible only on this authenticated management surface. Digest is
++lowercase SHA-256 over the actual persisted credential object using Python's
++`json.dumps(sort_keys=True, separators=(',', ':'), ensure_ascii=False)` encoding,
++including literal U+2028 and U+2029. Credentials themselves are never returned.
++Readback is consistent with an acknowledged PUT and reflects later native edits.
++
++Native accounts remain SQLite rows; bridge ID, optional device ID and expiration
++metadata are stored in `bridge_accounts`. Tokens, native proxy URLs and bridge
++device IDs are AES-GCM sealed with `VOICE_TOKEN_ENCRYPTION_KEY`. Existing plaintext
++proxy values are sealed during startup without changing their route. Device IDs
++are used by provider requests; absence preserves the global device fallback.
++Explicit `direct` uses an internal proxy sentinel interpreted by every transport
++as bypassing process proxies. Empty native proxy values retain legacy inheritance.
++Expiration is retained as synchronization metadata; provider token expiry behavior
++remains unchanged. No account login, refresh exchange or live provider probe occurs
++during bridge management requests.
++
++Back up the SQLite database and encryption key before upgrade. Older binaries do
++not understand encrypted proxy values or the direct sentinel: rollback requires
++restoring the previous database backup and binary together.
+diff --git a/internal/accounts/account.go b/internal/accounts/account.go
+index 76322e8..6dbd97a 100644
+--- a/internal/accounts/account.go
++++ b/internal/accounts/account.go
+@@ -4,9 +4,9 @@ package accounts
+ // with AES-256-GCM before it is written to SQLite; domain code always sees
+ // the plaintext form after decryption.
+ //
+-// Upstream browser fingerprint (device id, session id, UA) is process-global
+-// configuration, not per-account state.
++// Bridge accounts may override the process-global device fingerprint.
+ type Account struct {
++	DeviceID    string  `json:"-"`
+ 	ID          int64   `json:"id,omitempty"`
+ 	Email       string  `json:"email"`
+ 	AccessToken string  `json:"access_token"`
+diff --git a/internal/accounts/bridge.go b/internal/accounts/bridge.go
+new file mode 100644
+index 0000000..562f05f
+--- /dev/null
++++ b/internal/accounts/bridge.go
+@@ -0,0 +1,280 @@
++package accounts
++
++import (
++	"bytes"
++	"crypto/sha256"
++	"database/sql"
++	"encoding/hex"
++	"encoding/json"
++	"errors"
++	"net/url"
++	"strings"
++	"unicode"
++)
++
++// BridgeCredential is the complete web credential actually used by the gateway.
++type BridgeCredential struct {
++	AccessToken string `json:"access_token"`
++	DeviceID    string `json:"device_id,omitempty"`
++}
++type BridgeRoute struct {
++	Type string `json:"type"`
++	URL  string `json:"url,omitempty"`
++}
++type BridgePayload struct {
++	Identity       string           `json:"identity"`
++	CredentialType string           `json:"credential_type"`
++	Credential     BridgeCredential `json:"credential"`
++	Route          BridgeRoute      `json:"route"`
++	ExpiresAt      json.RawMessage  `json:"expires_at"`
++}
++type BridgeView struct {
++	Identity         string      `json:"identity"`
++	CredentialType   string      `json:"credential_type"`
++	Route            BridgeRoute `json:"route"`
++	CredentialDigest string      `json:"credential_digest"`
++}
++
++// CanonicalJSON matches Python sorted-key compact JSON for the bridge's string
++// credentials. Disable HTML escapes and preserve literal Unicode separators.
++func CanonicalJSON(value any) ([]byte, error) {
++	raw, err := json.Marshal(value)
++	if err != nil {
++		return nil, err
++	}
++	dec := json.NewDecoder(bytes.NewReader(raw))
++	dec.UseNumber()
++	var object any
++	if err = dec.Decode(&object); err != nil {
++		return nil, err
++	}
++	var out bytes.Buffer
++	enc := json.NewEncoder(&out)
++	enc.SetEscapeHTML(false)
++	if err = enc.Encode(object); err != nil {
++		return nil, err
++	}
++	result := bytes.TrimSuffix(out.Bytes(), []byte("\n"))
++	var exact bytes.Buffer
++	for i := 0; i < len(result); i++ {
++		if result[i] == '\\' && i+1 < len(result) {
++			if i+6 <= len(result) && (string(result[i:i+6]) == `\u2028` || string(result[i:i+6]) == `\u2029`) {
++				if result[i+5] == '8' {
++					exact.WriteRune('\u2028')
++				} else {
++					exact.WriteRune('\u2029')
++				}
++				i += 5
++				continue
++			}
++			exact.WriteByte(result[i])
++			i++
++			exact.WriteByte(result[i])
++			continue
++		}
++		exact.WriteByte(result[i])
++	}
++	return exact.Bytes(), nil
++}
++func BridgeDigest(value any) (string, error) {
++	raw, err := CanonicalJSON(value)
++	if err != nil {
++		return "", err
++	}
++	sum := sha256.Sum256(raw)
++	return hex.EncodeToString(sum[:]), nil
++}
++func ValidBridgeID(id string) bool {
++	if id == "" || len(id) > 200 || strings.HasPrefix(id, ".") || strings.Contains(id, "..") {
++		return false
++	}
++	for _, c := range id {
++		if !strings.ContainsRune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.@+", c) {
++			return false
++		}
++	}
++	return true
++}
++func (b BridgePayload) Validate() error {
++	invalid := &Error{Message: "invalid bridge account payload"}
++	if strings.TrimSpace(b.Identity) == "" || b.Identity != strings.TrimSpace(b.Identity) || b.CredentialType != "chatgpt_web" || b.Credential.AccessToken == "" || strings.TrimSpace(b.Credential.AccessToken) == "" {
++		return invalid
++	}
++	if b.Credential.DeviceID != "" && strings.TrimSpace(b.Credential.DeviceID) == "" {
++		return invalid
++	}
++	for _, text := range []string{b.Identity, b.Credential.AccessToken, b.Credential.DeviceID} {
++		if strings.IndexFunc(text, unicode.IsControl) >= 0 {
++			return invalid
++		}
++	}
++	if len(b.ExpiresAt) > 0 && string(b.ExpiresAt) != "null" {
++		var expiry float64
++		if json.Unmarshal(b.ExpiresAt, &expiry) != nil {
++			return invalid
++		}
++	}
++	switch b.Route.Type {
++	case "direct":
++		if b.Route.URL != "" {
++			return invalid
++		}
++	case "proxy":
++		u, err := url.Parse(b.Route.URL)
++		if err != nil || u.Hostname() == "" || u.Opaque != "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || strings.IndexFunc(b.Route.URL, unicode.IsSpace) >= 0 {
++			return invalid
++		}
++		switch u.Scheme {
++		case "http", "https", "socks5", "socks5h":
++		default:
++			return invalid
++		}
++		if port := u.Port(); port != "" {
++			var n int
++			for _, c := range port {
++				if c < '0' || c > '9' {
++					return invalid
++				}
++				n = n*10 + int(c-'0')
++				if n > 65535 {
++					return invalid
++				}
++			}
++			if n == 0 {
++				return invalid
++			}
++		}
++	default:
++		return invalid
++	}
++	return nil
++}
++
++// BridgeGet computes readback from the current native row, never a request digest.
++func (p *Pool) BridgeGet(remoteID string) (BridgeView, error) {
++	p.db.Lock()
++	defer p.db.Unlock()
++	return p.bridgeGetUnlocked(remoteID)
++}
++func (p *Pool) bridgeGetUnlocked(remoteID string) (BridgeView, error) {
++	var id int64
++	if err := p.db.Conn().QueryRow(`SELECT account_id FROM bridge_accounts WHERE remote_id=?`, remoteID).Scan(&id); err != nil {
++		if errors.Is(err, sql.ErrNoRows) {
++			return BridgeView{}, ErrNotFound
++		}
++		return BridgeView{}, err
++	}
++	account, err := p.getUnlocked(id)
++	if err != nil {
++		return BridgeView{}, err
++	}
++	route := BridgeRoute{Type: "proxy", URL: account.Proxy}
++	if account.Proxy == "direct" {
++		route = BridgeRoute{Type: "direct"}
++	} else if account.Proxy == "" {
++		return BridgeView{}, ErrConflict
++	}
++	digest, err := BridgeDigest(BridgeCredential{AccessToken: account.AccessToken, DeviceID: account.DeviceID})
++	if err != nil {
++		return BridgeView{}, err
++	}
++	return BridgeView{Identity: account.Email, CredentialType: "chatgpt_web", Route: route, CredentialDigest: digest}, nil
++}
++
++// BridgePut atomically binds one caller-owned stable ID to a native account.
++// Existing unrelated accounts are never adopted, even if their token matches.
++func (p *Pool) BridgePut(remoteID, key, payloadDigest string, b BridgePayload) (BridgeView, error) {
++	if !ValidBridgeID(remoteID) || key == "" || len(key) > 512 {
++		return BridgeView{}, &Error{Message: "invalid bridge account request"}
++	}
++	if err := b.Validate(); err != nil {
++		return BridgeView{}, err
++	}
++	stored, hash, err := p.sealExactToken(b.Credential.AccessToken)
++	if err != nil {
++		return BridgeView{}, err
++	}
++	proxy := b.Route.URL
++	if b.Route.Type == "direct" {
++		proxy = "direct"
++	}
++	sealedProxy, err := p.sealOptional(proxy)
++	if err != nil {
++		return BridgeView{}, err
++	}
++	device, err := p.sealOptional(b.Credential.DeviceID)
++	if err != nil {
++		return BridgeView{}, err
++	}
++	p.db.Lock()
++	defer p.db.Unlock()
++	tx, err := p.db.Conn().Begin()
++	if err != nil {
++		return BridgeView{}, err
++	}
++	defer tx.Rollback()
++	var oldID, oldDigest string
++	err = tx.QueryRow(`SELECT remote_id,payload_digest FROM bridge_idempotency WHERE key=?`, key).Scan(&oldID, &oldDigest)
++	if err == nil && (oldID != remoteID || oldDigest != payloadDigest) {
++		return BridgeView{}, ErrConflict
++	}
++	if err != nil && !errors.Is(err, sql.ErrNoRows) {
++		return BridgeView{}, err
++	}
++	replay := err == nil
++	var id int64
++	var identity, nativeIdentity string
++	err = tx.QueryRow(`SELECT a.id,b.identity,a.email FROM bridge_accounts b JOIN accounts a ON a.id=b.account_id WHERE b.remote_id=?`, remoteID).Scan(&id, &identity, &nativeIdentity)
++	exists := err == nil
++	if err != nil && !errors.Is(err, sql.ErrNoRows) {
++		return BridgeView{}, err
++	}
++	if exists && (!strings.EqualFold(identity, b.Identity) || !strings.EqualFold(nativeIdentity, b.Identity)) {
++		return BridgeView{}, ErrConflict
++	}
++	if replay {
++		// Never replay an old write over newer native credentials or routing.
++		if !exists {
++			return BridgeView{}, ErrConflict
++		}
++		if err = tx.Commit(); err != nil {
++			return BridgeView{}, err
++		}
++		return p.bridgeGetUnlocked(remoteID)
++	}
++	var duplicate int
++	if err = tx.QueryRow(`SELECT COUNT(*) FROM accounts WHERE token_hash=? AND id<>?`, hash, id).Scan(&duplicate); err != nil {
++		return BridgeView{}, err
++	}
++	if duplicate > 0 {
++		return BridgeView{}, ErrConflict
++	}
++	if exists {
++		_, err = tx.Exec(`UPDATE accounts SET email=?,access_token=?,token_hash=?,proxy=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, b.Identity, stored, hash, sealedProxy, id)
++	} else {
++		var result sql.Result
++		result, err = tx.Exec(`INSERT INTO accounts(email,access_token,token_hash,proxy) VALUES(?,?,?,?)`, b.Identity, stored, hash, sealedProxy)
++		if err == nil {
++			id, err = result.LastInsertId()
++		}
++	}
++	if err != nil {
++		return BridgeView{}, err
++	}
++	expiry := string(b.ExpiresAt)
++	if expiry == "" {
++		expiry = "null"
++	}
++	_, err = tx.Exec(`INSERT INTO bridge_accounts(remote_id,identity,account_id,device_id,expires_at) VALUES(?,?,?,?,?) ON CONFLICT(remote_id) DO UPDATE SET device_id=excluded.device_id,expires_at=excluded.expires_at`, remoteID, b.Identity, id, device, expiry)
++	if err != nil {
++		return BridgeView{}, err
++	}
++	_, err = tx.Exec(`INSERT INTO bridge_idempotency(key,remote_id,payload_digest) VALUES(?,?,?)`, key, remoteID, payloadDigest)
++	if err != nil {
++		return BridgeView{}, err
++	}
++	if err = tx.Commit(); err != nil {
++		return BridgeView{}, err
++	}
++	return p.bridgeGetUnlocked(remoteID)
++}
+diff --git a/internal/accounts/bridge_test.go b/internal/accounts/bridge_test.go
+new file mode 100644
+index 0000000..b94f773
+--- /dev/null
++++ b/internal/accounts/bridge_test.go
+@@ -0,0 +1,199 @@
++package accounts
++
++import (
++	"errors"
++	"path/filepath"
++	"strings"
++	"testing"
++
++	"github.com/dyhhhhhh/chatgpt-web-voice/internal/secretbox"
++	"github.com/dyhhhhhh/chatgpt-web-voice/internal/store"
++)
++
++func bridgePool(t *testing.T, path string) *Pool {
++	t.Helper()
++	db, err := store.Open(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { db.Close() })
++	box, err := secretbox.New([]byte("01234567890123456789012345678901"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	return NewPoolFromDB(db).WithBox(box)
++}
++func bridgeFixture() BridgePayload {
++	return BridgePayload{Identity: "synthetic@example.test", CredentialType: "chatgpt_web", Credential: BridgeCredential{AccessToken: "synthetic-token<&>测试\u2028\u2029", DeviceID: "测试<&>\u2028\u2029"}, Route: BridgeRoute{Type: "proxy", URL: "socks5h://user:secret@127.0.0.1:9876"}}
++}
++func TestBridgeCanonicalCredentialDigest(t *testing.T) {
++	digest, err := BridgeDigest(BridgeCredential{AccessToken: "synthetic", DeviceID: "测试<&>\u2028\u2029"})
++	if err != nil || digest != "5fcc9d4ab814aedce4447a6dd1243d8f67353cf8270f4d23eeaef6aa6286502d" {
++		t.Fatalf("digest=%s err=%v", digest, err)
++	}
++	raw, err := CanonicalJSON(map[string]string{"device_id": `literal\u2028`})
++	if err != nil || string(raw) != `{"device_id":"literal\\u2028"}` {
++		t.Fatalf("literal separator changed: %q %v", raw, err)
++	}
++}
++func TestBridgePersistenceConflictAndNativeMutation(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "synthetic.db")
++	p := bridgePool(t, path)
++	b := bridgeFixture()
++	v, err := p.BridgePut("bridge-synthetic", "synthetic-key", "digest-one", b)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if v.Route != b.Route {
++		t.Fatalf("route=%+v", v.Route)
++	}
++	list, err := p.List()
++	if err != nil || len(list) != 1 || list[0].DeviceID != b.Credential.DeviceID || list[0].AccessToken != b.Credential.AccessToken {
++		t.Fatalf("list=%+v err=%v", list, err)
++	}
++	var token, proxy, device string
++	if err := p.db.Conn().QueryRow(`SELECT access_token,proxy,device_id FROM accounts a JOIN bridge_accounts b ON a.id=b.account_id`).Scan(&token, &proxy, &device); err != nil {
++		t.Fatal(err)
++	}
++	for _, v := range []string{token, proxy, device} {
++		if !secretbox.IsSealed(v) {
++			t.Fatal("plaintext secret persisted")
++		}
++	}
++	p2 := bridgePool(t, path)
++	read, err := p2.BridgeGet("bridge-synthetic")
++	if err != nil || read != v {
++		t.Fatalf("restart read=%+v err=%v", read, err)
++	}
++	b.Identity = "different@example.test"
++	if _, err = p.BridgePut("bridge-synthetic", "other", "other", b); !errors.Is(err, ErrConflict) {
++		t.Fatalf("identity conflict=%v", err)
++	}
++	b = bridgeFixture()
++	if _, err = p.BridgePut("bridge-other", "other", "other", b); !errors.Is(err, ErrConflict) {
++		t.Fatalf("token conflict=%v", err)
++	}
++	if _, err = p.BridgePut("bridge-synthetic", "synthetic-key", "different", b); !errors.Is(err, ErrConflict) {
++		t.Fatalf("idempotency conflict=%v", err)
++	}
++	replacement := "rotated-synthetic-token"
++	direct := "direct"
++	if _, err = p.Update(list[0].ID, AccountUpdate{Email: b.Identity, AccessToken: &replacement, Proxy: &direct}); err != nil {
++		t.Fatal(err)
++	}
++	replay, err := p.BridgePut("bridge-synthetic", "synthetic-key", "digest-one", b)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if replay.CredentialDigest == v.CredentialDigest || replay.Route.Type != "direct" {
++		t.Fatal("replay overwrote newer native state")
++	}
++	current, _ := p.Get(list[0].ID)
++	if current.AccessToken != replacement {
++		t.Fatal("rotated token overwritten")
++	}
++	if _, err = p.BridgeGet("absent"); !errors.Is(err, ErrNotFound) {
++		t.Fatalf("missing=%v", err)
++	}
++}
++func TestBridgePreservesUnrelatedNativeAccounts(t *testing.T) {
++	p := bridgePool(t, filepath.Join(t.TempDir(), "synthetic.db"))
++	b := bridgeFixture()
++	b.Credential.AccessToken = "synthetic-shared-native-token"
++	a, err := p.Create(Account{Email: "native@example.test", AccessToken: b.Credential.AccessToken})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err = p.BridgePut("bridge-new", "key", "digest", b); !errors.Is(err, ErrConflict) {
++		t.Fatalf("adopted unrelated account: %v", err)
++	}
++	got, _ := p.Get(a.ID)
++	if got.Email != a.Email || got.Proxy != "" {
++		t.Fatal("native account changed")
++	}
++	for _, route := range []BridgeRoute{{Type: ""}, {Type: "proxy", URL: "http://secret@host:99999"}, {Type: "direct", URL: "http://proxy"}} {
++		b.Route = route
++		if b.Validate() == nil {
++			t.Fatalf("accepted invalid route %+v", route)
++		}
++	}
++	if strings.Contains(got.Proxy, "secret") {
++		t.Fatal("unexpected proxy")
++	}
++}
++
++func TestBridgeTransactionRollbackAndDeletedMappingReplay(t *testing.T) {
++	p := bridgePool(t, filepath.Join(t.TempDir(), "synthetic.db"))
++	b := bridgeFixture()
++	if _, err := p.db.Conn().Exec(`CREATE TRIGGER synthetic_bridge_failure BEFORE INSERT ON bridge_accounts BEGIN SELECT RAISE(ABORT,'synthetic'); END`); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := p.BridgePut("bridge-rollback", "key", "digest", b); err == nil {
++		t.Fatal("injected failure ignored")
++	}
++	list, err := p.List()
++	if err != nil || len(list) != 0 {
++		t.Fatal("partial native write survived rollback")
++	}
++	if _, err = p.db.Conn().Exec(`DROP TRIGGER synthetic_bridge_failure`); err != nil {
++		t.Fatal(err)
++	}
++	if _, err = p.BridgePut("bridge-rollback", "key", "digest", b); err != nil {
++		t.Fatal(err)
++	}
++	list, _ = p.List()
++	if err = p.Delete(list[0].ID); err != nil {
++		t.Fatal(err)
++	}
++	if _, err = p.BridgePut("bridge-rollback", "key", "digest", b); !errors.Is(err, ErrConflict) {
++		t.Fatalf("deleted key replay recreated account: %v", err)
++	}
++	list, _ = p.List()
++	if len(list) != 0 {
++		t.Fatal("deleted account recreated")
++	}
++}
++func TestBridgeMigratesLegacyPlaintextProxy(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "synthetic.db")
++	p := bridgePool(t, path)
++	_, err := p.db.Conn().Exec(`INSERT INTO accounts(email,access_token,proxy) VALUES(?,?,?)`, "legacy@example.test", "synthetic-legacy-token", "http://user:synthetic-secret@127.0.0.1:9876")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err = p.SealStoredTokens(); err != nil {
++		t.Fatal(err)
++	}
++	var stored string
++	if err = p.db.Conn().QueryRow(`SELECT proxy FROM accounts`).Scan(&stored); err != nil || !secretbox.IsSealed(stored) {
++		t.Fatal("legacy proxy was not sealed")
++	}
++	p2 := bridgePool(t, path)
++	list, err := p2.List()
++	if err != nil || len(list) != 1 || list[0].Proxy != "http://user:synthetic-secret@127.0.0.1:9876" {
++		t.Fatalf("legacy proxy changed after restart: %+v %v", list, err)
++	}
++	if count, err := p2.SealStoredTokens(); err != nil || count != 0 {
++		t.Fatalf("non-idempotent migration: %d %v", count, err)
++	}
++}
++
++func TestBridgeMappingIdentityCannotBeReassignedByNativeEdit(t *testing.T) {
++	p := bridgePool(t, filepath.Join(t.TempDir(), "synthetic.db"))
++	b := bridgeFixture()
++	if _, err := p.BridgePut("bridge-immutable", "key", "digest", b); err != nil {
++		t.Fatal(err)
++	}
++	list, _ := p.List()
++	changed := "other@example.test"
++	if _, err := p.Update(list[0].ID, AccountUpdate{Email: changed}); err != nil {
++		t.Fatal(err)
++	}
++	read, err := p.BridgeGet("bridge-immutable")
++	if err != nil || read.Identity != changed {
++		t.Fatal("readback must reflect native identity edit")
++	}
++	b.Identity = changed
++	if _, err := p.BridgePut("bridge-immutable", "new-key", "new-digest", b); !errors.Is(err, ErrConflict) {
++		t.Fatalf("mapping reassigned: %v", err)
++	}
++}
+diff --git a/internal/accounts/pool.go b/internal/accounts/pool.go
+index c0d0b0a..35b653d 100644
+--- a/internal/accounts/pool.go
++++ b/internal/accounts/pool.go
+@@ -13,7 +13,8 @@ import (
+ 
+ const accountSelectColumns = `
+ 	id, email, access_token, token_hash, proxy, status, disabled, invalid_at,
+-	COALESCE(last_used_at, ''), created_at, updated_at`
++	COALESCE(last_used_at, ''), created_at, updated_at,
++	COALESCE((SELECT device_id FROM bridge_accounts WHERE account_id = accounts.id), '')`
+ 
+ // Pool is the SQLite-backed account repository. Selection and invalidation are
+ // serialized through the shared store mutex. Access tokens are sealed at rest
+@@ -76,7 +77,7 @@ func (p *Pool) SealStoredTokens() (rewritten int, err error) {
+ 	}
+ 	p.db.Lock()
+ 	defer p.db.Unlock()
+-	rows, err := p.db.Conn().Query("SELECT id, access_token, token_hash FROM accounts")
++	rows, err := p.db.Conn().Query("SELECT id, access_token, token_hash, proxy FROM accounts")
+ 	if err != nil {
+ 		return 0, fmt.Errorf("list accounts for sealing: %w", err)
+ 	}
+@@ -86,11 +87,12 @@ func (p *Pool) SealStoredTokens() (rewritten int, err error) {
+ 		id     int64
+ 		stored string
+ 		hash   string
++		proxy  string
+ 	}
+ 	var pending []row
+ 	for rows.Next() {
+ 		var item row
+-		if err := rows.Scan(&item.id, &item.stored, &item.hash); err != nil {
++		if err := rows.Scan(&item.id, &item.stored, &item.hash, &item.proxy); err != nil {
+ 			return 0, fmt.Errorf("read account for sealing: %w", err)
+ 		}
+ 		pending = append(pending, item)
+@@ -100,7 +102,7 @@ func (p *Pool) SealStoredTokens() (rewritten int, err error) {
+ 	}
+ 
+ 	for _, item := range pending {
+-		plain, err := p.box.Open(item.stored)
++		plain, err := p.box.OpenExact(item.stored)
+ 		if err != nil {
+ 			return rewritten, fmt.Errorf("open account %d access token: %w", item.id, err)
+ 		}
+@@ -108,17 +110,25 @@ func (p *Pool) SealStoredTokens() (rewritten int, err error) {
+ 		sealed := item.stored
+ 		needsSeal := !secretbox.IsSealed(item.stored)
+ 		if needsSeal {
+-			sealed, err = p.box.Seal(plain)
++			sealed, err = p.box.SealExact(plain)
+ 			if err != nil {
+ 				return rewritten, fmt.Errorf("seal account %d access token: %w", item.id, err)
+ 			}
+ 		}
+-		if !needsSeal && item.hash == hash {
++		sealedProxy := item.proxy
++		proxyNeedsSeal := item.proxy != "" && !secretbox.IsSealed(item.proxy)
++		if proxyNeedsSeal {
++			sealedProxy, err = p.sealOptional(item.proxy)
++			if err != nil {
++				return rewritten, err
++			}
++		}
++		if !needsSeal && item.hash == hash && !proxyNeedsSeal {
+ 			continue
+ 		}
+ 		if _, err := p.db.Conn().Exec(
+-			`UPDATE accounts SET access_token = ?, token_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+-			sealed, hash, item.id,
++			`UPDATE accounts SET access_token = ?, token_hash = ?, proxy = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
++			sealed, hash, sealedProxy, item.id,
+ 		); err != nil {
+ 			return rewritten, fmt.Errorf("persist sealed account %d: %w", item.id, err)
+ 		}
+@@ -168,6 +178,10 @@ func (p *Pool) Create(account Account) (Account, error) {
+ 	if err != nil {
+ 		return Account{}, err
+ 	}
++	storedProxy, err := p.sealOptional(account.Proxy)
++	if err != nil {
++		return Account{}, err
++	}
+ 	p.db.Lock()
+ 	defer p.db.Unlock()
+ 	if exists, err := p.tokenHashExistsUnlocked(hash, 0); err != nil {
+@@ -180,7 +194,7 @@ func (p *Pool) Create(account Account) (Account, error) {
+ 			(email, access_token, token_hash, proxy, status, disabled, invalid_at, updated_at)
+ 		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+ 		account.Email, stored, hash,
+-		account.Proxy, account.Status, boolInt(account.Disabled), account.InvalidAt)
++		storedProxy, account.Status, boolInt(account.Disabled), account.InvalidAt)
+ 	if err != nil {
+ 		return Account{}, fmt.Errorf("create account: %w", err)
+ 	}
+@@ -206,7 +220,7 @@ func (p *Pool) Update(id int64, update AccountUpdate) (Account, error) {
+ 	if current.AccessToken == "" {
+ 		return Account{}, &Error{Message: "access_token is required"}
+ 	}
+-	stored, hash, err := p.sealToken(current.AccessToken)
++	stored, hash, err := p.sealExactToken(current.AccessToken)
+ 	if err != nil {
+ 		return Account{}, err
+ 	}
+@@ -227,6 +241,10 @@ func (p *Pool) Update(id int64, update AccountUpdate) (Account, error) {
+ 	if current.Disabled {
+ 		current.Status = "禁用"
+ 	}
++	storedProxy, err := p.sealOptional(current.Proxy)
++	if err != nil {
++		return Account{}, err
++	}
+ 	invalidAt := current.InvalidAt
+ 	if !current.Disabled {
+ 		invalidAt = 0
+@@ -237,7 +255,7 @@ func (p *Pool) Update(id int64, update AccountUpdate) (Account, error) {
+ 			status = ?, disabled = ?, invalid_at = ?, updated_at = CURRENT_TIMESTAMP
+ 		WHERE id = ?`,
+ 		current.Email, stored, hash,
+-		current.Proxy, current.Status, boolInt(current.Disabled), invalidAt, id)
++		storedProxy, current.Status, boolInt(current.Disabled), invalidAt, id)
+ 	if err != nil {
+ 		return Account{}, fmt.Errorf("update account: %w", err)
+ 	}
+@@ -288,6 +306,10 @@ func (p *Pool) Upsert(account Account) error {
+ 	if err != nil {
+ 		return err
+ 	}
++	storedProxy, err := p.sealOptional(account.Proxy)
++	if err != nil {
++		return err
++	}
+ 	p.db.Lock()
+ 	defer p.db.Unlock()
+ 	var existingID int64
+@@ -302,7 +324,7 @@ func (p *Pool) Upsert(account Account) error {
+ 				(email, access_token, token_hash, proxy, status, disabled, invalid_at, updated_at)
+ 			VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+ 			account.Email, stored, hash,
+-			account.Proxy, account.Status, boolInt(account.Disabled), account.InvalidAt)
++			storedProxy, account.Status, boolInt(account.Disabled), account.InvalidAt)
+ 		if err != nil {
+ 			return fmt.Errorf("upsert account: %w", err)
+ 		}
+@@ -315,7 +337,7 @@ func (p *Pool) Upsert(account Account) error {
+ 				email = ?, access_token = ?, token_hash = ?, proxy = ?,
+ 				status = ?, disabled = ?, invalid_at = ?, updated_at = CURRENT_TIMESTAMP
+ 			WHERE id = ?`,
+-			account.Email, stored, hash, account.Proxy,
++			account.Email, stored, hash, storedProxy,
+ 			account.Status, boolInt(account.Disabled), account.InvalidAt, existingID)
+ 		if err != nil {
+ 			return fmt.Errorf("upsert account: %w", err)
+@@ -449,11 +471,11 @@ func (p *Pool) AvailableCount() (int, error) {
+ func (p *Pool) scanAccount(row store.Scanner) (Account, error) {
+ 	var account Account
+ 	var disabled int
+-	var storedToken, tokenHash string
++	var storedToken, tokenHash, storedDevice string
+ 	if err := row.Scan(
+ 		&account.ID, &account.Email, &storedToken, &tokenHash,
+ 		&account.Proxy, &account.Status, &disabled, &account.InvalidAt,
+-		&account.LastUsedAt, &account.CreatedAt, &account.UpdatedAt,
++		&account.LastUsedAt, &account.CreatedAt, &account.UpdatedAt, &storedDevice,
+ 	); err != nil {
+ 		return Account{}, err
+ 	}
+@@ -462,6 +484,18 @@ func (p *Pool) scanAccount(row store.Scanner) (Account, error) {
+ 		return Account{}, fmt.Errorf("decrypt account %d access token: %w", account.ID, err)
+ 	}
+ 	account.AccessToken = plain
++	if account.Proxy != "" {
++		account.Proxy, err = p.box.Open(account.Proxy)
++		if err != nil {
++			return Account{}, errors.New("decrypt account proxy failed")
++		}
++	}
++	if storedDevice != "" {
++		account.DeviceID, err = p.box.OpenExact(storedDevice)
++		if err != nil {
++			return Account{}, errors.New("decrypt account device failed")
++		}
++	}
+ 	account.Disabled = disabled != 0
+ 	return account, nil
+ }
+@@ -508,7 +542,7 @@ func (p *Pool) openToken(stored string) (string, error) {
+ 	if p.box == nil {
+ 		return "", errors.New("token encryption key is not configured")
+ 	}
+-	return p.box.Open(stored)
++	return p.box.OpenExact(stored)
+ }
+ 
+ func (p *Pool) tokenHash(plaintext string) string {
+@@ -539,3 +573,27 @@ func boolInt(value bool) int {
+ 	}
+ 	return 0
+ }
++
++func (p *Pool) sealOptional(value string) (string, error) {
++	if value == "" {
++		return "", nil
++	}
++	if p.box == nil {
++		return "", errors.New("encryption unavailable")
++	}
++	return p.box.SealExact(value)
++}
++
++func (p *Pool) sealExactToken(plaintext string) (stored, hash string, err error) {
++	if plaintext == "" {
++		return "", "", &Error{Message: "access_token is required"}
++	}
++	if p.box == nil {
++		return "", "", errors.New("token encryption key is not configured")
++	}
++	stored, err = p.box.SealExact(plaintext)
++	if err != nil {
++		return "", "", err
++	}
++	return stored, p.box.Hash(plaintext), nil
++}
+diff --git a/internal/api/bridge.go b/internal/api/bridge.go
+new file mode 100644
+index 0000000..c9b4454
+--- /dev/null
++++ b/internal/api/bridge.go
+@@ -0,0 +1,107 @@
++package api
++
++import (
++	"encoding/json"
++	"errors"
++	"io"
++	"net/http"
++
++	"github.com/dyhhhhhh/chatgpt-web-voice/internal/accounts"
++)
++
++type bridgeAccountStore interface {
++	BridgeGet(string) (accounts.BridgeView, error)
++	BridgePut(string, string, string, accounts.BridgePayload) (accounts.BridgeView, error)
++}
++
++// RegisterBridge mounts the strictly Basic-authenticated compatibility surface.
++// The composition root must wrap this mux in the administrator Basic middleware.
++func (s *Server) RegisterBridge(mux *http.ServeMux) {
++	mux.HandleFunc("GET /bridge/v1/capabilities", s.bridgeCapabilities)
++	mux.HandleFunc("GET /bridge/v1/accounts/{remote_id}", s.bridgeGet)
++	mux.HandleFunc("PUT /bridge/v1/accounts/{remote_id}", s.bridgePut)
++}
++func (s *Server) bridgeCapabilities(w http.ResponseWriter, r *http.Request) {
++	if _, ok := s.accounts.(bridgeAccountStore); !ok {
++		writeJSON(w, 503, map[string]string{"error": "bridge storage unavailable"})
++		return
++	}
++	w.Header().Set("Cache-Control", "no-store")
++	writeJSON(w, 200, map[string]any{"protocol": "bridge-v1", "explicit_route": true, "credential_digest": true})
++}
++func (s *Server) bridgeGet(w http.ResponseWriter, r *http.Request) {
++	w.Header().Set("Cache-Control", "no-store")
++	store, ok := s.accounts.(bridgeAccountStore)
++	if !ok {
++		writeJSON(w, 503, map[string]string{"error": "bridge storage unavailable"})
++		return
++	}
++	id := r.PathValue("remote_id")
++	if !accounts.ValidBridgeID(id) {
++		writeJSON(w, 400, map[string]string{"error": "invalid remote id"})
++		return
++	}
++	view, err := store.BridgeGet(id)
++	if err != nil {
++		bridgeError(w, err)
++		return
++	}
++	writeJSON(w, 200, view)
++}
++func (s *Server) bridgePut(w http.ResponseWriter, r *http.Request) {
++	w.Header().Set("Cache-Control", "no-store")
++	store, ok := s.accounts.(bridgeAccountStore)
++	if !ok {
++		writeJSON(w, 503, map[string]string{"error": "bridge storage unavailable"})
++		return
++	}
++	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
++	dec := json.NewDecoder(r.Body)
++	dec.DisallowUnknownFields()
++	var payload accounts.BridgePayload
++	if err := dec.Decode(&payload); err != nil {
++		writeJSON(w, 400, map[string]string{"error": "invalid bridge payload"})
++		return
++	}
++	var extra any
++	if dec.Decode(&extra) != io.EOF {
++		writeJSON(w, 400, map[string]string{"error": "invalid bridge payload"})
++		return
++	}
++	if err := payload.Validate(); err != nil {
++		bridgeError(w, err)
++		return
++	}
++	// Digest the decoded request with Python-compatible canonical strings. The
++	// header is a client idempotency token, not trusted evidence of credential state.
++	digest, err := accounts.BridgeDigest(payload)
++	if err != nil {
++		bridgeError(w, err)
++		return
++	}
++	id := r.PathValue("remote_id")
++	key := r.Header.Get("Idempotency-Key")
++	view, err := store.BridgePut(id, key, digest, payload)
++	if err != nil {
++		bridgeError(w, err)
++		return
++	}
++	writeJSON(w, 200, view)
++}
++func bridgeError(w http.ResponseWriter, err error) {
++	status := 500
++	message := "bridge storage operation failed"
++	var invalid *accounts.Error
++	switch {
++	case errors.Is(err, accounts.ErrNotFound):
++		status = 404
++		message = "bridge account not found"
++	case errors.Is(err, accounts.ErrConflict):
++		status = 409
++		message = "bridge account conflict"
++	case errors.As(err, &invalid):
++		status = 400
++		message = "invalid bridge account request"
++	}
++	writeJSON(w, status, map[string]string{"error": message})
++}
+diff --git a/internal/api/bridge_test.go b/internal/api/bridge_test.go
+new file mode 100644
+index 0000000..268b09f
+--- /dev/null
++++ b/internal/api/bridge_test.go
+@@ -0,0 +1,72 @@
++package api
++
++import (
++	"bytes"
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++
++	"github.com/dyhhhhhh/chatgpt-web-voice/internal/accounts"
++)
++
++func TestBridgeHTTPContract(t *testing.T) {
++	pool, _ := newAPITestServer(t)
++	mux := http.NewServeMux()
++	New(Dependencies{Accounts: pool}).RegisterBridge(mux)
++	response := performJSONRequest(t, mux, "GET", "/bridge/v1/capabilities", nil)
++	if response.Code != 200 || !strings.Contains(response.Body.String(), `"explicit_route":true`) {
++		t.Fatal("capability contract unavailable")
++	}
++	response = performJSONRequest(t, mux, "GET", "/bridge/v1/accounts/missing", nil)
++	if response.Code != 404 {
++		t.Fatal("missing record not 404")
++	}
++	payload := accounts.BridgePayload{Identity: "synthetic@example.test", CredentialType: "chatgpt_web", Credential: accounts.BridgeCredential{AccessToken: "synthetic-token"}, Route: accounts.BridgeRoute{Type: "direct"}}
++	raw, _ := json.Marshal(payload)
++	put := func(body []byte, key string) *httptest.ResponseRecorder {
++		r := httptest.NewRequest("PUT", "/bridge/v1/accounts/bridge-http", bytes.NewReader(body))
++		r.Header.Set("Idempotency-Key", key)
++		w := httptest.NewRecorder()
++		mux.ServeHTTP(w, r)
++		return w
++	}
++	response = put(raw, "key")
++	if response.Code != 200 {
++		t.Fatalf("PUT failed: %d %s", response.Code, response.Body.String())
++	}
++	if strings.Contains(response.Body.String(), "synthetic-token") {
++		t.Fatal("credential exposed")
++	}
++	response = put(raw, "key")
++	if response.Code != 200 {
++		t.Fatal("repeated write failed")
++	}
++	payload.Credential.AccessToken = "changed-token"
++	changed, _ := json.Marshal(payload)
++	response = put(changed, "key")
++	if response.Code != 409 {
++		t.Fatal("changed idempotency request accepted")
++	}
++	read := performJSONRequest(t, mux, "GET", "/bridge/v1/accounts/bridge-http", nil)
++	if read.Code != 200 {
++		t.Fatal("readback failed")
++	}
++	var view accounts.BridgeView
++	if err := json.Unmarshal(read.Body.Bytes(), &view); err != nil || view.Route.Type != "direct" {
++		t.Fatal("readback mismatch")
++	}
++	expected, _ := accounts.BridgeDigest(accounts.BridgeCredential{AccessToken: "synthetic-token"})
++	if view.CredentialDigest != expected {
++		t.Fatal("readback does not match stored credential")
++	}
++	for _, bad := range [][]byte{[]byte("{"), []byte(`{"refresh_token":"forbidden"}`), []byte(`{} {}`), bytes.Repeat([]byte(" "), (1<<20)+1)} {
++		if got := put(bad, "bad"); got.Code != 400 {
++			t.Fatalf("invalid body status=%d", got.Code)
++		}
++	}
++	if got := put(raw, ""); got.Code != 400 {
++		t.Fatal("missing idempotency key accepted")
++	}
++}
+diff --git a/internal/app/app.go b/internal/app/app.go
+index 650a52d..ad2293e 100644
+--- a/internal/app/app.go
++++ b/internal/app/app.go
+@@ -162,7 +162,10 @@ func newHandler(cfg config.Config, authManager *auth.Manager, apiKeyManager *aut
+ 	downstream := http.NewServeMux()
+ 	apiServer.RegisterDownstream(downstream)
+ 
++	bridge := http.NewServeMux()
++	apiServer.RegisterBridge(bridge)
+ 	root := http.NewServeMux()
++	root.Handle("/bridge/", authManager.RequireBasic(bridge))
+ 	// Shared CSS/assets must be public: login.html loads /static/app.css before auth.
+ 	registerPublicStaticAssets(root, cfg.StaticDir)
+ 	root.Handle("GET /login", authManager.LoginPage(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+diff --git a/internal/auth/auth.go b/internal/auth/auth.go
+index e848c32..8d09ed1 100644
+--- a/internal/auth/auth.go
++++ b/internal/auth/auth.go
+@@ -24,10 +24,10 @@ const csrfHeaderName = "X-CSRF-Token"
+ 
+ // Default login brute-force controls. Override via NewWithLimits for tests/config.
+ const (
+-	DefaultLoginMaxFailures   = 8
+-	DefaultLoginWindow        = 15 * time.Minute
+-	DefaultLoginLockout       = 15 * time.Minute
+-	DefaultLoginFailureDelay  = 200 * time.Millisecond
++	DefaultLoginMaxFailures  = 8
++	DefaultLoginWindow       = 15 * time.Minute
++	DefaultLoginLockout      = 15 * time.Minute
++	DefaultLoginFailureDelay = 200 * time.Millisecond
+ )
+ 
+ type userContextKey struct{}
+@@ -38,10 +38,10 @@ type session struct {
+ }
+ 
+ type loginAttempt struct {
+-	failures  int
+-	firstAt   time.Time
++	failures    int
++	firstAt     time.Time
+ 	lockedUntil time.Time
+-	lastAt    time.Time
++	lastAt      time.Time
+ }
+ 
+ // Limits controls login / Basic-Auth brute-force protection.
+@@ -70,12 +70,12 @@ func (l Limits) normalized() Limits {
+ 
+ // Manager validates configured credentials and owns browser login sessions.
+ type Manager struct {
+-	username   string
+-	password   string
+-	ttl        time.Duration
+-	limits     Limits
+-	logger     *slog.Logger
+-	store      *SessionStore
++	username string
++	password string
++	ttl      time.Duration
++	limits   Limits
++	logger   *slog.Logger
++	store    *SessionStore
+ 
+ 	mu       sync.Mutex
+ 	sessions map[string]session
+@@ -151,6 +151,35 @@ func (m *Manager) Require(next http.Handler) http.Handler {
+ 	})
+ }
+ 
++// RequireBasic protects credential-management endpoints without accepting browser
++// cookies. It shares the existing Basic authentication rate limits.
++func (m *Manager) RequireBasic(next http.Handler) http.Handler {
++	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		w.Header().Set("Cache-Control", "no-store")
++		ip := clientIP(r)
++		if retry, locked := m.lockoutRemaining(ip); locked {
++			w.Header().Set("Retry-After", formatRetryAfter(retry))
++			writeAuthError(w, http.StatusTooManyRequests, "too many failed authentication attempts")
++			return
++		}
++		username, password, ok := r.BasicAuth()
++		if !ok || !m.validCredentials(username, password) {
++			if ok {
++				m.recordFailure(ip)
++				if m.limits.FailureDelay > 0 {
++					time.Sleep(m.limits.FailureDelay)
++				}
++			}
++			w.Header().Set("WWW-Authenticate", `Basic realm="voice bridge"`)
++			writeAuthError(w, http.StatusUnauthorized, "basic authentication required")
++			return
++		}
++		m.clearFailures(ip)
++		ctx := context.WithValue(r.Context(), userContextKey{}, m.username)
++		next.ServeHTTP(w, r.WithContext(ctx))
++	})
++}
++
+ // LoginPage redirects an already authenticated browser to the voice page.
+ func (m *Manager) LoginPage(next http.Handler) http.Handler {
+ 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+@@ -461,7 +490,6 @@ func clientIP(r *http.Request) string {
+ 	return "unknown"
+ }
+ 
+-
+ func formatRetryAfter(d time.Duration) string {
+ 	sec := int(d.Round(time.Second) / time.Second)
+ 	if sec < 1 {
+@@ -487,7 +515,6 @@ func logUsername(username string) string {
+ 	return username
+ }
+ 
+-
+ func isUnsafeMethod(method string) bool {
+ 	switch strings.ToUpper(strings.TrimSpace(method)) {
+ 	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+diff --git a/internal/auth/bridge_test.go b/internal/auth/bridge_test.go
+new file mode 100644
+index 0000000..0ecfb8c
+--- /dev/null
++++ b/internal/auth/bridge_test.go
+@@ -0,0 +1,39 @@
++package auth
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"testing"
++	"time"
++)
++
++func TestBridgeBasicAuthentication(t *testing.T) {
++	manager := NewWithLimits("synthetic-user", "synthetic-password", time.Hour, Limits{MaxFailures: 100}, nil)
++	called := false
++	handler := manager.RequireBasic(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true; w.WriteHeader(204) }))
++	for _, password := range []string{"", "wrong", "synthetic-password"} {
++		called = false
++		r := httptest.NewRequest("GET", "/bridge/v1/capabilities", nil)
++		if password != "" {
++			r.SetBasicAuth("synthetic-user", password)
++		}
++		w := httptest.NewRecorder()
++		handler.ServeHTTP(w, r)
++		if password == "synthetic-password" {
++			if w.Code != 204 || !called {
++				t.Fatalf("valid Basic rejected: %d", w.Code)
++			}
++		} else if w.Code != 401 || called {
++			t.Fatalf("invalid Basic accepted: %d", w.Code)
++		}
++	}
++	// A valid browser session never authorizes the bridge credential surface.
++	manager.sessions["synthetic-cookie"] = session{Username: "synthetic-user", ExpiresAt: time.Now().Add(time.Hour)}
++	r := httptest.NewRequest("GET", "/bridge/v1/capabilities", nil)
++	r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "synthetic-cookie"})
++	w := httptest.NewRecorder()
++	handler.ServeHTTP(w, r)
++	if w.Code != 401 {
++		t.Fatalf("cookie accepted: %d", w.Code)
++	}
++}
+diff --git a/internal/httpclient/client.go b/internal/httpclient/client.go
+index d1a199e..68eb635 100644
+--- a/internal/httpclient/client.go
++++ b/internal/httpclient/client.go
+@@ -44,8 +44,9 @@ func FromConfig(cfg config.Config) Options {
+ // New builds an HTTP client for upstream ChatGPT traffic.
+ //
+ // Proxy selection:
+-//  1. non-empty account proxy wins (per-account override)
+-//  2. otherwise use process proxy environment variables
++//  1. "direct" disables proxies, including process environment proxies
++//  2. non-empty account proxy wins (per-account override)
++//  3. otherwise use process proxy environment variables
+ //     (HTTP_PROXY / HTTPS_PROXY and NO_PROXY, including lowercase variants)
+ //
+ // Transport selection (aligned with ChatGPT2API-GO documented defaults):
+@@ -142,7 +143,13 @@ func ResolveCurlBinary(opts Options) (string, error) {
+ 
+ // proxyFunc returns the transport Proxy callback. Account proxy overrides
+ // environment proxies; empty account proxy falls back to ProxyFromEnvironment.
++// ProxyDirect is the explicit per-account policy that bypasses all proxies.
++const ProxyDirect = "direct"
++
+ func proxyFunc(accountProxy string) func(*http.Request) (*url.URL, error) {
++	if strings.TrimSpace(accountProxy) == ProxyDirect {
++		return nil
++	}
+ 	if accountProxy == "" {
+ 		return http.ProxyFromEnvironment
+ 	}
+diff --git a/internal/httpclient/curl.go b/internal/httpclient/curl.go
+index 005432b..823900e 100644
+--- a/internal/httpclient/curl.go
++++ b/internal/httpclient/curl.go
+@@ -55,6 +55,14 @@ func (t *curlRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
+ 	if proxy := resolveCurlProxy(t.accountProxy, req); proxy != "" {
+ 		args = append(args, "--proxy", proxy)
+ 	}
++	if strings.TrimSpace(t.accountProxy) == ProxyDirect {
++		// Block curl environment fallback, including ALL_PROXY. Empty native
++		// account policy intentionally retains curl's legacy inheritance.
++		args = append(args, "--proxy", "", "--noproxy", "*")
++	} else if strings.TrimSpace(t.accountProxy) != "" {
++		// An explicit account proxy takes precedence over process NO_PROXY.
++		args = append(args, "--noproxy", "")
++	}
+ 	// Prefer ChatGPT2API-GO-style header order when present.
+ 	for _, key := range headerKeys(req.Header) {
+ 		for _, value := range req.Header.Values(key) {
+@@ -238,7 +246,9 @@ func findCurlBinaryInDir(dir string, candidates []string) string {
+ }
+ 
+ func resolveCurlProxy(accountProxy string, req *http.Request) string {
+-	if proxy := strings.TrimSpace(accountProxy); proxy != "" {
++	if proxy := strings.TrimSpace(accountProxy); proxy == ProxyDirect {
++		return ""
++	} else if proxy != "" {
+ 		return proxy
+ 	}
+ 	// Mirror Go's ProxyFromEnvironment for the curl process.
+diff --git a/internal/httpclient/direct_test.go b/internal/httpclient/direct_test.go
+new file mode 100644
+index 0000000..4060430
+--- /dev/null
++++ b/internal/httpclient/direct_test.go
+@@ -0,0 +1,121 @@
++package httpclient
++
++import (
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"os/exec"
++	"strings"
++	"testing"
++)
++
++// Use a fresh process because net/http caches proxy environment on first use.
++func TestDirectTransportsIgnoreProxyEnvironment(t *testing.T) {
++	if os.Getenv("VOICE_DIRECT_TEST_CHILD") != "1" {
++		cmd := exec.Command(os.Args[0], "-test.run=^TestDirectTransportsIgnoreProxyEnvironment$")
++		cmd.Env = append(os.Environ(), "VOICE_DIRECT_TEST_CHILD=1", "HTTP_PROXY=http://127.0.0.1:1", "HTTPS_PROXY=http://127.0.0.1:1", "ALL_PROXY=http://127.0.0.1:1", "http_proxy=http://127.0.0.1:1", "https_proxy=http://127.0.0.1:1", "all_proxy=http://127.0.0.1:1", "NO_PROXY=", "no_proxy=")
++		if output, err := cmd.CombinedOutput(); err != nil {
++			t.Fatalf("child: %v\n%s", err, output)
++		}
++		return
++	}
++	if processProxyURL() != "http://127.0.0.1:1" {
++		t.Fatal("test must configure environment proxy")
++	}
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "local-only") }))
++	defer server.Close()
++	for _, transport := range []string{"go", "tls-client", "curl-impersonate"} {
++		t.Run(transport, func(t *testing.T) {
++			opts := Options{Transport: transport}
++			if transport == "curl-impersonate" {
++				binary, err := exec.LookPath("curl")
++				if err != nil {
++					t.Skip("curl unavailable")
++				}
++				opts.CurlImpersonateBin = binary
++			}
++			client := New(opts, ProxyDirect)
++			if tr, ok := client.Transport.(*http.Transport); ok && tr.Proxy != nil {
++				t.Fatal("direct stdlib transport retained a proxy callback")
++			}
++			if tr, ok := client.Transport.(*tlsClientRoundTripper); ok {
++				c, err := tr.httpClient()
++				if err != nil {
++					t.Fatal(err)
++				}
++				if c.GetProxy() != "" {
++					t.Fatal("direct tls-client retained a proxy")
++				}
++			}
++			resp, err := client.Get(server.URL)
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer resp.Body.Close()
++			data, err := io.ReadAll(resp.Body)
++			if err != nil || string(data) != "local-only" {
++				t.Fatalf("response=%q error=%v", data, err)
++			}
++		})
++	}
++	// An empty native account must retain the established environment policy.
++	inherited := New(Options{Transport: "tls-client"}, "").Transport.(*tlsClientRoundTripper)
++	c, err := inherited.httpClient()
++	if err != nil || c.GetProxy() != "http://127.0.0.1:1" {
++		t.Fatalf("legacy proxy inheritance lost: %v", err)
++	}
++	req, _ := http.NewRequest(http.MethodGet, "https://example.invalid", nil)
++	if got := resolveCurlProxy("", req); !strings.Contains(got, "127.0.0.1:1") {
++		t.Fatalf("curl inheritance lost: %q", got)
++	}
++}
++
++func TestCurlAccountProxyOverridesNoProxyEnvironment(t *testing.T) {
++	binary, err := exec.LookPath("curl")
++	if err != nil {
++		t.Skip("curl unavailable")
++	}
++	t.Setenv("NO_PROXY", "*")
++	t.Setenv("no_proxy", "*")
++	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "bypassed-account-proxy") }))
++	defer origin.Close()
++	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "account-proxy") }))
++	defer proxy.Close()
++	client := New(Options{Transport: "curl-impersonate", CurlImpersonateBin: binary}, proxy.URL)
++	resp, err := client.Get(origin.URL)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer resp.Body.Close()
++	body, err := io.ReadAll(resp.Body)
++	if err != nil || string(body) != "account-proxy" {
++		t.Fatalf("body=%q error=%v", body, err)
++	}
++}
++
++func TestCurlEmptyAccountRetainsAllProxyInheritance(t *testing.T) {
++	binary, err := exec.LookPath("curl")
++	if err != nil {
++		t.Skip("curl unavailable")
++	}
++	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "origin") }))
++	defer origin.Close()
++	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "legacy-all-proxy") }))
++	defer proxy.Close()
++	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy"} {
++		t.Setenv(key, "")
++	}
++	t.Setenv("ALL_PROXY", proxy.URL)
++	t.Setenv("all_proxy", proxy.URL)
++	client := New(Options{Transport: "curl-impersonate", CurlImpersonateBin: binary}, "")
++	resp, err := client.Get(origin.URL)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer resp.Body.Close()
++	body, err := io.ReadAll(resp.Body)
++	if err != nil || string(body) != "legacy-all-proxy" {
++		t.Fatalf("body=%q error=%v", body, err)
++	}
++}
+diff --git a/internal/httpclient/tlsclient.go b/internal/httpclient/tlsclient.go
+index 1a08a46..e016189 100644
+--- a/internal/httpclient/tlsclient.go
++++ b/internal/httpclient/tlsclient.go
+@@ -76,7 +76,9 @@ func (t *tlsClientRoundTripper) httpClient() (tls_client.HttpClient, error) {
+ 			tls_client.WithRandomTLSExtensionOrder(),
+ 			tls_client.WithNotFollowRedirects(),
+ 		}
+-		if proxy := strings.TrimSpace(t.accountProxy); proxy != "" {
++		if proxy := strings.TrimSpace(t.accountProxy); proxy == ProxyDirect {
++			// tls-client uses its direct dialer when no proxy option is provided.
++		} else if proxy != "" {
+ 			options = append(options, tls_client.WithProxyUrl(proxy))
+ 		} else if envProxy := processProxyURL(); envProxy != "" {
+ 			// When no per-account proxy is set, honor process proxy env once at client build.
+diff --git a/internal/secretbox/box.go b/internal/secretbox/box.go
+index b25311c..0477643 100644
+--- a/internal/secretbox/box.go
++++ b/internal/secretbox/box.go
+@@ -86,7 +86,11 @@ func (b *Box) Hash(plaintext string) string {
+ 
+ // Seal encrypts a plaintext access token for SQLite storage.
+ func (b *Box) Seal(plaintext string) (string, error) {
+-	plaintext = strings.TrimSpace(plaintext)
++	return b.SealExact(strings.TrimSpace(plaintext))
++}
++
++// SealExact preserves every credential byte for bridge synchronization.
++func (b *Box) SealExact(plaintext string) (string, error) {
+ 	if plaintext == "" {
+ 		return "", errors.New("access token is empty")
+ 	}
+@@ -100,8 +104,10 @@ func (b *Box) Seal(plaintext string) (string, error) {
+ 
+ // Open decrypts a sealed token. Legacy plaintext rows (no enc1. prefix) are
+ // returned as-is so startup migration can re-seal them.
+-func (b *Box) Open(stored string) (string, error) {
+-	stored = strings.TrimSpace(stored)
++func (b *Box) Open(stored string) (string, error) { return b.OpenExact(strings.TrimSpace(stored)) }
++
++// OpenExact preserves plaintext bytes, including Unicode separators.
++func (b *Box) OpenExact(stored string) (string, error) {
+ 	if stored == "" {
+ 		return "", errors.New("stored access token is empty")
+ 	}
+diff --git a/internal/store/schema.go b/internal/store/schema.go
+index 055b268..5aa549f 100644
+--- a/internal/store/schema.go
++++ b/internal/store/schema.go
+@@ -111,6 +111,21 @@ func (db *DB) migrate() error {
+ 	if err := db.ensureConversationUpstreamColumns(); err != nil {
+ 		return err
+ 	}
++	// Created after legacy account-table rebuilds.
++	if _, err := db.conn.Exec(`CREATE TABLE IF NOT EXISTS bridge_accounts (
++		remote_id TEXT PRIMARY KEY,
++        identity TEXT NOT NULL,
++		account_id INTEGER NOT NULL UNIQUE REFERENCES accounts(id) ON DELETE CASCADE,
++		device_id TEXT NOT NULL DEFAULT '',
++		expires_at TEXT NOT NULL DEFAULT 'null'
++	)`); err != nil {
++		return fmt.Errorf("create bridge accounts: %w", err)
++	}
++	if _, err := db.conn.Exec(`CREATE TABLE IF NOT EXISTS bridge_idempotency (
++		key TEXT PRIMARY KEY, remote_id TEXT NOT NULL, payload_digest TEXT NOT NULL
++	)`); err != nil {
++		return fmt.Errorf("create bridge idempotency: %w", err)
++	}
+ 	return nil
+ }
+ 
+diff --git a/internal/voice/device_test.go b/internal/voice/device_test.go
+new file mode 100644
+index 0000000..d083a29
+--- /dev/null
++++ b/internal/voice/device_test.go
+@@ -0,0 +1,149 @@
++package voice
++
++import (
++	"errors"
++	"net/http"
++	"net/http/httptest"
++	"testing"
++
++	"github.com/dyhhhhhh/chatgpt-web-voice/internal/accounts"
++	"github.com/dyhhhhhh/chatgpt-web-voice/internal/config"
++)
++
++type deviceAccountRepository struct {
++	account accounts.Account
++	missing bool
++}
++
++func (p *deviceAccountRepository) Get(id int64) (accounts.Account, error) {
++	if p.missing {
++		return accounts.Account{}, errors.New("missing")
++	}
++	return p.account, nil
++}
++func (p *deviceAccountRepository) Pick(token string, excluded map[string]struct{}) (string, accounts.Account, error) {
++	if p.missing {
++		return "", accounts.Account{}, errors.New("missing")
++	}
++	return p.account.AccessToken, p.account, nil
++}
++func (p *deviceAccountRepository) PickByID(id int64, excluded map[string]struct{}) (string, accounts.Account, error) {
++	return p.Pick("", excluded)
++}
++func (p *deviceAccountRepository) MarkInvalid(token string) error { return nil }
++
++func TestAccountDeviceUsedByEveryVoiceRequest(t *testing.T) {
++	repo := &deviceAccountRepository{account: accounts.Account{ID: 1, AccessToken: "synthetic-token", Proxy: "direct", DeviceID: "device-one"}}
++	expectedDevice, expectedToken := "device-one", "synthetic-token"
++	seen := map[string]int{}
++	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if got := r.Header.Get("Oai-Device-Id"); got != expectedDevice {
++			t.Errorf("%s device=%q want %q", r.URL.Path, got, expectedDevice)
++		}
++		if got := r.Header.Get("Authorization"); got != "Bearer "+expectedToken {
++			t.Errorf("%s credential mismatch", r.URL.Path)
++		}
++		seen[r.URL.Path]++
++		w.Header().Set("Content-Type", "application/json")
++		switch r.URL.Path {
++		case "/wm":
++			w.Header().Set("Content-Type", "application/sdp")
++			_, _ = w.Write([]byte("v=0\r\n"))
++		case "/files":
++			_, _ = w.Write([]byte(`{"file_id":"file-test","upload_url":"https://synthetic.invalid/blob"}`))
++		case "/files/file-test/uploaded":
++			w.WriteHeader(http.StatusNotFound)
++		case "/conversation/conv-test":
++			_, _ = w.Write([]byte(`{"title":"synthetic title"}`))
++		default:
++			_, _ = w.Write([]byte(`{}`))
++		}
++	}))
++	defer upstream.Close()
++	svc := New(config.Config{DeviceID: "global-fallback", UpstreamTransport: "go", SessionTTLSeconds: 3600, MaxAccountAttempts: 1}, repo, nil)
++	svc.realtimeURL = upstream.URL + "/wm"
++	svc.settingsUserURL = upstream.URL + "/settings"
++	svc.filesAPIURL = upstream.URL + "/files"
++	svc.conversationURLPrefix = upstream.URL + "/conversation"
++	result, err := svc.CreateSession(CreateSessionRequest{Owner: "test", OfferSDP: "v=0\r\n"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err = svc.ProbeAccountToken(1); err != nil {
++		t.Fatal(err)
++	}
++	// A live binding must pick up edited credentials and device/proxy policy.
++	repo.account.DeviceID = "device-two"
++	repo.account.AccessToken = "synthetic-new-token"
++	expectedDevice, expectedToken = repo.account.DeviceID, repo.account.AccessToken
++	if _, err = svc.CreateImageUploadCredential("test", result.VoiceSessionID, ImageUploadRequest{FileName: "test.png", FileSize: 1, MimeType: "image/png"}); err != nil {
++		t.Fatal(err)
++	}
++	if _, err = svc.CompleteImageUpload("test", result.VoiceSessionID, "file-test"); err != nil {
++		t.Fatal(err)
++	}
++	if _, err = svc.FetchUpstreamTitle("test", result.VoiceSessionID, "conv-test"); err != nil {
++		t.Fatal(err)
++	}
++	if _, err = svc.CreateSession(CreateSessionRequest{Owner: "test", OfferSDP: "v=0\r\n", VoiceSessionID: result.VoiceSessionID}); err != nil {
++		t.Fatal(err)
++	}
++	for _, path := range []string{"/wm", "/settings", "/files", "/files/file-test/uploaded", "/files/process_upload_stream", "/conversation/conv-test"} {
++		if seen[path] == 0 {
++			t.Errorf("missing request %s", path)
++		}
++	}
++	repo.missing = true
++	if _, err = svc.CreateImageUploadCredential("test", result.VoiceSessionID, ImageUploadRequest{FileName: "test.png", FileSize: 1, MimeType: "image/png"}); err == nil {
++		t.Fatal("deleted account retained stale credentials")
++	}
++	if got := svc.authHeaders("synthetic", "", nil).Get("Oai-Device-Id"); got != "global-fallback" {
++		t.Fatalf("native fallback=%q", got)
++	}
++}
++
++type reassignedTokenRepository struct {
++	deviceAccountRepository
++	wrong accounts.Account
++}
++
++func (p *reassignedTokenRepository) Pick(token string, excluded map[string]struct{}) (string, accounts.Account, error) {
++	if token == p.wrong.AccessToken {
++		return token, p.wrong, nil
++	}
++	return p.deviceAccountRepository.Pick(token, excluded)
++}
++
++func TestSessionResumePrefersStableAccountAfterTokenReassignment(t *testing.T) {
++	repo := &reassignedTokenRepository{
++		deviceAccountRepository: deviceAccountRepository{account: accounts.Account{ID: 1, AccessToken: "rotated-token", DeviceID: "original-device", Proxy: "direct"}},
++		wrong:                   accounts.Account{ID: 2, AccessToken: "old-token", DeviceID: "other-device", Proxy: "http://127.0.0.1:1"},
++	}
++	requests := 0
++	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		requests++
++		if r.Header.Get("Authorization") != "Bearer rotated-token" || r.Header.Get("Oai-Device-Id") != "original-device" {
++			t.Error("session used reassigned token owner identity")
++		}
++		w.Header().Set("Content-Type", "application/sdp")
++		_, _ = w.Write([]byte("v=0\r\n"))
++	}))
++	defer upstream.Close()
++	svc := New(config.Config{UpstreamTransport: "go", SessionTTLSeconds: 3600, MaxAccountAttempts: 1}, repo, nil)
++	svc.realtimeURL = upstream.URL
++	sessionID := svc.bindVoiceSession("test", "", "old-token", accounts.Account{ID: 1, DeviceID: "original-device", Proxy: "direct"}, UpstreamContext{})
++	result, err := svc.CreateSession(CreateSessionRequest{Owner: "test", VoiceSessionID: sessionID, OfferSDP: "v=0\r\n"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if result.AccountID != 1 || requests != 1 {
++		t.Fatal("session changed stable account")
++	}
++	repo.missing = true
++	if _, err := svc.CreateSession(CreateSessionRequest{Owner: "test", VoiceSessionID: sessionID, OfferSDP: "v=0\r\n"}); err == nil {
++		t.Fatal("deleted sticky account fell back to reassigned token")
++	}
++	if requests != 1 {
++		t.Fatal("deleted account sent an upstream request")
++	}
++}
+diff --git a/internal/voice/service.go b/internal/voice/service.go
+index d4c4bd6..e7532e8 100644
+--- a/internal/voice/service.go
++++ b/internal/voice/service.go
+@@ -80,6 +80,7 @@ type sessionBinding struct {
+ 	AccountID              int64
+ 	AccessToken            string
+ 	Proxy                  string
++	DeviceID               string
+ 	UpstreamVoiceSessionID string
+ 	ConversationID         string
+ 	ParentMessageID        string
+@@ -95,6 +96,8 @@ type Service struct {
+ 	records     CallSessionStore
+ 	logger      *slog.Logger
+ 
++	// realtimeURL overrides the voice endpoint in tests.
++	realtimeURL string
+ 	// settingsUserURL overrides the account probe endpoint in tests.
+ 	settingsUserURL string
+ 	// conversationURLPrefix overrides the conversation metadata endpoint in tests.
+@@ -223,6 +226,7 @@ func (s *Service) bindVoiceSession(owner, sessionID, token string, account accou
+ 		AccountID:              account.ID,
+ 		AccessToken:            token,
+ 		Proxy:                  account.Proxy,
++		DeviceID:               account.DeviceID,
+ 		UpstreamVoiceSessionID: merged.UpstreamVoiceSessionID,
+ 		ConversationID:         merged.ConversationID,
+ 		ParentMessageID:        merged.ParentMessageID,
+@@ -367,13 +371,22 @@ func (s *Service) FetchUpstreamTitle(owner, voiceSessionID, conversationID strin
+ 		return nil, &ServiceError{Message: "voice session does not belong to caller", StatusCode: 403}
+ 	}
+ 
++	if binding != nil {
++		var err error
++		binding, err = s.refreshBindingAccount(binding)
++		if err != nil {
++			return nil, err
++		}
++	}
++
+ 	// Rehydrate sticky account from durable metadata when memory was released.
+-	var accessToken, proxy string
++	var accessToken, proxy, deviceID string
+ 	var accountID int64
+ 	var storedConversationID string
+ 	if binding != nil {
+ 		accessToken = binding.AccessToken
+ 		proxy = binding.Proxy
++		deviceID = binding.DeviceID
+ 		accountID = binding.AccountID
+ 		storedConversationID = binding.ConversationID
+ 	} else if s.records != nil {
+@@ -396,6 +409,7 @@ func (s *Service) FetchUpstreamTitle(owner, voiceSessionID, conversationID strin
+ 		}
+ 		accessToken = token
+ 		proxy = account.Proxy
++		deviceID = account.DeviceID
+ 		accountID = account.ID
+ 		storedConversationID = row.UpstreamConversationID
+ 	} else {
+@@ -420,7 +434,7 @@ func (s *Service) FetchUpstreamTitle(owner, voiceSessionID, conversationID strin
+ 		}
+ 	}
+ 
+-	status, contentType, body, err := s.getConversationOnce(accessToken, proxy, upstreamID)
++	status, contentType, body, err := s.getConversationOnce(accessToken, proxy, upstreamID, deviceID)
+ 	if err != nil {
+ 		s.logger.Warn("upstream_title_fetch_failed", "voice_session_id", sessionID, "error", err)
+ 		return nil, &ServiceError{
+@@ -472,7 +486,7 @@ func (s *Service) FetchUpstreamTitle(owner, voiceSessionID, conversationID strin
+ 	return result, nil
+ }
+ 
+-func (s *Service) getConversationOnce(token, proxy, conversationID string) (status int, contentType, text string, err error) {
++func (s *Service) getConversationOnce(token, proxy, conversationID, deviceID string) (status int, contentType, text string, err error) {
+ 	client := httpclient.New(s.httpOptions, proxy)
+ 	client.Timeout = titleFetchTimeout
+ 	prefix := s.conversationURLPrefix
+@@ -484,7 +498,7 @@ func (s *Service) getConversationOnce(token, proxy, conversationID string) (stat
+ 	if err != nil {
+ 		return 0, "", "", err
+ 	}
+-	req.Header = s.authHeaders(token, map[string]string{
++	req.Header = s.authHeaders(token, deviceID, map[string]string{
+ 		"accept": "application/json, text/plain, */*",
+ 	})
+ 	resp, err := client.Do(req)
+@@ -590,6 +604,23 @@ func (s *Service) boundVoiceSession(owner, voiceSessionID string) (binding *sess
+ 	return &cp, false
+ }
+ 
++// refreshBindingAccount reads current credentials and transport policy so edits
++// cannot leave live sessions using an obsolete device ID or proxy route.
++func (s *Service) refreshBindingAccount(binding *sessionBinding) (*sessionBinding, error) {
++	if s.pool == nil {
++		return binding, nil
++	}
++	account, err := s.pool.Get(binding.AccountID)
++	if err != nil {
++		return nil, &ServiceError{Message: "voice session account unavailable", StatusCode: 503}
++	}
++	refreshed := *binding
++	refreshed.AccessToken = account.AccessToken
++	refreshed.Proxy = account.Proxy
++	refreshed.DeviceID = account.DeviceID
++	return &refreshed, nil
++}
++
+ func normalizeSessionOwner(owner string) string {
+ 	owner = strings.TrimSpace(owner)
+ 	if owner == "" {
+@@ -663,7 +694,7 @@ func buildSessionJSON(voice, voiceMode, languageCode string, upstream UpstreamCo
+ 	return string(data)
+ }
+ 
+-func (s *Service) authHeaders(token string, extra map[string]string) http.Header {
++func (s *Service) authHeaders(token, deviceID string, extra map[string]string) http.Header {
+ 	// Header set aligned with ChatGPT2API-GO UpstreamClient.headers (Edge 143 persona).
+ 	h := http.Header{}
+ 	h.Set("accept", "*/*")
+@@ -686,7 +717,7 @@ func (s *Service) authHeaders(token string, extra map[string]string) http.Header
+ 	h.Set("sec-fetch-dest", "empty")
+ 	h.Set("sec-fetch-mode", "cors")
+ 	h.Set("sec-fetch-site", "same-origin")
+-	h.Set("oai-device-id", s.cfg.DeviceID)
++	h.Set("oai-device-id", firstNonEmpty(deviceID, s.cfg.DeviceID))
+ 	h.Set("oai-session-id", s.cfg.SessionID)
+ 	h.Set("oai-language", "zh-CN")
+ 	h.Set("oai-client-version", s.cfg.ClientVersion)
+@@ -698,17 +729,17 @@ func (s *Service) authHeaders(token string, extra map[string]string) http.Header
+ 	return h
+ }
+ 
+-func (s *Service) postWMOnce(token, offerSDP, sessionJSON, proxy string) (status int, contentType, text string, err error) {
++func (s *Service) postWMOnce(token, offerSDP, sessionJSON, proxy, deviceID string) (status int, contentType, text string, err error) {
+ 	client := httpclient.New(s.httpOptions, proxy)
+ 	body, ct := encodeMultipart([][2]string{
+ 		{"sdp", offerSDP},
+ 		{"session", sessionJSON},
+ 	})
+-	req, err := http.NewRequest(http.MethodPost, wmURL, bytes.NewReader(body))
++	req, err := http.NewRequest(http.MethodPost, firstNonEmpty(s.realtimeURL, wmURL), bytes.NewReader(body))
+ 	if err != nil {
+ 		return 0, "", "", err
+ 	}
+-	req.Header = s.authHeaders(token, map[string]string{"content-type": ct})
++	req.Header = s.authHeaders(token, deviceID, map[string]string{"content-type": ct})
+ 
+ 	resp, err := client.Do(req)
+ 	if err != nil {
+@@ -756,10 +787,10 @@ func (s *Service) ProbeAccountToken(accountID int64) (*ProbeResult, error) {
+ 		}
+ 	}
+ 
+-	status, contentType, body, err := s.getSettingsUserOnce(account.AccessToken, account.Proxy)
++	status, contentType, body, err := s.getSettingsUserOnce(account.AccessToken, account.Proxy, account.DeviceID)
+ 	if err != nil {
+ 		result.Detail = probeNetworkDetail(err, account.Proxy)
+-		s.logger.Warn("account_probe_failed", "account_id", account.ID, "proxy", account.Proxy != "", "error", err)
++		s.logger.Warn("account_probe_failed", "account_id", account.ID, "proxy", account.Proxy != "" && account.Proxy != httpclient.ProxyDirect, "error", err)
+ 		return result, nil
+ 	}
+ 	result.StatusCode = status
+@@ -795,7 +826,7 @@ func (s *Service) ProbeAccountToken(accountID int64) (*ProbeResult, error) {
+ 	return result, nil
+ }
+ 
+-func (s *Service) getSettingsUserOnce(token, proxy string) (status int, contentType, text string, err error) {
++func (s *Service) getSettingsUserOnce(token, proxy, deviceID string) (status int, contentType, text string, err error) {
+ 	client := httpclient.New(s.httpOptions, proxy)
+ 	client.Timeout = probeTimeout
+ 	if transport, ok := client.Transport.(*http.Transport); ok {
+@@ -817,7 +848,7 @@ func (s *Service) getSettingsUserOnce(token, proxy string) (status int, contentT
+ 	if err != nil {
+ 		return 0, "", "", err
+ 	}
+-	req.Header = s.authHeaders(token, map[string]string{
++	req.Header = s.authHeaders(token, deviceID, map[string]string{
+ 		"accept": "application/json, text/plain, */*",
+ 	})
+ 	resp, err := client.Do(req)
+@@ -839,6 +870,9 @@ func probeNetworkDetail(err error, accountProxy string) string {
+ 		strings.Contains(lower, "deadline exceeded") ||
+ 		strings.Contains(lower, "i/o timeout")
+ 	if timedOut {
++		if strings.TrimSpace(accountProxy) == httpclient.ProxyDirect {
++			return "upstream timeout on explicit direct connection; check direct network reachability"
++		}
+ 		if strings.TrimSpace(accountProxy) != "" {
+ 			return "upstream timeout via account proxy; check proxy reachability"
+ 		}
+@@ -919,24 +953,13 @@ type CreateSessionRequest struct {
+ 	UpstreamVoiceSessionID  string
+ }
+ 
+-// pickAccountForSession prefers a live binding token, then a sticky account id
+-// from SQLite, then falls back to LRU pool selection.
++// pickAccountForSession preserves stable account identity across token edits.
++// A token retained by a live binding may have been reassigned to another account.
+ func (s *Service) pickAccountForSession(preferredToken string, preferredAccountID int64, excluded map[string]struct{}) (string, accounts.Account, error) {
+-	if token := strings.TrimSpace(preferredToken); token != "" {
+-		token, account, err := s.pool.Pick(token, excluded)
+-		if err == nil {
+-			return token, account, nil
+-		}
+-		// Preferred token failed; try sticky id before giving up when both set.
+-	}
+ 	if preferredAccountID > 0 {
+ 		return s.pool.PickByID(preferredAccountID, excluded)
+ 	}
+-	if token := strings.TrimSpace(preferredToken); token != "" {
+-		// Surface the preferred-token failure rather than silently rotating.
+-		return s.pool.Pick(token, excluded)
+-	}
+-	return s.pool.Pick("", excluded)
++	return s.pool.Pick(strings.TrimSpace(preferredToken), excluded)
+ }
+ 
+ // CreateSession POSTs offer SDP to /realtime/wm and returns answer SDP.
+@@ -1064,15 +1087,14 @@ func (s *Service) CreateSession(req CreateSessionRequest) (*SessionResult, error
+ 		excluded[token] = struct{}{}
+ 
+ 		explicitProxy := account.Proxy
+-		if explicitProxy == "" && bound != nil {
+-			explicitProxy = bound.Proxy
+-		}
+ 		proxySource := "process_environment_or_direct"
+-		if strings.TrimSpace(explicitProxy) != "" {
++		if strings.TrimSpace(explicitProxy) == httpclient.ProxyDirect {
++			proxySource = "account_direct"
++		} else if strings.TrimSpace(explicitProxy) != "" {
+ 			proxySource = "account"
+ 		}
+ 
+-		status, contentType, text, err := s.postWMOnce(token, offerSDP, sessionJSON, explicitProxy)
++		status, contentType, text, err := s.postWMOnce(token, offerSDP, sessionJSON, explicitProxy, account.DeviceID)
+ 		if err != nil {
+ 			s.logger.Error("upstream_realtime_request_failed", "account_id", account.ID, "attempt", attempt, "error", err)
+ 			return nil, &ServiceError{
+diff --git a/internal/voice/upload.go b/internal/voice/upload.go
+index 7588064..d2655d8 100644
+--- a/internal/voice/upload.go
++++ b/internal/voice/upload.go
+@@ -83,11 +83,15 @@ func (s *Service) CreateImageUploadCredential(owner, voiceSessionID string, req
+ 		// a bound session, and we do not re-pick accounts for orphan uploads.
+ 		return nil, &ServiceError{Message: "voice session not found", StatusCode: 404}
+ 	}
++	binding, err = s.refreshBindingAccount(binding)
++	if err != nil {
++		return nil, err
++	}
+ 	if strings.TrimSpace(binding.AccessToken) == "" {
+ 		return nil, &ServiceError{Message: "voice session has no sticky account token", StatusCode: 404}
+ 	}
+ 
+-	status, body, err := s.postFilesCreateOnce(binding.AccessToken, binding.Proxy, meta)
++	status, body, err := s.postFilesCreateOnce(binding.AccessToken, binding.Proxy, binding.DeviceID, meta)
+ 	if err != nil {
+ 		s.logger.Warn("image_upload_create_failed", "voice_session_id", sessionID, "error", err)
+ 		return nil, &ServiceError{
+@@ -177,11 +181,15 @@ func (s *Service) CompleteImageUpload(owner, voiceSessionID, fileID string) (*Im
+ 	if binding == nil {
+ 		return nil, &ServiceError{Message: "voice session not found", StatusCode: 404}
+ 	}
++	binding, err := s.refreshBindingAccount(binding)
++	if err != nil {
++		return nil, err
++	}
+ 	if strings.TrimSpace(binding.AccessToken) == "" {
+ 		return nil, &ServiceError{Message: "voice session has no sticky account token", StatusCode: 404}
+ 	}
+ 
+-	status, body, err := s.postFileUploadedOnce(binding.AccessToken, binding.Proxy, fileID)
++	status, body, err := s.postFileUploadedOnce(binding.AccessToken, binding.Proxy, binding.DeviceID, fileID)
+ 	if err != nil {
+ 		s.logger.Warn("image_upload_complete_failed", "voice_session_id", sessionID, "file_id", fileID, "error", err)
+ 		return nil, &ServiceError{
+@@ -200,7 +208,7 @@ func (s *Service) CompleteImageUpload(owner, voiceSessionID, fileID string) (*Im
+ 		// done
+ 	default:
+ 		// Fallback used by some ChatGPT deployments when /uploaded is unavailable.
+-		processStatus, processBody, processErr := s.postProcessUploadStreamOnce(binding.AccessToken, binding.Proxy, fileID)
++		processStatus, processBody, processErr := s.postProcessUploadStreamOnce(binding.AccessToken, binding.Proxy, binding.DeviceID, fileID)
+ 		if processErr != nil {
+ 			return nil, &ServiceError{
+ 				Message:    "upstream file complete failed",
+@@ -313,7 +321,7 @@ func validUpstreamFileID(id string) bool {
+ 	return true
+ }
+ 
+-func (s *Service) postFilesCreateOnce(token, proxy string, meta ImageUploadRequest) (status int, text string, err error) {
++func (s *Service) postFilesCreateOnce(token, proxy, deviceID string, meta ImageUploadRequest) (status int, text string, err error) {
+ 	client := httpclient.New(s.httpOptions, proxy)
+ 	client.Timeout = filesUploadTimeout
+ 	payload := map[string]any{
+@@ -339,7 +347,7 @@ func (s *Service) postFilesCreateOnce(token, proxy string, meta ImageUploadReque
+ 	if err != nil {
+ 		return 0, "", err
+ 	}
+-	req.Header = s.authHeaders(token, map[string]string{
++	req.Header = s.authHeaders(token, deviceID, map[string]string{
+ 		"content-type": "application/json",
+ 		"accept":       "application/json",
+ 	})
+@@ -352,7 +360,7 @@ func (s *Service) postFilesCreateOnce(token, proxy string, meta ImageUploadReque
+ 	return resp.StatusCode, string(body), nil
+ }
+ 
+-func (s *Service) postFileUploadedOnce(token, proxy, fileID string) (status int, text string, err error) {
++func (s *Service) postFileUploadedOnce(token, proxy, deviceID, fileID string) (status int, text string, err error) {
+ 	client := httpclient.New(s.httpOptions, proxy)
+ 	client.Timeout = filesUploadTimeout
+ 	endpoint := strings.TrimRight(s.filesURL(), "/") + "/" + fileID + "/uploaded"
+@@ -360,7 +368,7 @@ func (s *Service) postFileUploadedOnce(token, proxy, fileID string) (status int,
+ 	if err != nil {
+ 		return 0, "", err
+ 	}
+-	req.Header = s.authHeaders(token, map[string]string{
++	req.Header = s.authHeaders(token, deviceID, map[string]string{
+ 		"content-type": "application/json",
+ 		"accept":       "application/json",
+ 	})
+@@ -373,7 +381,7 @@ func (s *Service) postFileUploadedOnce(token, proxy, fileID string) (status int,
+ 	return resp.StatusCode, string(body), nil
+ }
+ 
+-func (s *Service) postProcessUploadStreamOnce(token, proxy, fileID string) (status int, text string, err error) {
++func (s *Service) postProcessUploadStreamOnce(token, proxy, deviceID, fileID string) (status int, text string, err error) {
+ 	client := httpclient.New(s.httpOptions, proxy)
+ 	client.Timeout = filesUploadTimeout
+ 	payload, _ := json.Marshal(map[string]any{
+@@ -387,7 +395,7 @@ func (s *Service) postProcessUploadStreamOnce(token, proxy, fileID string) (stat
+ 	if err != nil {
+ 		return 0, "", err
+ 	}
+-	req.Header = s.authHeaders(token, map[string]string{
++	req.Header = s.authHeaders(token, deviceID, map[string]string{
+ 		"content-type": "application/json",
+ 		"accept":       "application/json",
+ 	})
