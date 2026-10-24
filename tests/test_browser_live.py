@@ -130,7 +130,7 @@ def test_explicit_direct_route_reaches_real_fixture_despite_proxy_environment(
         "delayed_spa", "delayed_navigation", "delayed_pending_email",
         "direct_password", "otp_only", "existing_session", "readonly_password",
         "disabled_password", "disabled_code", "email_alternate", "authenticator_only",
-        "sms_code", "ambiguous_code",
+        "sms_code", "ambiguous_code", "authenticator_heading",
     ],
 )
 def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
@@ -201,11 +201,12 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
         pages["/code"] = pages["/code"].replace(
             '</form>', '<a href="#">Try authenticator instead</a></form>'
         )
-    if scenario in ("authenticator_only", "sms_code", "ambiguous_code"):
+    if scenario in ("authenticator_only", "sms_code", "ambiguous_code", "authenticator_heading"):
         pages["/auth/login"] = pages["/code"].replace(
             "Check your email",
             {
                 "authenticator_only": "Enter the code from your authentication app",
+                "authenticator_heading": "Check your authenticator app",
                 "sms_code": "Enter the code sent via SMS to your phone",
                 "ambiguous_code": "Enter verification code",
             }[scenario],
@@ -291,7 +292,7 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
 
         monkeypatch.setattr(module, "_get_session", fake_session)
         def synthetic_totp(seed):
-            assert scenario == "authenticator_only", "Only an explicit authenticator challenge may use the saved seed"
+            assert scenario in ("authenticator_only", "authenticator_heading"), "Only an explicit authenticator challenge may use the saved seed"
             return "123456"
 
         monkeypatch.setattr(module, "generate_code", synthetic_totp)
@@ -301,7 +302,7 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
             {"kind": "chatgpt-web-voice"},
             Control(),
         ) == credential
-    no_password = ("otp_only", "existing_session", "authenticator_only", "sms_code", "ambiguous_code")
+    no_password = ("otp_only", "existing_session", "authenticator_only", "sms_code", "ambiguous_code", "authenticator_heading")
     if scenario not in ("rejected_password", "changed_challenge", *no_password):
         assert any("password=synthetic-password" in url for url in inputs)
     if scenario in ("readonly_password", "disabled_password"):
@@ -315,9 +316,9 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
             ("email_code_required", "email_code"),
             ("password_required", "password"),
         ]
-    elif scenario in ("existing_session", "authenticator_only"):
+    elif scenario in ("existing_session", "authenticator_only", "authenticator_heading"):
         assert not waits
-        assert phases.count("totp") == (1 if scenario == "authenticator_only" else 0)
+        assert phases.count("totp") == (1 if scenario in ("authenticator_only", "authenticator_heading") else 0)
     elif scenario in ("sms_code", "ambiguous_code"):
         assert [w[:2] for w in waits] == [("verification_code_required", "verification_code")]
     else:
