@@ -154,3 +154,22 @@ The original compose files and `/etc/cylo/voice.env` were left unchanged. The ex
 Immediately before replacement, the old gateway was stopped and SQLite's backup API created a consistent backup of `/var/lib/cylo/voice/voice.db` under `/var/backups/llm-auth-bridge/voice-pre-bridge-20261024T142834Z/`. The directory is mode 0700 and backup/rollback files are mode 0600, outside Git. The matching original environment and encryption key remain in place. A local `rollback.sh` in that directory records the complete stop, preserve-current-database, restore-backup, and restore-original-image procedure. **Rollback requires the matching pre-upgrade database and old image together:** startup seals legacy proxy fields, so switching only the binary back is unsafe. Preserve the post-upgrade database and sidecars before restoration; never overwrite them while the gateway is running.
 
 The fork's Go tests passed, and the disposable HTTP acceptance against a separate fresh synthetic database at `127.0.0.1:18991` passed twice before deployment. The live replacement passed `/login` HTTP 200, unauthenticated capabilities/account GET/account PUT HTTP 401, and container health checks. Bridge app and worker health checks remained healthy. No accounts were written to the live gateway, no provider requests or real-account logins were performed, and no production database contents were inspected. The main operator then verified authenticated capabilities with the existing native administrator credentials: HTTP 200, `protocol=bridge-v1`, `explicit_route=true`, and `credential_digest=true`. The encrypted local voice target (ID 2) uses `http://cylo-voice-gateway:8090`, `allow_http=true`, and compatibility `bridge-v1`; the bridge target connection test returned HTTP 200. Worker-side DNS/network access to that same internal URL returned unauthenticated HTTP 401. No account writes, token probes, provider logins, or voice sessions were performed; real-account/provider acceptance remains **unverified**.
+
+## Source-only worker refresh (2026-10-24)
+
+The login challenge and takeover fixes at source revision `5e7417c0fff7f0018d7bcc863433bbf4597a78bf` passed the combined synthetic suite (152 passed, one opt-in voice harness skipped), 30 frontend tests, type checking, and production build. `pyproject.toml`, `uv.lock`, the standard Dockerfile, and Compose runtime configuration are unchanged from `3e4b0e8`. The standard app image built successfully; the redundant worker dependency build was cancelled during a slow Playwright download before any running service was replaced.
+
+`deploy/worker-source-update.Dockerfile` reproduces the worker source refresh using the existing verified runtime image ID `sha256:b289e357a94d091da6da2ec69c0f3e92019a85978d2bf06f0dff679e80d94380`. Docker resolves raw image IDs in `FROM` as repository references, so the recipe uses a local alias whose immutable ID must be checked immediately before building. Do not use this fallback when dependency or runtime configuration files have changed. It inherits the existing non-root user, entrypoint, browser dependencies, sandbox settings, and worker command, and only replaces reviewed application source and rebuilt frontend assets.
+
+```sh
+BASE_ID=sha256:b289e357a94d091da6da2ec69c0f3e92019a85978d2bf06f0dff679e80d94380
+BASE_ALIAS=llm-auth-bridge/worker-base:sha256-b289e357a94d091da6da2ec69c0f3e92019a85978d2bf06f0dff679e80d94380
+docker image tag "$BASE_ID" "$BASE_ALIAS"
+test "$(docker image inspect "$BASE_ALIAS" --format '{{.Id}}')" = "$BASE_ID"
+docker build --pull=false -f deploy/worker-source-update.Dockerfile \
+  --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
+  -t llm-auth-bridge-worker:latest .
+docker compose up -d --no-build --no-deps --wait app worker
+```
+
+Use the existing `.env` with `COMPOSE_FILE=docker-compose.yml:deploy/voice-network.compose.yml`; retain the data volume and both default/cylo networks. Do not recreate the separately managed voice gateway. Replacing the worker closes its live browser and can interrupt an active authorization; start a new authorization when required. Encrypted persisted sessions remain in the existing volume. Verify deployed source hashes, installed dependency versions, served asset bytes, and service health after replacement. These synthetic checks do not verify real-account login or explain a provider's password rejection.
