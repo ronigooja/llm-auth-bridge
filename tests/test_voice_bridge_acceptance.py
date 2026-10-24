@@ -7,6 +7,7 @@ by this client. Run the target with outbound provider traffic blocked as well.
 
 import copy
 import os
+import uuid
 
 import httpx
 import pytest
@@ -61,12 +62,13 @@ def test_disposable_voice_bridge_real_http_contract():
             "compatibility": "bridge-v1",
         },
     }
-    account = {"username": "bridge-acceptance@example.test", "route_type": "direct"}
+    run_id = uuid.uuid4().hex
+    account = {"username": f"bridge-acceptance-{run_id}@example.test", "route_type": "direct"}
     result = {
         "credential_type": "chatgpt_web",
         "identity": account["username"],
         "expires_at": 1800000000,
-        "credential": {"access_token": "synthetic-acceptance-token"},
+        "credential": {"access_token": f"synthetic-acceptance-token-{run_id}"},
     }
     transport = RecordingTransport()
 
@@ -80,7 +82,7 @@ def test_disposable_voice_bridge_real_http_contract():
 
     try:
         base = url.rstrip("/")
-        absent_path = "/bridge/v1/accounts/bridge-" + "0" * 32
+        absent_path = "/bridge/v1/accounts/bridge-" + uuid.uuid4().hex
         with httpx.Client(transport=transport, trust_env=False, follow_redirects=False) as client:
             for auth in (None, ("synthetic-user", "synthetic-wrong-password")):
                 for method, path in (
@@ -124,9 +126,9 @@ def test_disposable_voice_bridge_real_http_contract():
             trust_env=False,
         ) as client:
             assert client.put(path, json=payload, headers={"Idempotency-Key": key}).is_success
-            different = {**payload, "credential": {"access_token": "synthetic-other-token"}}
+            different = {**payload, "credential": {"access_token": f"synthetic-other-token-{run_id}"}}
             assert client.put(path, json=different, headers={"Idempotency-Key": key}).status_code == 409
-            different_identity = {**payload, "identity": "other-synthetic@example.test"}
+            different_identity = {**payload, "identity": f"other-synthetic-{run_id}@example.test"}
             assert client.put(
                 path, json=different_identity,
                 headers={"Idempotency-Key": first["remote_id"] + "-" + _digest(different_identity)},
@@ -141,7 +143,7 @@ def test_disposable_voice_bridge_real_http_contract():
         # A single synthetic string tests Python-compatible UTF-8 JSON hashing,
         # including Go's default HTML and Unicode separator escaping pitfalls.
         updated = copy.deepcopy(result)
-        updated["credential"]["access_token"] = "synthetic-<&>-测试-\u2028\u2029"
+        updated["credential"]["access_token"] = f"synthetic-{run_id}-<&>-测试-\u2028\u2029"
         updated["credential"]["device_id"] = "synthetic-device-id"
         proxy = {
             **account,
@@ -156,6 +158,18 @@ def test_disposable_voice_bridge_real_http_contract():
         assert sync(updated, proxy, first["remote_id"]) == first
         assert writes() == before + 1
 
+        # A replay of the original key acknowledges the current persisted row;
+        # it must never restore the historical credential or route.
+        with httpx.Client(
+            transport=transport,
+            auth=("synthetic-user", "synthetic-password"),
+            trust_env=False,
+        ) as client:
+            assert client.put(path, json=payload, headers={"Idempotency-Key": key}).is_success
+        before = writes()
+        assert sync(updated, proxy, first["remote_id"]) == first
+        assert writes() == before
+
         # A historical write may have committed before a remote token changed.
         historical = {**result, "_reconcile_only": True}
         before = writes()
@@ -164,14 +178,16 @@ def test_disposable_voice_bridge_real_http_contract():
         assert exc.value.write_possible is True
         assert writes() == before
 
-        other_account = {**account, "username": "other-synthetic@example.test"}
+        other_account = {**account, "username": f"other-synthetic-{run_id}@example.test"}
         other = {**result, "identity": other_account["username"]}
         with pytest.raises(IntegrationError, match="identity differs"):
             sync(other, other_account, first["remote_id"])
         assert writes() == before
 
         # A fresh authorization can replace this identity's credential and route.
-        # Restore the initial direct fixture so the test can run repeatedly.
-        assert sync(result, account, first["remote_id"]) == first
+        # Use a new payload/key: replaying the first key must preserve newer state.
+        fresh = copy.deepcopy(result)
+        fresh["credential"]["access_token"] = f"synthetic-fresh-token-{run_id}"
+        assert sync(fresh, account, first["remote_id"]) == first
     finally:
         transport.inner.close()
