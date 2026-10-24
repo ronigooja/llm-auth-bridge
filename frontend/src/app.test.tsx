@@ -131,13 +131,13 @@ describe("management interactions", () => {
     );
     expect(screen.queryByLabelText("管理员密码")).toBeNull();
   });
-  it("keeps waiting-task code actions in one view and uses idempotent submissions", async () => {
+  it.each(["email_code_required", "authenticator_code_required", "verification_code_required"])("keeps %s code actions in one view and uses idempotent submissions", async (phase) => {
     const task = {
       id: 7,
       account_id: 2,
       target_id: 3,
       state: "waiting_human",
-      phase: "email_code_required",
+      phase,
     };
     const calls: { path: string; init?: RequestInit }[] = [];
     class SyntheticEvents {
@@ -159,6 +159,11 @@ describe("management interactions", () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /^任务$/ }));
     await user.click(await screen.findByRole("button", { name: /任务 #7/ }));
+    if (phase === "verification_code_required") {
+      expect(screen.getByText("等待验证码")).toBeTruthy();
+      expect(screen.getByText(/请按当前页面提示获取短信或其他验证码并手动输入/)).toBeTruthy();
+      expect(screen.queryByText(/重新识别页面/)).toBeNull();
+    }
     await user.type(await screen.findByLabelText("验证码"), "123456");
     await user.click(screen.getByRole("button", { name: "提交验证码" }));
     await waitFor(() =>

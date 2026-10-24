@@ -105,7 +105,8 @@ def test_cancel_releases_browser_resources(settings, resources):
     assert q.create(a, t)["state"] == "queued"
 
 
-def test_human_code_encrypted_idempotent_and_resume(settings, resources):
+@pytest.mark.parametrize("phase", ["email_code_required", "authenticator_code_required", "verification_code_required"])
+def test_human_code_encrypted_idempotent_and_resume(settings, resources, phase):
     a, t = resources
     q = queue(settings)
     task = q.create(a, t)
@@ -114,7 +115,7 @@ def test_human_code_encrypted_idempotent_and_resume(settings, resources):
     control = Control(worker, claimed)
     seen = []
     thread = threading.Thread(
-        target=lambda: seen.append(control.wait_human("Enter code", phase="email_code_required"))
+        target=lambda: seen.append(control.wait_human("Enter code", phase=phase))
     )
     thread.start()
     for _ in range(100):
@@ -380,7 +381,7 @@ def test_explicit_discard_keeps_audit_and_allows_new_authorization(
     assert q.create(a, t)["state"] == "queued"
 
 
-@pytest.mark.parametrize("phase", ["waiting_human", "password_required", "email_code_required", "authenticator_code_required"])
+@pytest.mark.parametrize("phase", ["waiting_human", "password_required", "email_code_required", "authenticator_code_required", "verification_code_required"])
 def test_code_action_requires_explicit_code_challenge(settings, resources, phase):
     a, t = resources
     q = queue(settings)
