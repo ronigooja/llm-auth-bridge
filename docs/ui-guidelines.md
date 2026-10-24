@@ -50,3 +50,11 @@ New accounts and existing accounts whose route is still `unset` default to proxy
 Form inputs and selects share one base style: 43 px minimum height, inherited 13 px label font, 1 px border, 6 px radius, and 11 px vertical padding. Selects add only right-side space and a chevron. Inputs, selects, and textareas share a keyboard-focus outline; network routing has no separate size override.
 
 The account form displays entered account passwords, authenticator keys, and proxy URLs as visible text at the administrator's request. Existing encrypted secret values are not returned or prefilled; leaving an edit field empty retains the saved value.
+
+## Browser takeover window
+
+- The **Take over browser** action opens a dedicated, resizable window from the user click. Desktop windows use up to 1600 × 1000 available screen pixels; smaller screens use the available screen, and mobile browsers may open a full-page tab. The viewer no longer occupies a small embedded task panel.
+- Reserve the window before awaiting the authenticated takeover request, and navigate only after the worker reports a paused, available browser session. Show preparation text while waiting.
+- Keep a manual **Open takeover window** link when popups are blocked or closed. Reuse and focus the existing window on repeated clicks. Closing the viewer does not continue or cancel the task; users return to the task view and choose **Continue task**.
+- Use the existing same-origin, cookie-authenticated noVNC tunnel without credentials in the URL. Remove the viewer opener. Close managed windows when automation resumes, takeover is revoked, the task terminates, or its detail view unmounts; a browser-opened fallback tab remains under user control. Server authentication and takeover revocation still apply.
+- Popup behavior is covered by synthetic browser-window mocks; real-account takeover remains unverified.
