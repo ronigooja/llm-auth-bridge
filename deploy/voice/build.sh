@@ -22,7 +22,7 @@ git -C "$output_dir/source" apply --check "$asset_dir/bridge-v1.patch"
 git -C "$output_dir/source" apply "$asset_dir/bridge-v1.patch"
 (
   cd "$output_dir/source"
-  go test ./...
+  env -u GOOS -u GOARCH go test ./...
   CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -ldflags='-s -w' -o "$output_dir/server" ./cmd/server
 )
 cp -- "$asset_dir/Dockerfile" "$output_dir/Dockerfile"
