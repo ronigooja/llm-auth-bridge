@@ -11,6 +11,7 @@ import { api, setCsrf, ApiError } from "./api";
 import "./style.css";
 import { parseProxyUrl } from "./proxy";
 import { requestId } from "./id";
+import { TakeoverPanel, useTakeoverWindow } from "./takeover";
 
 type Account = {
   id: number;
@@ -1147,7 +1148,11 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [code, setCode] = useState("");
   const [submission, setSubmission] = useState(requestId);
-  const [takeover, setTakeover] = useState<string | null>(null);
+  const takeoverReady = task?.state === "waiting_human" && !!task.takeover_available;
+  const takeover = useTakeoverWindow(
+    takeoverReady,
+    !!task && terminalStates.has(task.state),
+  );
   const m = useMutation();
   async function load() {
     try {
@@ -1248,30 +1253,40 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
     return () => events.close();
   }, [id]);
   async function action(name: string, body?: unknown) {
+    if (name === "takeover") takeover.open();
     await m.run(async () => {
-      const result = await api<Record<string, unknown>>(
-        `/tasks/${id}/${name}`,
-        "POST",
-        body,
-      );
-      if (name === "takeover") {
-        const url = result.url || result.takeover_url;
-        if (typeof url === "string") {
-          const parsed = new URL(url, window.location.origin);
-          if (parsed.origin !== window.location.origin)
-            throw new Error("接管地址必须与当前站点同源");
-          setTakeover(parsed.href);
-        } else
-          setTakeover(
-            `/novnc/vnc.html?autoconnect=true&resize=scale&path=api/v1/tasks/${id}/takeover`,
-          );
+      try {
+        const result = await api<Record<string, unknown>>(
+          `/tasks/${id}/${name}`,
+          "POST",
+          body,
+        );
+        if (name === "takeover") {
+          const url = result.url || result.takeover_url;
+          if (typeof url === "string") {
+            const parsed = new URL(url, window.location.origin);
+            if (
+              parsed.origin !== window.location.origin ||
+              parsed.username ||
+              parsed.password
+            )
+              throw new Error("接管地址必须与当前站点同源");
+            takeover.setUrl(parsed.href);
+          } else
+            takeover.setUrl(
+              `/novnc/vnc.html?autoconnect=true&resize=scale&path=api/v1/tasks/${id}/takeover`,
+            );
+        }
+        if (name === "code") {
+          setCode("");
+          setSubmission(requestId());
+        }
+        await load();
+        updated();
+      } catch (error) {
+        if (name === "takeover") takeover.close();
+        throw error;
       }
-      if (name === "code") {
-        setCode("");
-        setSubmission(requestId());
-      }
-      await load();
-      updated();
     });
   }
   const active =
@@ -1333,7 +1348,7 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
           )}
           {task.state === "running" && task.takeover_available && (
             <button
-              disabled={m.busy || !!takeover}
+              disabled={m.busy}
               onClick={() => void action("takeover")}
             >
               接管浏览器
@@ -1381,15 +1396,8 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
               取消任务
             </button>
           )}
-          {takeover &&
-            task.state === "waiting_human" &&
-            task.takeover_available && (
-              <Takeover url={takeover} close={() => setTakeover(null)} />
-            )}
-          {takeover && task.state === "running" && (
-            <p role="status" className="muted">
-              正在准备浏览器接管…
-            </p>
+          {takeover.url && (
+            <TakeoverPanel viewer={takeover} ready={takeoverReady} />
           )}
           <ErrorBox error={m.error} />
           <section className="event-history" aria-label="执行记录">
@@ -1418,24 +1426,6 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
         </>
       )}
     </section>
-  );
-}
-function Takeover({ url, close }: { url: string; close: () => void }) {
-  return (
-    <div className="takeover">
-      <h3>浏览器接管</h3>
-      <p className="muted">完成浏览器操作后，返回此处点击“继续任务”。</p>
-      <iframe title="接管浏览器" src={url} className="takeover-frame" />
-      <a
-        className="button"
-        href={url}
-        target="_blank"
-        rel="noopener noreferrer"
-      >
-        打开接管窗口
-      </a>
-      <button onClick={close}>关闭接管面板</button>
-    </div>
   );
 }
 function Settings() {

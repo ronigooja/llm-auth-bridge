@@ -522,13 +522,6 @@ dd {
   }
 }
 
-.takeover-frame {
-  width: 100%;
-  height: 420px;
-  border: 1px solid #dfe4dc;
-  border-radius: 6px;
-}
-
 .event-history {
   margin-top: 28px;
   border-top: 1px solid #e0e5dd;
