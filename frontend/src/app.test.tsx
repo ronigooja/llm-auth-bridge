@@ -20,6 +20,38 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("management interactions", () => {
+  it("starts account login over LAN HTTP without crypto.randomUUID", async () => {
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
+    vi.stubGlobal("EventSource", class { addEventListener() {} close() {} });
+    const calls: { path: string; init?: RequestInit }[] = [];
+    const task = { id: 7, account_id: 1, target_id: 2, state: "waiting_human" };
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const path = String(input);
+      calls.push({ path, init });
+      if (path.endsWith("/auth/session")) return response({ csrf_token: "synthetic" });
+      if (path.endsWith("/accounts/1/tasks")) return response(task);
+      if (path.endsWith("/accounts")) return response({ accounts: [{ id: 1, username: "synthetic@example.test", status: "unverified", route_type: "direct", target_ids: [2] }] });
+      if (path.endsWith("/targets")) return response({ targets: [{ id: 2, name: "Synthetic", kind: "cliproxyapi" }] });
+      if (path.endsWith("/tasks")) return response({ tasks: [task] });
+      if (path.endsWith("/events")) return response({ events: [] });
+      return response(task);
+    });
+    render(<App />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "开始登录" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "开始登录" }));
+    expect(await screen.findByRole("heading", { name: "任务 #7" })).toBeTruthy();
+    await user.type(await screen.findByLabelText("验证码"), "123456");
+    await user.click(screen.getByRole("button", { name: "提交验证码" }));
+    await waitFor(() => expect(calls.some((call) => call.path.endsWith("/tasks/7/code"))).toBe(true));
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    const start = calls.find((call) => call.path.endsWith("/accounts/1/tasks"))!;
+    const code = calls.find((call) => call.path.endsWith("/tasks/7/code"))!;
+    expect(JSON.parse(String(start.init?.body)).idempotency_key).toMatch(uuid);
+    expect(JSON.parse(String(code.init?.body)).submission_id).toMatch(uuid);
+    expect(JSON.parse(String(start.init?.body)).idempotency_key).not.toBe(JSON.parse(String(code.init?.body)).submission_id);
+    expect(screen.getByRole("heading", { name: "任务 #7" })).toBeTruthy();
+  });
   it("logs in using a cookie session and sends CSRF on account creation", async () => {
     const calls: { path: string; init?: RequestInit }[] = [];
     vi.mocked(fetch).mockImplementation((input, init) => {

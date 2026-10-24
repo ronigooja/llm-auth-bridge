@@ -20,6 +20,10 @@ uv run pytest
 
 Use `LLM_AUTH_DB` and `LLM_AUTH_MASTER_KEY_FILE` for storage locations. `LLM_AUTH_SECURE_COOKIE=false` permits local HTTP development; the production default is true. Never commit account files, secrets, databases, browser state, or sensitive screenshots.
 
+Account login and verification-code request IDs use `crypto.getRandomValues`,
+including on trusted LAN HTTP origins where `crypto.randomUUID` is unavailable.
+This compatibility does not change the HTTPS recommendation or cookie settings.
+
 ## Capability and acceptance
 
 | Capability | Implementation | Acceptance |

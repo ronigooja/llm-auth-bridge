@@ -10,6 +10,7 @@ import { createRoot } from "react-dom/client";
 import { api, setCsrf, ApiError } from "./api";
 import "./style.css";
 import { parseProxyUrl } from "./proxy";
+import { requestId } from "./id";
 
 type Account = {
   id: number;
@@ -1083,7 +1084,7 @@ function StartTask({
 }) {
   const available = targets.filter((t) => account.target_ids.includes(t.id));
   const [targetId, setTargetId] = useState(available[0]?.id || 0);
-  const [key] = useState(() => crypto.randomUUID());
+  const [key] = useState(requestId);
   const m = useMutation();
   return (
     <Modal title="开始登录" close={close}>
@@ -1142,7 +1143,7 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
   const [historyError, setHistoryError] = useState("");
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [code, setCode] = useState("");
-  const [submission, setSubmission] = useState(() => crypto.randomUUID());
+  const [submission, setSubmission] = useState(requestId);
   const [takeover, setTakeover] = useState<string | null>(null);
   const m = useMutation();
   async function load() {
@@ -1264,7 +1265,7 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
       }
       if (name === "code") {
         setCode("");
-        setSubmission(crypto.randomUUID());
+        setSubmission(requestId());
       }
       await load();
       updated();
