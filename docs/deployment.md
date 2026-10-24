@@ -129,6 +129,28 @@ For a separately deployed voice gateway attached to the existing Docker network 
 
 From bridge containers, the native gateway root is `http://cylo-voice-gateway:8090`, not host loopback `http://127.0.0.1:18090/login`. The `/login` suffix is a browser page, not an integration base URL. Target HTTP access requires explicit `allow_http: true`.
 
-Space3044 commit `6338ac478070aaa34bfe7a3c0469caf9e9174c02` does not implement `bridge-v1`. Shared networking alone does not enable synchronization. A compatible server implementation must be supplied and verified before adding a voice target; do not label the native gateway as compatible merely because its login page or account list works. See the [integration contract](integrations.md#chatgpt-web-voice-compatibility-api).
+Unpatched Space3044 commit `6338ac478070aaa34bfe7a3c0469caf9e9174c02` does not implement `bridge-v1`. The reviewed overlay in `deploy/voice` adds that contract; its ARM64 deployment and synthetic acceptance are recorded below. A healthy login page alone does not establish compatibility or real-account usability. See the [integration contract](integrations.md#chatgpt-web-voice-compatibility-api).
 
 Before deploying a patched gateway against existing accounts, run the [disposable HTTP acceptance harness](integrations.md#disposable-synthetic-http-acceptance) against a separate instance with a fresh temporary database and fixed synthetic administrator credentials. Both the endpoint URL and `BRIDGE_VOICE_ACCEPTANCE_DISPOSABLE=1` must be set explicitly. Block outbound provider traffic for that instance. The harness changes a synthetic account and must never run against the production database. Verify restart persistence, actual account-store readback, direct routing despite process proxy variables, and per-account device headers through the server's own tests as well. Keep real-account usability unverified until the main agent completes serial acceptance using credentials outside Git.
+
+## Deployed voice bridge overlay (2026-10-24)
+
+The native ARM64 gateway now runs the reviewed `bridge-v1` overlay from fork revision `32d696af33f9d40dbb78402d429af316d9212a8f`. The fork diff against upstream exactly matches `deploy/voice/bridge-v1.patch` (SHA-256 `23b0d17b05c20ca36488774b2c19927cd41d251f78e0cc64502c28cb757440e0`). The COPY-only Dockerfile preserves the original runtime image `sha256:209392ce7c4994b70334ef53aa81adebba904ab01dc1bb3ae8d0b0dd0601bd7a`, including its runtime identity and curl-impersonate. BuildKit resolved that exact image through a verified local alias because a raw image ID in `FROM` is parsed as a repository reference.
+
+Deployed image tag: `llm-auth-bridge/voice:bridge-v1-32d696a`. Its local immutable image ID is `sha256:525104f25a8d475a504d09449139b2887ecf285105b0183192081657fb3f15f3`; the patch label was verified. The installed `/app/server` SHA-256 is `ba4d9e8099ebf3ec25f7962f38b0f6f6a604b942acc68ae2452acab73f87305f`, matching the reviewed synthetic-server binary (`CGO_ENABLED=0`, Linux ARM64, Go 1.26.2).
+
+The durable `/etc/cylo/voice.bridge.compose.yaml` contains only the image override, pinned to that immutable ID. Retain the existing base and LAN overrides when operating the gateway:
+
+```sh
+VOICE_LAN_BIND=192.168.1.4 docker compose -p cylo-voice \
+  -f /etc/cylo/voice.compose.yaml \
+  -f /etc/cylo/voice.lan.compose.yaml \
+  -f /etc/cylo/voice.bridge.compose.yaml \
+  up -d --no-build --pull never --no-deps voice-gateway
+```
+
+The original compose files and `/etc/cylo/voice.env` were left unchanged. The existing `/var/lib/cylo/voice:/app/data` mount, `cylo` network, `voice:voice` runtime identity, read-only root, capability restrictions, and both `127.0.0.1:18090` and existing `192.168.1.4:18090` bindings are preserved. Container environment values match the original compose/runtime configuration; only their ordering changed.
+
+Immediately before replacement, the old gateway was stopped and SQLite's backup API created a consistent backup of `/var/lib/cylo/voice/voice.db` under `/var/backups/llm-auth-bridge/voice-pre-bridge-20261024T142834Z/`. The directory is mode 0700 and backup/rollback files are mode 0600, outside Git. The matching original environment and encryption key remain in place. A local `rollback.sh` in that directory records the complete stop, preserve-current-database, restore-backup, and restore-original-image procedure. **Rollback requires the matching pre-upgrade database and old image together:** startup seals legacy proxy fields, so switching only the binary back is unsafe. Preserve the post-upgrade database and sidecars before restoration; never overwrite them while the gateway is running.
+
+The fork's Go tests passed, and the disposable HTTP acceptance against a separate fresh synthetic database at `127.0.0.1:18991` passed twice before deployment. The live replacement passed `/login` HTTP 200, unauthenticated capabilities/account GET/account PUT HTTP 401, and container health checks. Bridge app and worker health checks remained healthy. No accounts were written to the live gateway, no provider requests or real-account logins were performed, and no production database contents were inspected. The main operator then verified authenticated capabilities with the existing native administrator credentials: HTTP 200, `protocol=bridge-v1`, `explicit_route=true`, and `credential_digest=true`. The encrypted local voice target (ID 2) uses `http://cylo-voice-gateway:8090`, `allow_http=true`, and compatibility `bridge-v1`; the bridge target connection test returned HTTP 200. Worker-side DNS/network access to that same internal URL returned unauthenticated HTTP 401. No account writes, token probes, provider logins, or voice sessions were performed; real-account/provider acceptance remains **unverified**.
