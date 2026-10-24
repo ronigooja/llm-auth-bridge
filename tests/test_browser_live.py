@@ -128,7 +128,9 @@ def test_explicit_direct_route_reaches_real_fixture_despite_proxy_environment(
     [
         "rejected_password", "email_code", "changed_challenge",
         "delayed_spa", "delayed_navigation", "delayed_pending_email",
-        "direct_password", "otp_only", "existing_session",
+        "direct_password", "otp_only", "existing_session", "readonly_password",
+        "disabled_password", "disabled_code", "email_alternate", "authenticator_only",
+        "sms_code", "ambiguous_code",
     ],
 )
 def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
@@ -152,7 +154,7 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
             'autocomplete="current-password" required>'
             '<button type="submit" name="intent" value="validate">Continue</button></form>'
         ),
-        "/code": '<form action="/done"><input name="code" autocomplete="one-time-code"><button type="submit">Continue</button></form>',
+        "/code": '<form action="/done"><p>Check your email</p><input name="code" autocomplete="one-time-code"><button type="submit">Continue</button></form>',
         "/done": "<p>Done</p>",
     }
     if scenario == "rejected_password":
@@ -179,6 +181,35 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
         pages["/auth/login"] = pages["/password"]
     elif scenario == "otp_only":
         pages["/auth/login"] = pages["/code"]
+
+    if scenario in ("readonly_password", "disabled_password"):
+        pages["/password"] = pages["/password"].replace(
+            '<label for="password">',
+            '<input type="password" name="old" value="unchanged" readonly>'
+            '<input type="password" name="disabled_old" disabled>'
+            '<label for="password">',
+        )
+        if scenario == "disabled_password":
+            pages["/password"] = pages["/password"].replace(
+                'id="password" type="password"', 'id="password" type="password" disabled'
+            ) + "<script>setTimeout(() => document.getElementById('password').disabled=false,5500)</script>"
+    if scenario == "disabled_code":
+        pages["/code"] = pages["/code"].replace('<input name="code"', '<input disabled name="code"') + (
+            "<script>setTimeout(() => document.querySelector('input').disabled=false,5500)</script>"
+        )
+    if scenario == "email_alternate":
+        pages["/code"] = pages["/code"].replace(
+            '</form>', '<a href="#">Try authenticator instead</a></form>'
+        )
+    if scenario in ("authenticator_only", "sms_code", "ambiguous_code"):
+        pages["/auth/login"] = pages["/code"].replace(
+            "Check your email",
+            {
+                "authenticator_only": "Enter the code from your authentication app",
+                "sms_code": "Enter the code sent via SMS to your phone",
+                "ambiguous_code": "Enter verification code",
+            }[scenario],
+        )
 
     with real_browser() as browser:
 
@@ -259,15 +290,24 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
             return None
 
         monkeypatch.setattr(module, "_get_session", fake_session)
+        def synthetic_totp(seed):
+            assert scenario == "authenticator_only", "Only an explicit authenticator challenge may use the saved seed"
+            return "123456"
+
+        monkeypatch.setattr(module, "generate_code", synthetic_totp)
+        monkeypatch.setattr(module, "seconds_remaining", lambda: 20)
         assert module.run_login(
-            {"username": "synthetic@example.com", "password": "synthetic-password"},
+            {"username": "synthetic@example.com", "password": "synthetic-password", "totp": "synthetic-seed"},
             {"kind": "chatgpt-web-voice"},
             Control(),
         ) == credential
-    if scenario not in ("rejected_password", "changed_challenge", "otp_only", "existing_session"):
+    no_password = ("otp_only", "existing_session", "authenticator_only", "sms_code", "ambiguous_code")
+    if scenario not in ("rejected_password", "changed_challenge", *no_password):
         assert any("password=synthetic-password" in url for url in inputs)
-    assert phases.count("password") == (0 if scenario in ("otp_only", "existing_session") else 1)
-    assert phases.count("email") == (0 if scenario in ("direct_password", "otp_only", "existing_session") else 1)
+    if scenario in ("readonly_password", "disabled_password"):
+        assert any("old=unchanged" in url for url in inputs)
+    assert phases.count("password") == (0 if scenario in no_password else 1)
+    assert phases.count("email") == (0 if scenario in ("direct_password", *no_password) else 1)
     if scenario == "rejected_password":
         assert [w[:2] for w in waits] == [("password_required", "password")]
     elif scenario == "changed_challenge":
@@ -275,8 +315,45 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
             ("email_code_required", "email_code"),
             ("password_required", "password"),
         ]
-    elif scenario == "existing_session":
+    elif scenario in ("existing_session", "authenticator_only"):
         assert not waits
+        assert phases.count("totp") == (1 if scenario == "authenticator_only" else 0)
+    elif scenario in ("sms_code", "ambiguous_code"):
+        assert [w[:2] for w in waits] == [("verification_code_required", "verification_code")]
     else:
         assert [w[:2] for w in waits] == [("email_code_required", "email_code")]
         assert any("code=123456" in url for url in inputs)
+
+
+@pytest.mark.parametrize(
+    "instructions,expected",
+    [
+        ('<p>Enter the code sent to your email</p><a>Try authenticator instead</a>', "email_code"),
+        ('<p>Enter the code from your authentication app</p><button>Use email instead</button>', "totp"),
+        ('<h1>Authentication app</h1>', "totp"),
+        ('<p>Enter the code sent via SMS</p>', "verification_code"),
+        ('<p>Enter verification code</p>', "verification_code"),
+        ('<p>Enter your email code or code from your authenticator app</p>', "verification_code"),
+    ],
+)
+def test_code_classifier_uses_current_instructions_not_alternate_controls(instructions, expected):
+    with real_browser() as browser:
+        context = browser.new_context(service_workers="block")
+        context.route("**/*", lambda route: route.fulfill(
+            body='<main><form>' + instructions + '<input name="code" autocomplete="one-time-code"></form></main>',
+            content_type="text/html",
+        ))
+        page = context.new_page()
+        page.goto("https://auth.openai.com/challenge")
+        assert detect_state(page) == expected
+        context.close()
+
+
+def test_submit_skips_disabled_transition_button():
+    with real_browser() as browser:
+        page = browser.new_page()
+        page.set_content('<form onsubmit="event.preventDefault(); document.body.dataset.submitted=1">'
+                         '<button type="submit" disabled>Loading</button>'
+                         '<button type="submit">Continue</button></form>')
+        _submit(page)
+        assert page.locator("body").get_attribute("data-submitted") == "1"
