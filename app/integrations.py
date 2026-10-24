@@ -256,6 +256,34 @@ class _Adapter:
             )
         return None if response.status_code == 404 else self.data(response)
 
+    def find_by_identity(self, identity):
+        """Find one existing CLIProxyAPI auth file by its account email.
+
+        Older installations generated provider-owned filenames. Reusing a
+        matching file on the first synchronization prevents creating a second
+        credential when the local sync record has not captured its remote ID.
+        """
+        if self.compat:
+            return None
+        response = self.request("GET", _CPA_PATH)
+        if response.status_code == 404:
+            return None
+        data = self.data(response)
+        matches = [
+            item.get("name")
+            for item in data.get("files", [])
+            if isinstance(item, dict)
+            and item.get("type") == "codex"
+            and isinstance(item.get("email"), str)
+            and item["email"].casefold() == identity.casefold()
+        ]
+        matches = [name for name in matches if isinstance(name, str) and name]
+        if len(matches) > 1:
+            raise IntegrationError(
+                "Multiple remote credentials match this account; reconcile the target record before retrying."
+            )
+        return matches[0] if matches else None
+
     def write(self, remote_id, payload):
         if self.compat:
             return self.request(
@@ -365,10 +393,12 @@ def sync_credential(
         if kind not in _EXPECTED:
             raise IntegrationError("Unsupported target kind.")
         identity, payload = _prepare(kind, result, account)
-        rid = _remote_id(remote_id, identity, kind)
         adapter = _Adapter(target, _transport, _sleep)
         if adapter.compat:
             adapter.check()
+        if remote_id is None:
+            remote_id = adapter.find_by_identity(identity)
+        rid = _remote_id(remote_id, identity, kind)
         existing = adapter.read(rid)
         if existing is not None:
             if not adapter.compat and existing.get("type") != "codex":
