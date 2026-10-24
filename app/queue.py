@@ -373,6 +373,7 @@ class Queue:
                 if action == "code" and row["phase"] not in (
                     "email_code_required",
                     "authenticator_code_required",
+                    "verification_code_required",
                 ):
                     raise Conflict("task is not waiting for a verification code")
                 if row["command_cipher"]:

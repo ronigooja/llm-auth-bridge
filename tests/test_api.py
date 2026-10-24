@@ -393,3 +393,43 @@ def test_concurrent_case_insensitive_imports_are_atomic(admin, monkeypatch):
         codes = list(pool.map(confirm, ["Case@example.com", "case@example.com"]))
     assert sorted(codes) == [200, 409]
     assert len(admin.get("/api/v1/accounts").json()["accounts"]) == 1
+
+
+@pytest.mark.parametrize(
+    "phase,expected_status",
+    [
+        ("email_code_required", 200),
+        ("authenticator_code_required", 200),
+        ("verification_code_required", 200),
+        ("waiting_human", 409),
+        ("password_required", 409),
+        ("unknown_code_required", 409),
+    ],
+)
+def test_code_api_phase_contract(admin, settings, resources, phase, expected_status):
+    account, target = resources
+    key = load_key(settings.key_file)
+    queue = Queue(settings, key)
+    task = queue.create(account, target)
+    claimed = queue.claim()
+    queue.update(task["id"], claimed["execution_id"], state="waiting_human", phase=phase)
+    path = f"/api/v1/tasks/{task['id']}/code"
+    payload = {"code": "123456", "submission_id": "synthetic-submission"}
+
+    response = admin.post(path, json=payload)
+    assert response.status_code == expected_status, response.text
+    if expected_status == 409:
+        assert response.json()["detail"] == "task is not waiting for a verification code"
+        return
+
+    assert response.json()["phase"] == phase
+    # Retries preserve the first input; a distinct submission conflicts until consumed.
+    assert admin.post(path, json=payload).status_code == 200
+    assert admin.post(path, json={**payload, "submission_id": "another-submission"}).status_code == 409
+    with database(settings.db_path) as conn:
+        row = conn.execute("SELECT command_cipher FROM tasks WHERE id=?", (task["id"],)).fetchone()
+        assert "123456" not in row[0]
+        assert json.loads(decrypt(row[0], key)) == {"action": "code", "code": "123456"}
+    queue.update(task["id"], claimed["execution_id"], state="running", phase="resuming")
+    assert admin.post(path, json=payload).status_code == 200
+    assert admin.post(path, json={**payload, "submission_id": "late-new-submission"}).status_code == 409

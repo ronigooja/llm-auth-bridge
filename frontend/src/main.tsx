@@ -71,6 +71,7 @@ const labels: Record<string, string> = {
   waiting_human: "等待操作",
   email_code_required: "等待邮箱验证码",
   authenticator_code_required: "等待验证器代码",
+  verification_code_required: "等待验证码",
   password_required: "需要检查密码页面",
   browser: "浏览器已就绪",
   login: "正在打开登录页面",
@@ -1312,10 +1313,13 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
               {task.phase === "password_required" && (
                 <p className="muted">密码页面仍未通过。请接管浏览器检查密码或页面提示，完成后点击“继续任务”。</p>
               )}
-              {!["email_code_required", "authenticator_code_required", "password_required"].includes(task.phase || "") && (
+              {!["email_code_required", "authenticator_code_required", "verification_code_required", "password_required"].includes(task.phase || "") && (
                 <p className="muted">请接管浏览器检查当前步骤，再点击“继续任务”重新识别页面；识别到验证码页面后会显示验证码输入框。</p>
               )}
-              {["email_code_required", "authenticator_code_required"].includes(task.phase || "") && (
+              {task.phase === "verification_code_required" && (
+                <p className="muted">请按当前页面提示获取短信或其他验证码并手动输入；如不确定验证码来源，请接管浏览器查看。此步骤不会自动填写验证器代码。</p>
+              )}
+              {["email_code_required", "authenticator_code_required", "verification_code_required"].includes(task.phase || "") && (
                 <form
                   className="code-form"
                   onSubmit={(e) => {
