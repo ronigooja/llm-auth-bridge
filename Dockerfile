@@ -44,7 +44,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright DISPLAY=:99
 RUN apt-get update && apt-get install -y --no-install-recommends xvfb x11vnc websockify \
     && pip install --no-cache-dir playwright==1.56.0 \
-    && /usr/local/bin/playwright install --with-deps chromium \
+    && /usr/local/bin/playwright install --with-deps --no-shell chromium \
     && chmod -R a+rX /opt/playwright \
     && rm -rf /var/lib/apt/lists/*
 # The uv environment also installs the exact browser API version for runtime imports.

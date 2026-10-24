@@ -42,3 +42,11 @@ The interface should make each operation understandable through its name, placem
 - Preserve the same action order and status vocabulary across account and task views.
 - Use responsive layouts that keep the primary action visible without horizontal scrolling.
 
+
+## Account routing form
+
+New accounts and existing accounts whose route is still `unset` default to proxy routing. These unconfigured accounts preselect available CLIProxyAPI targets if no targets are bound. Existing explicit direct/proxy routes and their saved bindings are preserved, including empty bindings. Defaults are persisted only when the user saves the form. Proxy configuration uses one visible text URL input, such as `http://user:password@host:8080` or `socks5://host:1080`. Percent-encode reserved characters in credentials. The UI validates and converts this URL into the existing `{server, username?, password?}` API contract; `socks5h` normalizes to the worker's SOCKS5 route with remote DNS. Editing an existing proxy with an empty URL retains its encrypted configuration; selecting proxy for an account without one requires a URL. Stored proxy credentials are never returned to the form.
+
+Form inputs and selects share one base style: 43 px minimum height, inherited 13 px label font, 1 px border, 6 px radius, and 11 px vertical padding. Selects add only right-side space and a chevron. Inputs, selects, and textareas share a keyboard-focus outline; network routing has no separate size override.
+
+The account form displays entered account passwords, authenticator keys, and proxy URLs as visible text at the administrator's request. Existing encrypted secret values are not returned or prefilled; leaving an edit field empty retains the saved value.

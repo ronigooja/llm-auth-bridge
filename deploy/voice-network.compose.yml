@@ -1,0 +1,10 @@
+# Optional networking for a voice gateway deployed on the external cylo network.
+services:
+  app:
+    networks: [default, cylo]
+  worker:
+    networks: [default, cylo]
+networks:
+  cylo:
+    external: true
+    name: cylo

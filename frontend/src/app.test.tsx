@@ -32,7 +32,7 @@ describe("management interactions", () => {
       if (path.endsWith("/accounts") && init?.method === "POST")
         return response({ id: 1 });
       if (path.endsWith("/accounts")) return response({ accounts: [] });
-      if (path.endsWith("/targets")) return response({ targets: [] });
+      if (path.endsWith("/targets")) return response({ targets: [{ id: 1, name: "CLIProxyAPI", kind: "cliproxyapi" }, { id: 2, name: "Voice", kind: "chatgpt-web-voice" }] });
       return response({ tasks: [] });
     });
     render(<App />);
@@ -51,6 +51,10 @@ describe("management interactions", () => {
       screen.getByLabelText("密码", { exact: true }),
       "synthetic-password",
     );
+    expect(screen.getByLabelText("网络路由")).toHaveProperty("value", "proxy");
+    expect(screen.getByLabelText("CLIProxyAPI")).toHaveProperty("checked", true);
+    expect(screen.getByLabelText("Voice")).toHaveProperty("checked", false);
+    await user.type(screen.getByLabelText("代理 URL"), "socks5://user:p%40ss@proxy.example.test:1080");
     await user.click(screen.getByRole("button", { name: "保存账号" }));
     await waitFor(() =>
       expect(
@@ -67,7 +71,9 @@ describe("management interactions", () => {
     });
     expect(JSON.parse(String(call.init?.body))).toMatchObject({
       username: "synthetic@example.test",
-      route_type: "unset",
+      route_type: "proxy",
+      target_ids: [1],
+      proxy: { server: "socks5://proxy.example.test:1080", username: "user", password: "p@ss" },
     });
   });
   it("shows a retryable resource failure without claiming the account list is empty", async () => {
@@ -354,8 +360,10 @@ it("keeps account editor busy until new route and bindings finish refreshing", a
   render(<App />);
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "编辑与绑定" }));
+  expect(screen.getByLabelText("网络路由")).toHaveProperty("value", "proxy");
+  expect(screen.getByLabelText("Synthetic CPA")).toHaveProperty("checked", true);
+  expect(screen.getByLabelText("新代理 URL（留空保留）")).toHaveProperty("required", true);
   await user.selectOptions(screen.getByLabelText("网络路由"), "direct");
-  await user.click(screen.getByLabelText("Synthetic CPA"));
   await user.click(screen.getByRole("button", { name: "保存账号" }));
   await waitFor(() => expect(release).toBeTypeOf("function"));
   expect(screen.getByRole("dialog")).toBeTruthy();

@@ -9,6 +9,7 @@ import {
 import { createRoot } from "react-dom/client";
 import { api, setCsrf, ApiError } from "./api";
 import "./style.css";
+import { parseProxyUrl } from "./proxy";
 
 type Account = {
   id: number;
@@ -657,11 +658,14 @@ function AccountForm({
   const [totp, setTotp] = useState("");
   const [mailbox, setMailbox] = useState("");
   const [allowHttp, setAllowHttp] = useState(false);
-  const [route, setRoute] = useState(account?.route_type || "unset");
+  const unconfigured = !account || account.route_type === "unset";
+  const [route, setRoute] = useState(unconfigured ? "proxy" : account.route_type);
   const [server, setServer] = useState("");
-  const [proxyUser, setProxyUser] = useState("");
-  const [proxyPassword, setProxyPassword] = useState("");
-  const [ids, setIds] = useState<number[]>(account?.target_ids || []);
+  const [ids, setIds] = useState<number[]>(
+    unconfigured && !account?.target_ids.length
+      ? targets.filter((t) => t.kind === "cliproxyapi").map((t) => t.id)
+      : account?.target_ids || [],
+  );
   const [clearTotp, setClearTotp] = useState(false);
   const [clearMailbox, setClearMailbox] = useState(false);
   const m = useMutation();
@@ -687,11 +691,7 @@ function AccountForm({
             : {}),
         ...(route === "proxy" && server
           ? {
-              proxy: {
-                server,
-                ...(proxyUser ? { username: proxyUser } : {}),
-                ...(proxyPassword ? { password: proxyPassword } : {}),
-              },
+              proxy: parseProxyUrl(server),
             }
           : {}),
       };
@@ -717,7 +717,8 @@ function AccountForm({
         </Field>
         <Field title={account ? "新密码（留空保留）" : "密码"}>
           <input
-            type="password"
+            type="text"
+              spellCheck={false}
             autoComplete="new-password"
             required={!account}
             value={password}
@@ -728,7 +729,8 @@ function AccountForm({
           <summary>验证与邮箱</summary>
           <Field title="验证器密钥（留空保留）">
             <input
-              type="password"
+              type="text"
+              spellCheck={false}
               autoComplete="off"
               value={totp}
               onChange={(e) => setTotp(e.target.value)}
@@ -781,32 +783,18 @@ function AccountForm({
         </Field>
         {route === "proxy" && (
           <>
-            <Field title={account ? "新代理地址（留空保留）" : "代理地址"}>
+            <Field title={account ? "新代理 URL（留空保留）" : "代理 URL"}>
               <input
-                type="password"
+                type="text"
+                spellCheck={false}
                 autoComplete="off"
-                required={!account}
+                required={!account || account.route_type !== "proxy"}
                 value={server}
-                placeholder="http://host:port"
+                placeholder="http://用户名:密码@主机:端口"
                 onChange={(e) => setServer(e.target.value)}
               />
             </Field>
-            <Field title="代理用户名">
-              <input
-                type="password"
-                autoComplete="off"
-                value={proxyUser}
-                onChange={(e) => setProxyUser(e.target.value)}
-              />
-            </Field>
-            <Field title="代理密码">
-              <input
-                type="password"
-                autoComplete="new-password"
-                value={proxyPassword}
-                onChange={(e) => setProxyPassword(e.target.value)}
-              />
-            </Field>
+            <small className="muted">支持 HTTP、HTTPS、SOCKS5；无需认证时省略用户名和密码。</small>
           </>
         )}
         <fieldset>
