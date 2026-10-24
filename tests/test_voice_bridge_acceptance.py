@@ -26,7 +26,10 @@ class RecordingTransport(httpx.BaseTransport):
         self.lose_next_write_response = False
 
     def handle_request(self, request):
-        assert "/bridge/v1/" in request.url.path
+        assert (
+            "/bridge/v1/" in request.url.path
+            or request.url.path.endswith("/api/auth/login")
+        )
         self.requests.append((request.method, request.url.path))
         response = self.inner.handle_request(request)
         if request.method == "PUT" and self.lose_next_write_response:
@@ -90,6 +93,20 @@ def test_disposable_voice_bridge_real_http_contract():
             assert client.get(base + absent_path).status_code == 404
             assert client.put(base + absent_path, content=b"{invalid").status_code in {400, 422}
             assert client.put(base + absent_path, content=b" " * (2 * 1024 * 1024)).status_code in {400, 413}
+        # A valid native administrator cookie must not authenticate the separate
+        # bridge API. This is a synthetic local gateway login, never a provider login.
+        with httpx.Client(transport=transport, trust_env=False, follow_redirects=False) as browser:
+            login = browser.post(base + "/api/auth/login", json={
+                "username": "synthetic-user", "password": "synthetic-password",
+            })
+            assert login.is_success
+            assert browser.cookies.get("voice_gateway_session")
+            for method, path in (
+                ("GET", "/bridge/v1/capabilities"),
+                ("GET", absent_path),
+                ("PUT", absent_path),
+            ):
+                assert browser.request(method, base + path).status_code == 401
         assert connection(target, _transport=transport)["verification"] == "unverified"
         first = sync()
         assert first["verified"] is True
