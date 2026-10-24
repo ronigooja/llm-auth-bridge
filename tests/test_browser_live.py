@@ -211,6 +211,17 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
                 "ambiguous_code": "Enter verification code",
             }[scenario],
         )
+    if scenario == "authenticator_heading":
+        # The provider places the challenge title outside the input form,
+        # nested in a layout container without a main landmark.
+        pages["/auth/login"] = (
+            '<div><header><h1>Check your authenticator app</h1></header>'
+            '<p>Enter the one-time authentication code shown in your app to verify your identity.</p>'
+            '<form action="/done"><label for="otp">One-time code</label>'
+            '<input id="otp" name="code" autocomplete="one-time-code">'
+            '<button type="submit">Continue</button>'
+            '<a href="#">Try another method</a></form></div>'
+        )
 
     with real_browser() as browser:
 

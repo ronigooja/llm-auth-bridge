@@ -226,7 +226,7 @@ def _code_kind(field) -> str:
             ...Array.from((field.getAttribute('aria-describedby') || '').split(/\s+/))
                 .map(id => document.getElementById(id)).filter(Boolean),
             ...Array.from((form || field.parentElement).querySelectorAll('h1, h2, h3, p, [role="heading"]')),
-            ...Array.from(document.querySelectorAll('main h1, main h2, body > h1, body > h2')),
+            ...Array.from(document.querySelectorAll('h1, h2, [role="heading"][aria-level="1"], [role="heading"][aria-level="2"]')),
         ];
         return nodes.filter(n => !n.closest('a, button, nav, footer')
             && n.getClientRects().length && getComputedStyle(n).visibility !== 'hidden').map(clean);
