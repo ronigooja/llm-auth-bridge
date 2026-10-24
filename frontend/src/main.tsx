@@ -68,6 +68,9 @@ const labels: Record<string, string> = {
   queued: "排队中",
   running: "正在登录",
   waiting_human: "等待操作",
+  email_code_required: "等待邮箱验证码",
+  authenticator_code_required: "等待验证器代码",
+  password_required: "需要检查密码页面",
   browser: "浏览器已就绪",
   login: "正在打开登录页面",
   username: "正在提交账号",
@@ -1291,25 +1294,27 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
           {task.message && <p>{task.message}</p>}
           {task.state === "waiting_human" && (
             <>
-              <form
-                className="code-form"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void action("code", { code, submission_id: submission });
-                }}
-              >
-                <Field title="验证码">
-                  <input
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                    autoComplete="one-time-code"
-                    required
-                  />
-                </Field>
-                <button className="primary" disabled={m.busy}>
-                  提交验证码
-                </button>
-              </form>
+              {["email_code_required", "authenticator_code_required"].includes(task.phase || "") && (
+                <form
+                  className="code-form"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void action("code", { code, submission_id: submission });
+                  }}
+                >
+                  <Field title="验证码">
+                    <input
+                      value={code}
+                      onChange={(e) => setCode(e.target.value)}
+                      autoComplete="one-time-code"
+                      required
+                    />
+                  </Field>
+                  <button className="primary" disabled={m.busy}>
+                    提交验证码
+                  </button>
+                </form>
+              )}
               <div className="actions">
                 <button
                   disabled={m.busy || !task.takeover_available}

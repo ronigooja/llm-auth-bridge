@@ -190,6 +190,10 @@ def detect_state(page) -> str:
         or parsed.scheme != "https"
     ):
         return "unknown"
+    # A password form can contain code-like fields during page transitions.
+    # Never classify a visible password form as a code challenge.
+    if _visible(page, 'input[type="password"]'):
+        return "password"
     if _visible(
         page,
         'input[autocomplete="one-time-code"], input[name="code"], input[name="otp"]',
@@ -203,8 +207,6 @@ def detect_state(page) -> str:
             )
             else "email_code"
         )
-    if _visible(page, 'input[type="password"]'):
-        return "password"
     if _visible(page, 'input[type="email"], input[name="username"]'):
         return "email"
     if parsed.hostname == "chatgpt.com" and _visible(
@@ -228,9 +230,8 @@ def _save(context, control):
     control.save_state(context.storage_state())
 
 
-def _human(control, reason: str) -> str | None:
-    control.phase("waiting_human", reason)
-    result = control.wait_human(reason)
+def _human(control, reason: str, phase: str = "waiting_human") -> str | None:
+    result = control.wait_human(reason, phase=phase)
     control.checkpoint()
     return result
 
@@ -367,6 +368,7 @@ def run_login(
                             timeout=10000
                         )
                         submitted.add(marker)
+                        started = time.monotonic()
                     elif stage in ("email", "password") and marker not in submitted:
                         control.phase(stage, "Submitting account " + stage)
                         selector = (
@@ -379,6 +381,7 @@ def run_login(
                         )
                         _submit(page)
                         submitted.add(marker)
+                        started = time.monotonic()
                     elif stage == "totp" and account.get("totp") and totp_attempts < 2:
                         # Avoid submitting a code at the end of its validity window.
                         if seconds_remaining() < 5:
@@ -394,6 +397,7 @@ def run_login(
                             _submit(page)
                             submitted.add(("totp_code", code))
                             totp_attempts += 1
+                            started = time.monotonic()
                         else:
                             # Keep the same challenge open until the next TOTP
                             # window; checkpoint on each half-second iteration.
@@ -403,6 +407,7 @@ def run_login(
                         control.phase("consent", "Confirming requested authorization")
                         _submit(page)
                         submitted.add(marker)
+                        started = time.monotonic()
                     else:
                         # Permit navigation/rendering to settle, without blindly
                         # repeating passwords or guessing an unfamiliar control.
@@ -410,13 +415,34 @@ def run_login(
                             page.wait_for_timeout(500)
                             continue
                         _save(context, control)
-                        reason = (
-                            "Enter the email verification code or take over the browser"
-                            if stage == "email_code"
-                            else "Review the browser and continue after completing the login step"
+                        phase, reason = {
+                            "email_code": (
+                                "email_code_required",
+                                "Enter the email verification code or take over the browser",
+                            ),
+                            "totp": (
+                                "authenticator_code_required",
+                                "Enter an authenticator code or take over the browser",
+                            ),
+                            "password": (
+                                "password_required",
+                                "The password page is still open; review the password or provider error in the browser, then continue",
+                            ),
+                        }.get(
+                            stage,
+                            (
+                                "waiting_human",
+                                "Review the browser and continue after completing the login step",
+                            ),
                         )
-                        code = _human(control, reason)
-                        if code:
+                        code = _human(control, reason, phase)
+                        # Takeover can navigate away while a command is pending.
+                        # A code applies only to the challenge that requested it.
+                        if (
+                            code
+                            and stage in ("email_code", "totp")
+                            and detect_state(page) == stage
+                        ):
                             if (
                                 not code.isascii()
                                 or not code.isdigit()

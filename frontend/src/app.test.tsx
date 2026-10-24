@@ -24,7 +24,7 @@ describe("management interactions", () => {
     vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
     vi.stubGlobal("EventSource", class { addEventListener() {} close() {} });
     const calls: { path: string; init?: RequestInit }[] = [];
-    const task = { id: 7, account_id: 1, target_id: 2, state: "waiting_human" };
+    const task = { id: 7, account_id: 1, target_id: 2, state: "waiting_human", phase: "email_code_required" };
     vi.mocked(fetch).mockImplementation((input, init) => {
       const path = String(input);
       calls.push({ path, init });
@@ -137,7 +137,7 @@ describe("management interactions", () => {
       account_id: 2,
       target_id: 3,
       state: "waiting_human",
-      phase: "等待验证码",
+      phase: "email_code_required",
     };
     const calls: { path: string; init?: RequestInit }[] = [];
     class SyntheticEvents {
@@ -171,6 +171,25 @@ describe("management interactions", () => {
     });
     expect(screen.getByRole("button", { name: "接管浏览器" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "取消任务" })).toBeTruthy();
+  });
+  it.each(["waiting_human", "password_required"])("offers takeover and continue without a code form for %s", async (phase) => {
+    window.history.replaceState(null, "", "/#tasks/7");
+    vi.stubGlobal("EventSource", class { addEventListener() {} close() {} });
+    const task = { id: 7, account_id: 1, target_id: 2, state: "waiting_human", phase, takeover_available: true };
+    vi.mocked(fetch).mockImplementation((input) => {
+      const path = String(input);
+      if (path.endsWith("/auth/session")) return response({ csrf_token: "synthetic" });
+      if (path.endsWith("/accounts")) return response({ accounts: [] });
+      if (path.endsWith("/targets")) return response({ targets: [] });
+      if (path.endsWith("/tasks")) return response({ tasks: [task] });
+      if (path.endsWith("/history")) return response({ events: [] });
+      return response(task);
+    });
+    render(<App />);
+    expect(await screen.findByRole("button", { name: "继续任务" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "接管浏览器" })).toBeTruthy();
+    expect(screen.queryByLabelText("验证码")).toBeNull();
+    expect(screen.queryByRole("button", { name: "提交验证码" })).toBeNull();
   });
   it("previews and confirms import using the exact versioned import contract", async () => {
     const calls: { path: string; init?: RequestInit }[] = [];

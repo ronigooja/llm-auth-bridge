@@ -370,6 +370,11 @@ class Queue:
                     return public_task(row)
                 if row["state"] != "waiting_human":
                     raise Conflict("task is not waiting for input")
+                if action == "code" and row["phase"] not in (
+                    "email_code_required",
+                    "authenticator_code_required",
+                ):
+                    raise Conflict("task is not waiting for a verification code")
                 if row["command_cipher"]:
                     raise Conflict("input already submitted")
                 command = {"action": action, "code": code if action == "code" else None}

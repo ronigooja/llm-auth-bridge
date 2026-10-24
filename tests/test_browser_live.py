@@ -120,3 +120,119 @@ def test_explicit_direct_route_reaches_real_fixture_despite_proxy_environment(
         response = route.session.get(origin + "/email")
         assert response.status_code == 200
         assert 'name="username"' in response.text
+
+
+@pytest.mark.parametrize("scenario", ["rejected_password", "email_code", "changed_challenge"])
+def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
+    """Exercise the real adapter against intercepted provider pages only."""
+    from types import SimpleNamespace
+    import app.browser as module
+    import playwright.sync_api
+
+    phases, inputs, waits = [], [], []
+    page_holder = []
+    completed = False
+    credential = {"identity": "synthetic@example.com", "credential_type": "chatgpt_web"}
+    pages = {
+        "/": "<p>Signed out</p>",
+        "/auth/login": '<form action="/password"><input type="email" name="username"><button type="submit">Continue</button></form>',
+        "/password": '<form action="/code"><input type="password" name="password"><button type="submit">Continue</button></form>',
+        "/code": '<form action="/done"><input name="code" autocomplete="one-time-code"><button type="submit">Continue</button></form>',
+        "/done": "<p>Done</p>",
+    }
+    if scenario == "rejected_password":
+        pages["/password"] = '<form onsubmit="event.preventDefault(); document.querySelector(\'p\').textContent=\'Incorrect password\'"><input type="password" name="code"><button type="submit">Continue</button></form><p></p>'
+
+    with real_browser() as browser:
+
+        class WrappedBrowser:
+            def new_context(self, **kwargs):
+                context = browser.new_context(**kwargs)
+
+                def intercept(route):
+                    path = urlsplit(route.request.url).path
+                    inputs.append(route.request.url)
+                    route.fulfill(
+                        body=pages.get(path, "<p>Unknown</p>"), content_type="text/html"
+                    )
+
+                context.route("**/*", intercept)
+                page = context.new_page()
+                page_holder.append(page)
+                # run_login owns one page; expose the same page for manual actions.
+                return SimpleNamespace(
+                    new_page=lambda: page,
+                    route=context.route,
+                    set_default_timeout=context.set_default_timeout,
+                    storage_state=context.storage_state,
+                )
+
+            def close(self):
+                browser.close()
+
+        @contextmanager
+        def fake_playwright():
+            yield SimpleNamespace(
+                chromium=SimpleNamespace(launch=lambda **k: WrappedBrowser())
+            )
+
+        @contextmanager
+        def fake_route(account):
+            yield SimpleNamespace(playwright_proxy=None)
+
+        class Control:
+            def checkpoint(self):
+                pass
+
+            def phase(self, phase, reason):
+                phases.append(phase)
+
+            def save_state(self, state):
+                pass
+
+            def wait_human(self, reason, *, phase):
+                nonlocal completed
+                page = page_holder[0]
+                waits.append((phase, detect_state(page), reason))
+                if scenario == "rejected_password":
+                    assert "Incorrect password" in page.locator("body").inner_text()
+                    assert "verification code" not in reason
+                    completed = True
+                    return None
+                if scenario == "changed_challenge" and len(waits) == 1:
+                    # The user returns to a password page before an old code arrives.
+                    page.goto("https://chatgpt.com/password")
+                    page.set_content('<form><input type="password" name="code"><button type="submit">Continue</button></form>')
+                    return "123456"
+                if scenario == "changed_challenge":
+                    assert page.locator('input[type="password"]').input_value() == ""
+                    completed = True
+                    return None
+                return "123456"
+
+        monkeypatch.setattr(playwright.sync_api, "sync_playwright", fake_playwright)
+        monkeypatch.setattr(module, "account_route", fake_route)
+        def fake_session(*args):
+            if completed or (
+                page_holder and urlsplit(page_holder[0].url).path == "/done"
+            ):
+                return credential
+            return None
+
+        monkeypatch.setattr(module, "_get_session", fake_session)
+        assert module.run_login(
+            {"username": "synthetic@example.com", "password": "synthetic-password"},
+            {"kind": "chatgpt-web-voice"},
+            Control(),
+        ) == credential
+    assert phases.count("password") == 1
+    if scenario == "rejected_password":
+        assert [w[:2] for w in waits] == [("password_required", "password")]
+    elif scenario == "changed_challenge":
+        assert [w[:2] for w in waits] == [
+            ("email_code_required", "email_code"),
+            ("password_required", "password"),
+        ]
+    else:
+        assert [w[:2] for w in waits] == [("email_code_required", "email_code")]
+        assert any("code=123456" in url for url in inputs)

@@ -62,14 +62,14 @@ class Control:
                 ),
             )
 
-    def wait_human(self, reason):
+    def wait_human(self, reason, *, phase="waiting_human"):
         start = time.time()
         deadline = start + self.worker.settings.human_seconds
         self.queue.update(
             self.id,
             self.execution_id,
             state="waiting_human",
-            phase="waiting_human",
+            phase=phase,
             message=reason,
             human_deadline=deadline,
             takeover_requested=0,
