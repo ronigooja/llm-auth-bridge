@@ -209,6 +209,47 @@ def test_sync_retry_does_not_repeat_browser_and_clears_credentials(
         )
 
 
+def test_default_sync_persists_discovered_remote_id_before_retry(settings, resources, monkeypatch):
+    import app.integrations as integrations
+
+    a, t = resources
+    q = queue(settings)
+    task = q.create(a, t)
+    browser_calls = []
+    attempts = []
+
+    def runner(*args):
+        browser_calls.append(True)
+        return result()
+
+    def sync(target, data, account, remote_id=None, *, _on_remote_id=None):
+        attempts.append((remote_id, data["_reconcile_only"]))
+        selected = remote_id or "legacy-provider-name.json"
+        _on_remote_id(selected)
+        with database(settings.db_path) as conn:
+            assert conn.execute(
+                "SELECT remote_id FROM tasks WHERE id=?", (task["id"],)
+            ).fetchone()[0] == selected
+        if len(attempts) == 1:
+            from app.integrations import IntegrationError
+
+            raise IntegrationError("synthetic lost write response", write_possible=True)
+        return {"remote_id": selected, "verified": True}
+
+    monkeypatch.setattr(integrations, "sync_credential", sync)
+    worker = Worker(settings, runner=runner)
+    assert worker.run_once()
+    assert worker.run_once()
+    q.action(task["id"], "retry-sync")
+    assert worker.run_once()
+    assert browser_calls == [True]
+    assert attempts == [(None, False), ("legacy-provider-name.json", True)]
+    with database(settings.db_path) as conn:
+        assert conn.execute(
+            "SELECT remote_id FROM syncs WHERE account_id=? AND target_id=?", (a, t)
+        ).fetchone()[0] == "legacy-provider-name.json"
+
+
 def test_sync_cancel_cannot_discard_unknown_remote_outcome(settings, resources):
     a, t = resources
     q = queue(settings)

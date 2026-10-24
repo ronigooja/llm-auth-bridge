@@ -132,9 +132,56 @@ def test_existing_cpa_email_file_reused_without_local_sync_id(cpa, result, accou
         "type": "codex",
         "email": account["username"],
         "access_token": "old",
+        "priority": 7,
+        "weight": 3,
+        "disabled": True,
     }
     assert run(cpa, result, account, server)["remote_id"] == legacy
     assert list(server.files) == [legacy]
+    assert {key: server.files[legacy][key] for key in ("priority", "weight", "disabled")} == {
+        "priority": 7,
+        "weight": 3,
+        "disabled": True,
+    }
+
+
+@pytest.mark.parametrize("files", [None, {}, "invalid"])
+def test_first_sync_fails_closed_on_incompatible_auth_file_listing(
+    cpa, result, account, files
+):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.url.path.endswith("auth-files"):
+            return httpx.Response(200, json={"files": files})
+        pytest.fail("an incompatible listing must stop before any write")
+
+    with pytest.raises(IntegrationError, match="incompatible"):
+        sync_credential(cpa, result, account, _transport=httpx.MockTransport(handler))
+    assert not any(request.method == "POST" for request in requests)
+
+
+def test_first_sync_fails_closed_on_multiple_identity_matches(cpa, result, account):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        if request.url.path.endswith("auth-files"):
+            return httpx.Response(
+                200,
+                json={
+                    "files": [
+                        {"name": "legacy-a.json", "email": account["username"], "type": "codex"},
+                        {"name": "legacy-b.json", "email": account["username"], "type": "codex"},
+                    ]
+                },
+            )
+        pytest.fail("ambiguous account identity must stop before download/write")
+
+    with pytest.raises(IntegrationError, match="Multiple remote credentials"):
+        sync_credential(cpa, result, account, _transport=httpx.MockTransport(handler))
+    assert not any(request.method == "POST" for request in requests)
 
 
 def test_lost_write_response_reconciles_without_duplicate(cpa, result, account):
@@ -527,6 +574,8 @@ def test_lost_write_response_without_readback_reports_possible_write(
     def handler(request):
         if request.method == "POST":
             raise httpx.ReadTimeout("synthetic-secret", request=request)
+        if request.url.path.endswith("auth-files"):
+            return httpx.Response(200, json={"files": []})
         return httpx.Response(404)
 
     with pytest.raises(IntegrationError) as exc:
