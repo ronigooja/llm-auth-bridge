@@ -184,7 +184,7 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, mode):
         def browser_closed(self):
             events.append("control_closed")
 
-        def wait_human(self, reason):
+        def wait_human(self, reason, **kwargs):
             nonlocal resumed
             events.append("manual")
             resumed = True

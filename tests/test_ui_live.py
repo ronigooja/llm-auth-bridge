@@ -45,7 +45,7 @@ def test_built_ui_completes_import_login_human_code_and_sync(settings):
         calls.append("login")
         control.browser_ready()
         control.phase("email_code", "Enter verification code")
-        code = control.wait_human("Enter verification code")
+        code = control.wait_human("Enter verification code", phase="email_code_required")
         assert code == "123456"
         control.save_state({"cookies": [], "origins": []})
         control.browser_closed()

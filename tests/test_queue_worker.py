@@ -114,7 +114,7 @@ def test_human_code_encrypted_idempotent_and_resume(settings, resources):
     control = Control(worker, claimed)
     seen = []
     thread = threading.Thread(
-        target=lambda: seen.append(control.wait_human("Enter code"))
+        target=lambda: seen.append(control.wait_human("Enter code", phase="email_code_required"))
     )
     thread.start()
     for _ in range(100):
@@ -378,3 +378,18 @@ def test_explicit_discard_keeps_audit_and_allows_new_authorization(
             conn.execute("SELECT status FROM accounts").fetchone()[0] == "sync_unknown"
         )
     assert q.create(a, t)["state"] == "queued"
+
+
+@pytest.mark.parametrize("phase", ["waiting_human", "password_required", "email_code_required", "authenticator_code_required"])
+def test_code_action_requires_explicit_code_challenge(settings, resources, phase):
+    a, t = resources
+    q = queue(settings)
+    task = q.create(a, t)
+    claimed = q.claim()
+    q.update(task["id"], claimed["execution_id"], state="waiting_human", phase=phase)
+    if phase.endswith("code_required"):
+        assert q.action(task["id"], "code", "123456", "synthetic")["phase"] == phase
+    else:
+        with pytest.raises(Conflict, match="not waiting for a verification code"):
+            q.action(task["id"], "code", "123456", "synthetic")
+        q.action(task["id"], "continue")
