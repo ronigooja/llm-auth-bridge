@@ -1309,6 +1309,12 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
           {task.message && <p>{task.message}</p>}
           {task.state === "waiting_human" && (
             <>
+              {task.phase === "password_required" && (
+                <p className="muted">密码页面仍未通过。请接管浏览器检查密码或页面提示，完成后点击“继续任务”。</p>
+              )}
+              {!["email_code_required", "authenticator_code_required", "password_required"].includes(task.phase || "") && (
+                <p className="muted">请接管浏览器检查当前步骤，再点击“继续任务”重新识别页面；识别到验证码页面后会显示验证码输入框。</p>
+              )}
               {["email_code_required", "authenticator_code_required"].includes(task.phase || "") && (
                 <form
                   className="code-form"

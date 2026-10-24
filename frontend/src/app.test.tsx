@@ -190,6 +190,9 @@ describe("management interactions", () => {
     expect(screen.getByRole("button", { name: "接管浏览器" })).toBeTruthy();
     expect(screen.queryByLabelText("验证码")).toBeNull();
     expect(screen.queryByRole("button", { name: "提交验证码" })).toBeNull();
+    expect(screen.getByText(phase === "password_required"
+      ? /密码页面仍未通过/
+      : /重新识别页面/)).toBeTruthy();
   });
   it("previews and confirms import using the exact versioned import contract", async () => {
     const calls: { path: string; init?: RequestInit }[] = [];
