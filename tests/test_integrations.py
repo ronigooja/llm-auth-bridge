@@ -381,6 +381,14 @@ def test_voice_capability_claims_mandatory(voice):
         )
 
 
+def test_voice_digest_canonical_utf8_vector():
+    # Shared cross-language vector: no HTML escaping, ASCII escaping, whitespace,
+    # newline, or Unicode normalization is permitted in the hashed bytes.
+    assert _digest({"device_id": "测试<&>\u2028\u2029", "access_token": "synthetic"}) == (
+        "5fcc9d4ab814aedce4447a6dd1243d8f67353cf8270f4d23eeaef6aa6286502d"
+    )
+
+
 def test_existing_cpa_email_filename_reused(cpa, result, account):
     server = CPA()
     rid = "codex-synthetic+bridge@example.test-free.json"

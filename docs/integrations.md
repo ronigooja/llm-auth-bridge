@@ -64,6 +64,37 @@ Requests use HTTP Basic administrator authentication. The service must implement
 
 The new remote ID is `bridge-<32-character identity/kind hash>`. A provided stored remote ID is reused, and readback reconciles a committed write whose response was lost. Identity conflicts stop synchronization. Missing or weaker readback fields stop synchronization; a preview, token liveness probe, or empty proxy does not count as proof.
 
+### Server implementation requirements
+
+For voice accounts, the generated ID is `bridge-` followed by the first 32 hex characters of SHA-256 over UTF-8 `chatgpt-web-voice:<casefolded identity>`. Existing IDs must remain stable across restarts and updates. A server with numeric account IDs needs a durable, atomic mapping to that actual account row. Acknowledged writes and their mapping must survive restart together. Existing mappings must never be reassigned to a different identity. Same-identity replacement after fresh authorization is allowed; a reconciliation attempt stops on a changed credential or route. A server should reject conflicting identities with HTTP 409, without changing either account. If the underlying store deduplicates access tokens, a token already owned by another account also needs a safe conflict rather than a duplicate or reassignment.
+
+The idempotency digest covers the **entire PUT body**, while the readback digest covers only the **stored credential object**. Both use sorted object keys, compact JSON, UTF-8, unescaped non-ASCII characters, and no trailing newline. Do not normalize credential strings or proxy URLs. In particular, Go's default JSON encoding escapes `<`, `>`, `&`, U+2028, and U+2029 and is not byte-compatible with this contract. A cross-language credential vector is:
+
+```text
+JSON representation: {"access_token":"synthetic","device_id":"测试<&>\u2028\u2029"}
+SHA-256: 5fcc9d4ab814aedce4447a6dd1243d8f67353cf8270f4d23eeaef6aa6286502d
+```
+
+In the hashed bytes, the displayed `\u2028` and `\u2029` stand for the literal Unicode separator characters, not six-character escape sequences. Readback must recompute this digest from decrypted persisted credentials; storing a caller's digest or request body as a shadow record does not verify the account used by the voice runtime.
+
+`device_id` is optional. The current browser session extraction emits only `access_token`; the adapter forwards a nonempty `device_id` when a result provides one. A server accepting `device_id` must persist it and use it for that account's upstream device header. An omitted device ID must stay absent in the digest even if the runtime uses its configured default. Servers must reject unsupported credential fields rather than silently reporting a digest for unused data.
+
+The reviewed Space3044 runtime inherits process proxy configuration when an account's proxy is empty. Supporting `{type: "direct"}` therefore requires an explicit bypass in every supported upstream transport, including Go HTTP, TLS client, and curl. Persisting an empty proxy and echoing `direct` is insufficient. Proxy routes must retain the complete URL, including encoded authentication, in both applied configuration and authenticated readback. Existing masked management account views can remain masked; this bridge endpoint requires complete route readback.
+
+Capability, account PUT, and account GET handlers must never call account token checks, session creation, refresh, or other provider endpoints. HTTP Basic authentication must protect all three, and must work without a browser cookie or CSRF token. Storage consistency verification remains distinct from real-account and runtime egress acceptance.
+
+### Disposable synthetic HTTP acceptance
+
+`tests/test_voice_bridge_acceptance.py` exercises the real bridge client over HTTP against an independently started, disposable server. It is skipped by default. Start the candidate server with an empty temporary account database, administrator `synthetic-user` / `synthetic-password`, and outbound provider traffic blocked, then run:
+
+```sh
+BRIDGE_VOICE_ACCEPTANCE_DISPOSABLE=1 \
+  BRIDGE_VOICE_ACCEPTANCE_URL=http://127.0.0.1:18080 \
+  uv run --python 3.12 --extra test pytest -q tests/test_voice_bridge_acceptance.py
+```
+
+The URL may include a deployment base path. The separate `DISPOSABLE=1` guard is required before requests are sent. This test writes and updates `bridge-acceptance@example.test`, uses synthetic credentials only, and leaves that record in the disposable store. Never point it at a production account store. It checks missing/wrong Basic authentication on all endpoints, absent-record 404, malformed/oversized requests, capabilities, direct and authenticated proxy readback, optional device ID, the UTF-8 digest, repeated synchronization, a lost PUT response, identity/token conflicts, idempotency-key replay, and reconciliation after remote credential changes. Same-key/different-body reuse must return 409. It never invokes native token-check or provider endpoints. The server's own tests must additionally verify transaction rollback, restart persistence, account-row uniqueness, digest recomputation after independent account changes, and actual transport proxy selection. This harness alone does not verify those storage or runtime properties and does not establish real-account usability.
+
 ## Verification
 
 Run `uv run --python 3.12 --extra test pytest`. `tests/test_integrations.py` uses synthetic data and `httpx.MockTransport`, with no real credentials, browser state, logins, or external account traffic. Both public source inspection and mock verification are distinct from real-account acceptance. Real verification must be performed serially by the main agent.
