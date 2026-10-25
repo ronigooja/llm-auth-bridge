@@ -308,8 +308,9 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
 
         monkeypatch.setattr(module, "generate_code", synthetic_totp)
         monkeypatch.setattr(module, "seconds_remaining", lambda: 20)
+        from app.browser_identity import generate_profile
         assert module.run_login(
-            {"username": "synthetic@example.com", "password": "synthetic-password", "totp": "synthetic-seed"},
+            {"_browser_profile": generate_profile(set()), "username": "synthetic@example.com", "password": "synthetic-password", "totp": "synthetic-seed"},
             {"kind": "chatgpt-web-voice"},
             Control(),
         ) == credential

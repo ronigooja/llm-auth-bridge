@@ -314,8 +314,39 @@ def _get_session(context, username: str) -> dict | None:
     return session_result(data, username)
 
 
-def run_login(
-    account: dict, target: dict, control, saved_state: dict | None = None
+def _native_result(client, session, control):
+    # A running exchange is polled, never replayed. The worker deadline bounds
+    # this loop, including after a process restart or lost callback response.
+    while session and session["state"] in {"exchanging"}:
+        control.checkpoint()
+        time.sleep(0.5)
+        session = client.get()
+    return client.result(session)
+
+
+def run_login(account, target, control, saved_state=None):
+    from .cpa_oauth import NativeOAuth, enabled
+    if not enabled(target):
+        return _run_login(account, target, control, saved_state)
+    control.checkpoint()
+    reserved = control.native_session()
+    client = NativeOAuth(target, account, reserved["session_id"], remote_id=reserved.get("remote_id"))
+    try:
+        client.check()
+        session = client.get()
+        if session is None and not reserved["callback_submitted"]:
+            control.checkpoint()
+            session = client.start()
+        if reserved["callback_submitted"] or not session or session["state"] != "pending":
+            return _native_result(client, session, control)
+        return _run_login(account, target, control, saved_state, client, session)
+    finally:
+        client.close()
+
+
+def _run_login(
+    account: dict, target: dict, control, saved_state: dict | None = None,
+    native=None, native_session=None,
 ) -> dict:
     """Run one login while the worker holds its global browser lock.
 
@@ -348,7 +379,9 @@ def run_login(
                         else ["--proxy-bypass-list=<-loopback>"]
                     ),
                 )
+                from .browser_identity import context_options
                 context = browser.new_context(
+                    **context_options(account["_browser_profile"]),
                     storage_state=saved_state,
                     accept_downloads=False,
                     service_workers="block",
@@ -361,8 +394,12 @@ def run_login(
                     )
                 control.phase("browser", "Browser ready")
                 captured = []
-                verifier, challenge = pkce_pair()
-                state = secrets.token_urlsafe(32)
+                if native:
+                    verifier, challenge = None, None
+                    state = native_session["provider_state"]
+                else:
+                    verifier, challenge = pkce_pair()
+                    state = secrets.token_urlsafe(32)
 
                 def intercept(request_route):
                     captured.append(request_route.request.url)
@@ -375,7 +412,7 @@ def run_login(
                 context.route(REDIRECT_URI + "**", intercept)
                 if kind == "cliproxyapi":
                     page.goto(
-                        authorization_url(state, challenge),
+                        native_session["authorization_url"] if native else authorization_url(state, challenge),
                         wait_until="domcontentloaded",
                         timeout=30000,
                     )
@@ -402,6 +439,14 @@ def run_login(
                     control.checkpoint()
                     if captured:
                         code = validate_callback(captured[0], state)
+                        if native:
+                            # Fence and persist before network I/O: a lost POST
+                            # response or restart must never replay this code.
+                            control.native_callback_submitted()
+                            control.checkpoint()
+                            result = _native_result(native, native.callback(captured[0], state), control)
+                            _save(context, control)
+                            return result
                         control.phase("token_exchange", "Exchanging authorization code")
                         response = route.session.post(
                             AUTH_ORIGIN + "/oauth/token",

@@ -47,6 +47,40 @@ class Control:
     def browser_closed(self):
         self.queue.update(self.id, self.execution_id, takeover_available=0)
 
+    def native_session(self):
+        """Durably reserve a private native ID before any remote operation."""
+        with database(self.worker.settings.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = self.queue.owned(conn, self.id, self.execution_id)
+            if row["cancel_requested"]:
+                raise Cancelled()
+            stored = conn.execute("SELECT session_cipher FROM native_sessions WHERE task_id=?", (self.id,)).fetchone()
+            if stored:
+                return json.loads(decrypt(stored[0], self.worker.key))
+            old = conn.execute("SELECT remote_id FROM syncs WHERE account_id=? AND target_id=?", (row["account_id"], row["target_id"])).fetchone()
+            session = {"session_id": uuid.uuid4().hex, "callback_submitted": False,
+                       "remote_id": old[0] if old else row["remote_id"]}
+            conn.execute("INSERT INTO native_sessions(task_id,session_cipher) VALUES(?,?)",
+                         (self.id, encrypt(json.dumps(session), self.worker.key)))
+            return session
+
+    def native_callback_submitted(self):
+        self.checkpoint()
+        with database(self.worker.settings.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = self.queue.owned(conn, self.id, self.execution_id)
+            if row["cancel_requested"]:
+                raise Cancelled()
+            stored = conn.execute("SELECT session_cipher FROM native_sessions WHERE task_id=?", (self.id,)).fetchone()
+            if not stored:
+                raise ValueError("native session is unavailable")
+            session = json.loads(decrypt(stored[0], self.worker.key))
+            if session["callback_submitted"]:
+                raise ValueError("native callback was already submitted")
+            session["callback_submitted"] = True
+            conn.execute("UPDATE native_sessions SET session_cipher=? WHERE task_id=?",
+                         (encrypt(json.dumps(session), self.worker.key), self.id))
+
     def save_state(self, state):
         with database(self.worker.settings.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -140,6 +174,8 @@ class Worker:
             self.stopping.wait(max(0.2, min(5, self.settings.lease_seconds / 3)))
 
     def load(self, task):
+        from .browser_identity import load_or_create_profile
+        profile = load_or_create_profile(self.settings.db_path, self.key, self.queue, task)
         with database(self.settings.db_path) as conn:
             account = dict(
                 conn.execute(
@@ -168,6 +204,7 @@ class Worker:
             if account["proxy_cipher"]
             else None
         )
+        account["_browser_profile"] = profile
         account["_maintenance"] = task["kind"] == "maintenance"
         target["config"] = json.loads(decrypt(target["config_cipher"], self.key))
         return (
@@ -180,6 +217,7 @@ class Worker:
         self.current = task
         control = Control(self, task)
         try:
+            control.checkpoint()
             account, target, saved = self.load(task)
             if task["state"] == "sync_pending":
                 with database(self.settings.db_path) as conn:
@@ -251,6 +289,7 @@ class Worker:
                         account,
                         stable_remote_id,
                         _on_remote_id=persist_remote_id,
+                        **({"_checkpoint": control.checkpoint} if result.get("native_oauth") else {}),
                     )
                 if not synced.get("verified"):
                     raise ValueError("downstream did not verify credentials")
@@ -281,6 +320,7 @@ class Worker:
                     conn.execute(
                         "DELETE FROM pending_credentials WHERE task_id=?", (task["id"],)
                     )
+                    conn.execute("DELETE FROM native_sessions WHERE task_id=?", (task["id"],))
                     conn.execute(
                         "UPDATE accounts SET status='ready' WHERE id=?",
                         (task["account_id"],),
@@ -310,8 +350,13 @@ class Worker:
                     raise ValueError("credential identity mismatch")
                 self.queue.save_result(task["id"], task["execution_id"], result)
         except Cancelled:
+            if not self._cancel_native(task):
+                self._release_native(task, "native_cancel_pending", "Native cancellation remains pending; retry reconciliation")
+                return
             self._finish(task, "cancelled", "cancelled", "Task cancelled")
         except LeaseLost:
+            if self._release_native(task, "native_recovery", "Native OAuth interrupted; reconciliation queued"):
+                return
             # Finishing is fenced; an expired owner is never allowed to update a result.
             self._finish(
                 task,
@@ -320,6 +365,8 @@ class Worker:
                 "Worker stopped; start a new authorization",
             )
         except HumanTimeout:
+            if self._release_native(task, "native_recovery_failed", "Human input timed out; retry or cancel native authorization"):
+                return
             self._finish(
                 task,
                 "interrupted",
@@ -359,6 +406,8 @@ class Worker:
                 except LeaseLost:
                     pass
             else:
+                if self._release_native(task, "native_recovery_failed", safe_message or "Native OAuth requires reconciliation; retry or cancel this task"):
+                    return
                 reauth = "reauth_required" in str(exc)
                 if reauth:
                     with database(self.settings.db_path) as conn:
@@ -382,6 +431,53 @@ class Worker:
                 )
         finally:
             self.current = None
+
+    def _release_native(self, task, phase, message):
+        if task["state"] == "sync_pending":
+            return False
+        try:
+            with database(self.settings.db_path) as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self.queue.owned(conn, task["id"], task["execution_id"])
+                if not conn.execute("SELECT 1 FROM native_sessions WHERE task_id=?", (task["id"],)).fetchone():
+                    return False
+                # Keep the active task, preventing a second authorization from
+                # overwriting an unresolved native exchange or cancellation.
+                conn.execute("UPDATE tasks SET state='queued',phase=?,message=?,execution_id=NULL,lease_until=NULL,takeover_available=0,command_cipher=NULL WHERE id=? AND execution_id=?", (phase, message, task["id"], task["execution_id"]))
+                event(conn, task["id"])
+                return True
+        except LeaseLost:
+            return False
+
+    def _cancel_native(self, task):
+        try:
+            with database(self.settings.db_path) as conn:
+                self.queue.owned(conn, task["id"], task["execution_id"])
+                stored = conn.execute("SELECT session_cipher FROM native_sessions WHERE task_id=?", (task["id"],)).fetchone()
+                if not stored:
+                    return True
+                target_row = conn.execute("SELECT * FROM targets WHERE id=?", (task["target_id"],)).fetchone()
+                account_row = conn.execute("SELECT * FROM accounts WHERE id=?", (task["account_id"],)).fetchone()
+            session = json.loads(decrypt(stored[0], self.key))
+            target = dict(target_row)
+            target["config"] = json.loads(decrypt(target["config_cipher"], self.key))
+            account = dict(account_row)
+            account["proxy"] = json.loads(decrypt(account["proxy_cipher"], self.key)) if account["proxy_cipher"] else None
+            from .cpa_oauth import NativeOAuth
+            client = NativeOAuth(target, account, session["session_id"], remote_id=session["remote_id"])
+            try:
+                outcome = client.cancel()
+                if outcome and outcome["state"] not in {"cancelled", "expired", "failed"}:
+                    return False
+            finally:
+                client.close()
+            with database(self.settings.db_path) as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self.queue.owned(conn, task["id"], task["execution_id"])
+                conn.execute("DELETE FROM native_sessions WHERE task_id=?", (task["id"],))
+            return True
+        except Exception:
+            return False
 
     def _finish(self, task, *args):
         try:
