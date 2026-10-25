@@ -62,6 +62,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb xauth novnc x11vnc websockify
           set +e
+          timeout 180 uv run pytest -v -ra tests/test_browser_live.py -k codex_existing --junitxml=check-logs/codex.xml 2>&1 | tee check-logs/codex.log
+          targeted_result=${PIPESTATUS[0]}
+          printf '%s\n' "$targeted_result" > check-logs/codex.exit
+          if [ "$targeted_result" -ne 0 ]; then exit "$targeted_result"; fi
           xvfb-run -a -s "-screen 0 1920x1080x24" uv run pytest -v -ra -o faulthandler_timeout=120 --junitxml=check-logs/pytest.xml 2>&1 | tee check-logs/pytest.log
           result=${PIPESTATUS[0]}
           printf '%s\n' "$result" > check-logs/pytest.exit

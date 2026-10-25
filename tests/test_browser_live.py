@@ -274,7 +274,7 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, tmp_path, scenario
             def checkpoint(self):
                 elapsed = time.monotonic() - self.started
                 if elapsed > 15:
-                    page = pages[0] if pages else None
+                    page = page_holder[0] if page_holder else None
                     pytest.fail(
                         "Synthetic Codex flow exceeded 15s: "
                         f"url={page.url if page else None} phases={phases} "
@@ -585,6 +585,7 @@ def test_codex_existing_session_continuation_is_identity_bound_and_recovers(
     identity = "synthetic@example.com"
     callback_state = None
     pages, phases, waits, exchanges, launches = [], [], [], [], []
+    inputs = []
     manual_scenarios = {
         "mismatch", "duplicate", "suffix", "remove", "other_account",
         "multiple_identities", "external_link", "unsupported_card", "unknown", "absent", "disabled", "ambiguous",
@@ -675,6 +676,7 @@ def test_codex_existing_session_continuation_is_identity_bound_and_recovers(
                 def intercept(route):
                     nonlocal callback_state
                     parsed = urlsplit(route.request.url)
+                    inputs.append(route.request.url)
                     if parsed.path == "/oauth/authorize":
                         callback_state = parse_qs(parsed.query)["state"][0]
                         entry = "/unknown" if scenario == "unknown" else "/choose-an-account"
