@@ -12,8 +12,8 @@ from .db import database
 from .queue import Cancelled
 
 PROFILE_VERSION = 2
-VIEWPORT = {"width": 1280, "height": 720}
-SCREEN = {"width": 1440, "height": 900}
+VIEWPORT = {"width": 1760, "height": 960}
+SCREEN = {"width": 1920, "height": 1080}
 
 
 def generate_profile(used_dimensions: set[tuple[int, int]] | None = None) -> dict:
