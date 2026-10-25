@@ -102,9 +102,15 @@ Restore the matching encryption key separately. Treat backups as sensitive even 
 
 ## Target compatibility
 
-CLIProxyAPI uses `cpa-auth-files-v1`. ChatGPT Web Voice automatic synchronization requires an explicitly selected `bridge-v1` compatible service. A connection test proves reachability only; it does not verify real-account login, credential acceptance, or proxy behavior. Keep capabilities marked unverified until serial real-account acceptance passes.
+CLIProxyAPI defaults to `cpa-auth-files-v1`, including existing targets with no protocol selected. Keep that protocol for stock servers. Opt-in `cpa-native-oauth-v1` requires deploying the reviewed server extension first, then passing its authenticated capability connection test. See [native contract](integrations.md#cliproxyapi-native-oauth-extension). Do not select native against an unpatched target; no silent fallback is provided. Login browser automation remains enabled for either protocol. ChatGPT Web Voice automatic synchronization requires an explicitly selected `bridge-v1` compatible service. A connection test proves reachability only; it does not verify real-account login, credential acceptance, or proxy behavior. Keep capabilities marked unverified until serial real-account acceptance passes.
 
-## Local frontend verification
+## Schema v2 upgrade
+
+This release requires explicit offline `python -m app.cli migrate` before starting either service. Stop the app and worker and use the backup/migration sequence above with the matching encryption key. Version 2 adds encrypted per-account browser identities and encrypted native OAuth session references while preserving accounts, task history and existing saved browser sessions. Do not generate a replacement key. Deploy app, worker and frontend together; an older service must not open the upgraded database. Native CPA target enablement is a separate opt-in step after the patched backend is available. Existing auth-files and Voice targets retain their configuration.
+
+## CI frontend verification
+
+Run the following in GitHub-hosted CI, alongside the backend pytest suite; do not run builds or automated suites on the controller:
 
 ```sh
 cd frontend

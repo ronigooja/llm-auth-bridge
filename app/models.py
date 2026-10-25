@@ -127,7 +127,7 @@ class AccountCreate(AccountPatch):
 class TargetConfig(Model):
     base_url: str = Field(max_length=2048)
     allow_http: bool = False
-    compatibility: Literal["cpa-auth-files-v1", "bridge-v1"] | None = None
+    compatibility: Literal["cpa-auth-files-v1", "cpa-native-oauth-v1", "bridge-v1"] | None = None
 
     @model_validator(mode="after")
     def url(self):
