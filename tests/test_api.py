@@ -1,7 +1,7 @@
 import json
 import pytest
 from app.db import database
-from app.crypto import load_key, decrypt
+from app.crypto import load_key, decrypt, encrypt
 from app.queue import Queue
 
 
@@ -433,3 +433,93 @@ def test_code_api_phase_contract(admin, settings, resources, phase, expected_sta
     queue.update(task["id"], claimed["execution_id"], state="running", phase="resuming")
     assert admin.post(path, json=payload).status_code == 200
     assert admin.post(path, json={**payload, "submission_id": "late-new-submission"}).status_code == 409
+
+
+@pytest.mark.parametrize("compatibility", ["cpa-auth-files-v1", "cpa-native-oauth-v1"])
+def test_cpa_target_compatibility_round_trip_and_secret_preservation(admin, settings, compatibility):
+    created = admin.post(
+        "/api/v1/targets",
+        json={
+            "kind": "cliproxyapi",
+            "name": "Synthetic CPA",
+            "config": {
+                "base_url": "https://cpa.example.test",
+                "management_key": "synthetic-secret",
+                "compatibility": compatibility,
+            },
+        },
+    )
+    assert created.status_code == 200, created.text
+    target_id = created.json()["id"]
+    patched = admin.patch(
+        f"/api/v1/targets/{target_id}", json={"name": "Renamed synthetic CPA"}
+    )
+    assert patched.status_code == 200, patched.text
+    targets = admin.get("/api/v1/targets").json()["targets"]
+    target = next(target for target in targets if target["id"] == target_id)
+    assert target["config"]["compatibility"] == compatibility
+    assert "synthetic-secret" not in json.dumps(target)
+    with database(settings.db_path) as conn:
+        cipher = conn.execute(
+            "SELECT config_cipher FROM targets WHERE id=?", (target_id,)
+        ).fetchone()[0]
+    assert json.loads(decrypt(cipher, load_key(settings.key_file)))["management_key"] == "synthetic-secret"
+
+
+@pytest.mark.parametrize("state,phase", [
+    ("queued", "native_recovery"),
+    ("queued", "native_recovery_failed"),
+    ("queued", "native_cancel_pending"),
+    ("running", "browser"),
+    ("waiting_human", "email_code_required"),
+    ("sync_pending", "sync_failed"),
+])
+def test_native_session_blocks_account_and_target_mutation(admin, settings, resources, state, phase):
+    account_id, target_id = resources
+    queue = Queue(settings, load_key(settings.key_file))
+    task = queue.create(account_id, target_id)
+    with database(settings.db_path) as conn:
+        conn.execute("UPDATE tasks SET state=?,phase=? WHERE id=?", (state, phase, task["id"]))
+        conn.execute("INSERT INTO native_sessions(task_id,session_cipher) VALUES(?,?)", (task["id"], encrypt("{}", load_key(settings.key_file))))
+    changes = [
+        (f"accounts/{account_id}", {"username": "changed@example.test"}),
+        (f"accounts/{account_id}", {"password": "changed-synthetic-password"}),
+        (f"accounts/{account_id}", {"route_type": "proxy", "proxy": {"server": "http://proxy.example.test:8080"}}),
+        (f"accounts/{account_id}", {"target_ids": []}),
+        (f"targets/{target_id}", {"config": {"base_url": "https://different.example.test"}}),
+        (f"targets/{target_id}", {"config": {"compatibility": "cpa-native-oauth-v1"}}),
+    ]
+    for path, payload in changes:
+        assert admin.patch(f"/api/v1/{path}", json=payload).status_code == 409
+    assert admin.delete(f"/api/v1/accounts/{account_id}").status_code == 409
+    assert admin.delete(f"/api/v1/targets/{target_id}").status_code == 409
+    key_repair = admin.patch(f"/api/v1/targets/{target_id}", json={"name": "Repaired target", "config": {"management_key": "repaired-synthetic-key"}})
+    assert key_repair.status_code == (200 if state in ("queued", "sync_pending") else 409)
+    if state in ("queued", "sync_pending"):
+        with database(settings.db_path) as conn:
+            versions = conn.execute("SELECT t.target_version,r.version FROM tasks t JOIN targets r ON r.id=t.target_id WHERE t.id=?", (task["id"],)).fetchone()
+        assert versions[0] == versions[1]
+    if state == "queued":
+        if phase != "native_recovery":
+            assert admin.post(f"/api/v1/tasks/{task['id']}/retry-sync").status_code == 200
+        claimed = queue.claim()
+        assert claimed is not None and claimed["id"] == task["id"]
+        assert admin.patch(f"/api/v1/targets/{target_id}", json={"config": {"management_key": "another-synthetic-key"}}).status_code == 409
+    # A stale session attached to a terminal task must not lock resources forever.
+    with database(settings.db_path) as conn:
+        conn.execute("UPDATE tasks SET state='interrupted',execution_id=NULL WHERE id=?", (task["id"],))
+    assert admin.patch(f"/api/v1/accounts/{account_id}", json={"password": "changed-synthetic-password"}).status_code == 200
+    assert admin.patch(f"/api/v1/targets/{target_id}", json={"config": {"management_key": "changed-synthetic-key"}}).status_code == 200
+
+
+def test_non_native_idle_sync_preserves_target_secret_correction(admin, settings, resources):
+    account_id, target_id = resources
+    queue = Queue(settings, load_key(settings.key_file))
+    task = queue.create(account_id, target_id)
+    with database(settings.db_path) as conn:
+        conn.execute("UPDATE tasks SET state='sync_pending',phase='sync_failed' WHERE id=?", (task["id"],))
+    response = admin.patch(f"/api/v1/targets/{target_id}", json={"config": {"management_key": "corrected-synthetic-key"}})
+    assert response.status_code == 200, response.text
+    with database(settings.db_path) as conn:
+        versions = conn.execute("SELECT t.target_version,r.version FROM tasks t JOIN targets r ON r.id=t.target_id WHERE t.id=?", (task["id"],)).fetchone()
+    assert versions[0] == versions[1]

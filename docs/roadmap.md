@@ -2,12 +2,15 @@
 
 ## Current implementation
 
-The authenticated Chinese console, offline initialization/versioned migration, encrypted CRUD/import, global serial queue, fencing/leases/recovery, manual inputs/takeover tunnel, OpenAI browser/OAuth/session adapter, GOST account routes, CPA auth-files client, voice compatibility client, session maintenance, pending-sync recovery, backup/restore, multi-stage build definitions and CI are implemented.
+The authenticated Chinese console, offline initialization/versioned migration, encrypted CRUD/import, global serial queue, fencing/leases/recovery, manual inputs/takeover tunnel, OpenAI browser/OAuth/session adapter, GOST account routes, CPA auth-files client, opt-in native CPA OAuth extension client, stable encrypted per-account browser identity/session reuse, voice compatibility client, session maintenance, pending-sync recovery, backup/restore, multi-stage build definitions and CI are implemented.
 
 Synthetic acceptance on the ARM64 host uses Python 3.12, real local HTTP/WebSocket services, system Chromium and checksum-checked GOST 3.3.1. Frontend interaction tests and production build pass. Test-only root Chromium is unsandboxed; a separate ARM64 Compose acceptance check passed with headed Chromium sandboxing enabled as UID 10001. See development for prerequisites and coverage, and the final delivery record below.
 
+Native CPA authorization and stable browser identities are new implementation paths pending integrated CI and deployed acceptance. Native authorization requires the patched target extension and remains opt-in; existing auth-files targets retain their protocol. Browser identities use supported native context settings and do not guarantee complete fingerprint isolation.
+
 ## Required before full product acceptance
 
+- Deploy and synthetically accept the patched native CPA extension before enabling `cpa-native-oauth-v1`; verify staging/commit recovery, route use and token ownership. Complete serial real-account native authorization and Voice/Codex saved-session reuse acceptance. These remain unverified.
 - Supply a serially usable test account and deployed CPA/voice configurations securely outside Git. No real-account login, TOTP/email branch, downstream usability or voice session has been verified.
 - Complete serial real-account acceptance for the deployed voice `bridge-v1` overlay; authenticated management and the configured bridge target connection test have passed. The reviewed fork and isolated synthetic HTTP acceptance now pass; the ARM64 native gateway has been replaced with the patched image while preserving its existing runtime configuration. Synthetic persistence, credential digest, explicit route readback and unauthenticated rejection do not establish provider usability or actual account egress. Native voice synchronization remains unverified with real accounts.
 - Supply the actual mailbox site. Implement and accept its isolated list/detail reader, pre-request baseline, bounded polling, redirect/egress protection and fresh-message matching. Current code provides only conservative primitives and manual provider challenges.
