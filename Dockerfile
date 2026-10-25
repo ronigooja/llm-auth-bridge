@@ -20,12 +20,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends novnc tini \
 COPY pyproject.toml uv.lock ./
 RUN pip install --no-cache-dir uv==0.8.22 && uv sync --frozen --no-dev --no-install-project
 ENV PATH=/app/.venv/bin:$PATH
-COPY app/ ./app/
-COPY --from=frontend /build/dist/ ./frontend/dist/
 USER bridge
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
 FROM base AS app
+COPY app/ ./app/
+COPY --from=frontend /build/dist/ ./frontend/dist/
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
@@ -78,6 +78,9 @@ wait "$worker_pid"
 SCRIPT
 chmod 755 /usr/local/bin/bridge-worker
 SH
+# Keep source changes after browser/system dependencies so CI can reuse those layers.
+COPY app/ ./app/
+COPY --from=frontend /build/dist/ ./frontend/dist/
 USER bridge
 EXPOSE 6080
 CMD ["bridge-worker"]

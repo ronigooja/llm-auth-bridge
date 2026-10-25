@@ -229,8 +229,13 @@ The Checks workflow caches uv downloads keyed by `uv.lock`, npm downloads keyed
 by `frontend/package-lock.json`, and Playwright browser binaries keyed by runner
 OS, architecture, and `uv.lock`. Chromium installation still runs with
 `--with-deps` on every runner so restoring binaries does not skip required OS
-packages. Docker builds start only after checks succeed and reuse separate
-GitHub Actions BuildKit cache scopes for the app and worker targets. These caches
+packages. Browser installation has a five-minute timeout, and an explicit cache
+save runs immediately after successful installation so later test failures do
+not discard downloaded browsers. Docker builds start only after checks succeed and reuse separate
+GitHub Actions BuildKit cache scopes for the app and worker targets. The shared
+Docker dependency stage excludes application and frontend source; the worker
+copies application code and built UI only after its browser and system packages
+are installed, allowing source changes to reuse those dependency layers. These caches
 contain dependencies, browser executables, and image layers; account databases,
 credentials, saved browser devices, and runtime state are excluded. Cache storage
 uses GitHub Actions repository retention and eviction limits; test logs remain

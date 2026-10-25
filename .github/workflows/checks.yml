@@ -28,12 +28,22 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - run: uv sync --frozen --extra test --extra browser
-      - name: Cache Playwright browser binaries
-        uses: actions/cache@v4
+      - name: Restore Playwright browser binaries
+        id: playwright_cache
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ hashFiles('uv.lock') }}
-      - run: uv run playwright install --with-deps chromium
+      - name: Install Chromium and required OS packages
+        id: playwright_install
+        timeout-minutes: 5
+        run: uv run playwright install --with-deps chromium
+      - name: Save installed Playwright browser binaries before tests
+        if: ${{ steps.playwright_cache.outputs.cache-hit != 'true' && steps.playwright_install.outcome == 'success' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
       - name: Enable Chromium sandbox namespaces on ephemeral runner
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Install checksum-verified synthetic proxy test executable
