@@ -1,0 +1,2 @@
+# Unified patches preserve upstream context as source data.
+deploy/cpa/*.patch -whitespace
