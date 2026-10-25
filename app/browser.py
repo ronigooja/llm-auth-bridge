@@ -489,7 +489,7 @@ def _run_login(
     with account_route(account) as route:
         if account.get("route_type") == "proxy":
             control.phase("route_timezone", "Resolving account route timezone")
-            zone = resolve_timezone(route.session)
+            zone = resolve_timezone(route.session, checkpoint=control.checkpoint)
             control.update_timezone(zone)
             account["_browser_profile"]["context"]["timezone_id"] = zone
         # Snapshot only after context.close(), including exception paths.

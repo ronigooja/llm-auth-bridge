@@ -213,7 +213,8 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path,
     monkeypatch.setattr(playwright.sync_api, "sync_playwright", fake_playwright)
     monkeypatch.setattr(module, "account_route", fake_route)
     monkeypatch.setattr(module, "device_directory", fake_device)
-    def timezone(session):
+    def timezone(session, *, checkpoint=None):
+        assert callable(checkpoint)
         assert route_type == "proxy", "Direct routing must retain stored timezone"
         assert session == "synthetic-route-session"
         events.append("timezone_lookup")

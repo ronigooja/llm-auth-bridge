@@ -67,6 +67,26 @@ jobs:
           docker build --target app --label org.opencontainers.image.revision="$GITHUB_SHA" -t "llm-auth-bridge-app:$GITHUB_SHA" .
           docker build --target worker --label org.opencontainers.image.revision="$GITHUB_SHA" -t "llm-auth-bridge-worker:$GITHUB_SHA" .
           docker image inspect "llm-auth-bridge-app:$GITHUB_SHA" "llm-auth-bridge-worker:$GITHUB_SHA" --format '{{.Id}} {{.Architecture}} {{index .Config.Labels "org.opencontainers.image.revision"}}' > deployment-images/image-identities.txt
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          docker run --rm --init --user 10001:10001 \
+            --security-opt no-new-privileges:true \
+            --security-opt "seccomp=$GITHUB_WORKSPACE/deploy/playwright-seccomp.json" \
+            --shm-size 1gb --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777 \
+            -v "$GITHUB_WORKSPACE/tests:/acceptance/tests:ro" \
+            -e UV_CACHE_DIR=/tmp/uv-cache \
+            --entrypoint /bin/sh "llm-auth-bridge-worker:$GITHUB_SHA" -ec '
+              uv pip install --target /tmp/acceptance-deps pytest==8.3.5
+              Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp &
+              display_pid=$!
+              trap "kill $display_pid 2>/dev/null || true" EXIT
+              n=0
+              while [ ! -S /tmp/.X11-unix/X99 ]; do
+                n=$((n+1)); [ "$n" -lt 100 ]; sleep 0.1
+              done
+              export DISPLAY=:99 PYTHONPATH=/tmp/acceptance-deps:/app
+              python -c "from zoneinfo import ZoneInfo; assert ZoneInfo(\"America/Los_Angeles\").key == \"America/Los_Angeles\""
+              python -m pytest -v -s -p no:cacheprovider /acceptance/tests/test_browser_live.py -k headed_native_device
+            '
           docker save "llm-auth-bridge-app:$GITHUB_SHA" "llm-auth-bridge-worker:$GITHUB_SHA" | gzip -1 > deployment-images/images.tar.gz
           (cd deployment-images && sha256sum images.tar.gz > images.tar.gz.sha256)
       - uses: actions/upload-artifact@v4
