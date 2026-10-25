@@ -96,7 +96,7 @@ def test_browser_session_identity_and_expiry():
         session_result(data, "synthetic@example.com")
 
 
-@pytest.mark.parametrize("mode", ["manual", "maintenance", "cancel"])
+@pytest.mark.parametrize("mode", ["manual", "maintenance", "cancel", "browser_window", "browser_window_cancel"])
 @pytest.mark.parametrize("route_type", ["direct", "proxy"])
 @pytest.mark.parametrize("restored", [False, True, "incomplete"])
 @pytest.mark.parametrize("snapshot_failure", [False, True])
@@ -114,6 +114,8 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path,
 
         def goto(self, *a, **k):
             events.append("navigation")
+            if mode.startswith("browser_window"):
+                assert a[0] == "https://chatgpt.com"
 
         def wait_for_timeout(self, *a):
             pass
@@ -184,6 +186,8 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path,
 
     class Control:
         def checkpoint(self):
+            if mode == "browser_window_cancel" and "manual" in events:
+                raise Cancelled("synthetic window cancellation")
             if mode == "cancel" and any(
                 isinstance(e, tuple) and e[0] == "ready" for e in events
             ):
@@ -207,6 +211,8 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path,
         def wait_human(self, reason, **kwargs):
             nonlocal resumed
             events.append("manual")
+            if mode.startswith("browser_window"):
+                assert kwargs["phase"] == "browser_window"
             resumed = True
             return None
 
@@ -234,9 +240,21 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path,
         "route_type": route_type,
         "username": "synthetic@example.com",
         "password": "synthetic",
-        "_maintenance": mode == "maintenance",
+        "_maintenance": mode == "maintenance" or mode.startswith("browser_window"),
     }
-    if mode == "maintenance":
+    if mode.startswith("browser_window"):
+        monkeypatch.setattr(module, "_get_session", lambda *a: pytest.fail("Browser window cannot retrieve credentials"))
+        if mode == "browser_window_cancel":
+            with pytest.raises(Cancelled):
+                module.run_browser_window(account, Control(), {"cookies": [], "origins": []})
+        elif snapshot_failure or close_failure:
+            expected = "Browser device could not close" if close_failure else "Browser device session could not be saved"
+            with pytest.raises(BrowserError, match="^" + expected + "$"):
+                module.run_browser_window(account, Control(), {"cookies": [], "origins": []})
+        else:
+            assert module.run_browser_window(account, Control(), {"cookies": [], "origins": []}) is None
+            assert len([e for e in events if isinstance(e, tuple) and e[0] == "saved"]) == 2
+    elif mode == "maintenance":
         with pytest.raises(module.ReauthenticationRequired, match="^reauth_required$"):
             module.run_login(account, {"kind": "chatgpt-web-voice"}, Control(), {"cookies": [], "origins": []})
     elif mode == "cancel":
@@ -252,7 +270,7 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path,
             == result
         )
     assert sum(isinstance(e, tuple) and e[0] == "launch" for e in events) == 1
-    assert ("manual" in events) == (mode == "manual")
+    assert ("manual" in events) == (mode == "manual" or mode.startswith("browser_window"))
     assert [e for e in events if e != "device_aborted"][-4:] == ["session_snapshot", "closed", "control_closed", "device_snapshot"]
     assert ("device_aborted" in events) == close_failure
     assert "device_ready" in events
