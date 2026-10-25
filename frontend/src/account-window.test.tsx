@@ -126,7 +126,7 @@ describe("unified account window", () => {
     expect(window.open).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("alert")).toBeNull();
   });
-  it("follows dependent Codex work and explicitly rebinds an ended popup without creating extra windows", async () => {
+  it("keeps polling through Voice synchronization, follows Codex, and explicitly rebinds an ended popup", async () => {
     vi.useFakeTimers();
     const target = popup();
     const voice = { id: 7, account_id: 1, state: "running", takeover_available: true };
@@ -151,6 +151,13 @@ describe("unified account window", () => {
     voice.state = "waiting_human";
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     expect(target.document.querySelector("iframe")?.src).toContain("tasks/7/takeover");
+    voice.state = "running";
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    voice.state = "sync_pending";
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(within(target.document.body).getByRole("status").textContent).toContain("正在同步账号");
+    expect(target.document.querySelector("iframe")).toBeNull();
+    expect(within(target.document.body).queryByRole("button", { name: "接管" })).toBeNull();
     voice.state = "succeeded";
     await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
     expect(target.document.querySelector("iframe")).toBeNull();
