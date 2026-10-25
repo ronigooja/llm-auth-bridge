@@ -95,9 +95,26 @@ def packaged_vnc(settings, tmp_path):
             log.close()
 
 
-def test_packaged_novnc_connects_read_only_without_pausing_task(settings, resources, tmp_path):
+def assert_read_only_viewer(frame):
+    frame.wait_for_function("""() => {
+        const canvas = document.querySelector('#noVNC_container canvas');
+        return document.documentElement.classList.contains('noVNC_connected')
+            && canvas && canvas.width > 0 && canvas.height > 0;
+    }""", timeout=30000)
+    assert frame.evaluate("""async () => {
+        const {default: UI} = await import('/novnc/app/ui.js');
+        return UI.rfb.viewOnly;
+    }""") is True
+
+
+@pytest.mark.parametrize("viewer", ["direct", "account-popup"])
+def test_packaged_novnc_connects_read_only_without_pausing_task(settings, resources, tmp_path, viewer):
     account, target = resources
     with packaged_vnc(settings, tmp_path) as config:
+        if viewer == "account-popup" and not Path("frontend/dist/index.html").is_file():
+            if os.environ.get("CI"):
+                pytest.fail("Build the frontend before account popup acceptance")
+            pytest.skip("Build the frontend before account popup acceptance")
         queue = Queue(config, load_key(config.key_file))
         task = queue.create(account, target)
         claim = queue.claim()
@@ -111,27 +128,42 @@ def test_packaged_novnc_connects_read_only_without_pausing_task(settings, resour
                 )
                 assert response.status == 200
                 page = context.new_page()
-                query = urlencode({
-                    "autoconnect": "true", "shared": "true", "view_only": "true",
-                    "resize": "off", "path": f"api/v1/tasks/{task['id']}/monitor",
-                })
-                page.goto(f"{url}/novnc/vnc.html?{query}")
-                page.wait_for_function("""() => {
-                    const canvas = document.querySelector('#noVNC_container canvas');
-                    return document.documentElement.classList.contains('noVNC_connected')
-                        && canvas && canvas.width > 0 && canvas.height > 0;
-                }""", timeout=30000)
-                assert page.evaluate("""async () => {
-                    const {default: UI} = await import('/novnc/app/ui.js');
-                    return UI.rfb.viewOnly;
-                }""") is True
+                if viewer == "direct":
+                    query = urlencode({
+                        "autoconnect": "true", "shared": "true", "view_only": "true",
+                        "resize": "off", "path": f"api/v1/tasks/{task['id']}/monitor",
+                    })
+                    page.goto(f"{url}/novnc/vnc.html?{query}")
+                    assert_read_only_viewer(page)
+                else:
+                    page.goto(url)
+                    page.get_by_role("button", name="账号", exact=True).click()
+                    card = page.locator("article.resource").filter(
+                        has=page.get_by_role("heading", name="test@example.com", exact=True),
+                    )
+                    with page.expect_popup() as opened:
+                        card.get_by_role("button", name="账号窗口", exact=True).click()
+                    popup = opened.value
+                    assert popup.evaluate("window.opener") is None
+                    iframe = popup.locator('iframe[title="账号浏览器"]')
+                    iframe.wait_for(state="attached")
+                    assert f"api/v1/tasks/{task['id']}/monitor" in iframe.get_attribute("src")
+                    frame = iframe.element_handle().content_frame()
+                    assert frame is not None
+                    assert_read_only_viewer(frame)
+                    with popup.expect_event("close"):
+                        popup.get_by_role("button", name="隐藏账号窗口", exact=True).click()
                 with database(config.db_path) as conn:
                     row = conn.execute(
-                        "SELECT state,execution_id,takeover_requested FROM tasks WHERE id=?",
+                        "SELECT state,execution_id,takeover_requested,cancel_requested FROM tasks WHERE id=?",
                         (task["id"],),
                     ).fetchone()
                     assert row["state"] == "running"
                     assert row["execution_id"] == claim["execution_id"]
                     assert row["takeover_requested"] == 0
+                    assert row["cancel_requested"] == 0
+                    assert conn.execute(
+                        "SELECT count(*) FROM tasks WHERE account_id=?", (account,),
+                    ).fetchone()[0] == 1
             finally:
                 context.close()
