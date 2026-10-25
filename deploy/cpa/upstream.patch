@@ -1,6 +1,6 @@
 diff --git a/docs/bridge-oauth-v8.md b/docs/bridge-oauth-v8.md
 new file mode 100644
-index 00000000..f82f3c84
+index 00000000..5f046f3b
 --- /dev/null
 +++ b/docs/bridge-oauth-v8.md
 @@ -0,0 +1,26 @@
@@ -25,17 +25,17 @@ index 00000000..f82f3c84
 +
 +Sessions survive restart under `auth-dir/.bridge-oauth`, outside the credential scanner. Secret session files and credential files use mode 0600 and the session directory uses 0700. Writes are atomic and synced before the next irreversible operation. Session operations share process and file locks. Cancellation serializes with an in-flight exchange; it removes staged secrets after that exchange ends. A committing or completed session cannot be cancelled. Pending/staged sessions expire after 45 minutes; expiry is applied and secrets scrubbed on the next access. Unaccessed expired files remain restricted on disk, so operators should retain this directory as credential material.
 +
-+Start resolves exactly one identity record, including disabled records; duplicates and different identities are rejected. Before exchange and commit, the extension rechecks identity and the original credential fingerprint. Commit locks the native credential file and refuses to overwrite credentials refreshed since start. Unrelated current settings are preserved; the explicit route replaces `proxy_url`. The atomic credential write includes a session marker. A lost commit response is reconciled using that marker before any replacement write, preserving subsequently rotated tokens. A committing session must be retried through POST commit to reconcile; GET alone does not perform a commit.
++Start scans credential files recursively with case-insensitive `.json` extension matching, including disabled records; duplicates and different identities are rejected. This bridge only adopts top-level filenames with a lowercase `.json` extension. A matching nested or uppercase-extension credential fails closed with HTTP 409, including when a top-level duplicate also exists; it never creates a second record to bypass this boundary. The private root `.bridge-oauth` staging directory is excluded. Before exchange and commit, the extension rechecks identity and the original credential fingerprint. Commit locks the native credential file and refuses to overwrite credentials refreshed since start. Unrelated current settings are preserved; the explicit route replaces `proxy_url`. The atomic credential write includes a session marker. A lost commit response is reconciled using that marker before any replacement write, preserving subsequently rotated tokens. A committing session must be retried through POST commit to reconcile; GET alone does not perform a commit.
 +
 +The staged `credential_digest` is an opaque expected token fingerprint. Completed replies include `record: {remote_id, identity, route, credential_digest}` from an actual disk read on every response. Clients must compare all four fields against the expected session binding and staged digest before declaring synchronization successful. A later refresh changes the record digest; retries never roll it back. The normal native auth-directory watcher activates the committed file asynchronously. This disk readback does not assert runtime reload completion, deployed health or provider acceptance. The extension does not support alternate token storage backends or execute login itself.
 +
 +Validation uses synthetic fixtures only. Regression tests cover staging isolation, restart, repeat commit after rotation, compare-and-swap rejection, settings preservation, exchange uncertainty, cancellation, expiry, ambiguous identity and strict callback validation. Compilation and executable tests must run in GitHub Actions; do not run them on the controller.
 diff --git a/internal/api/handlers/management/bridge_oauth.go b/internal/api/handlers/management/bridge_oauth.go
 new file mode 100644
-index 00000000..7956eee1
+index 00000000..1f62114c
 --- /dev/null
 +++ b/internal/api/handlers/management/bridge_oauth.go
-@@ -0,0 +1,513 @@
+@@ -0,0 +1,527 @@
 +package management
 +
 +import (
@@ -45,6 +45,7 @@ index 00000000..7956eee1
 +	"encoding/json"
 +	"errors"
 +	"fmt"
++	"io/fs"
 +	"net/http"
 +	"net/mail"
 +	"net/url"
@@ -193,25 +194,38 @@ index 00000000..7956eee1
 +
 +// Resolve against persisted records, including disabled records. Never select an arbitrary duplicate.
 +func bridgeResolve(dir string, b bridgeBinding) (string, map[string]any, error) {
-+	entries, err := os.ReadDir(dir)
-+	if err != nil {
-+		return "", nil, err
-+	}
 +	matches := []string{}
-+	for _, entry := range entries {
-+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-+			continue
++	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
++		if walkErr != nil {
++			return errors.New("cannot enumerate credential records")
 +		}
-+		data, errRead := bridgeRead(filepath.Join(dir, entry.Name()))
++		if entry.IsDir() {
++			if path == filepath.Join(dir, ".bridge-oauth") {
++				return filepath.SkipDir
++			}
++			return nil
++		}
++		if !strings.HasSuffix(strings.ToLower(entry.Name()), ".json") {
++			return nil
++		}
++		data, errRead := bridgeRead(path)
 +		if errRead != nil {
-+			return "", nil, errors.New("cannot inspect credential records")
++			return errors.New("cannot inspect credential records")
 +		}
 +		if data["type"] == "codex" {
 +			email, _ := data["email"].(string)
 +			if strings.EqualFold(email, b.Identity) {
-+				matches = append(matches, entry.Name())
++				relative, errRelative := filepath.Rel(dir, path)
++				if errRelative != nil || !bridgeRecordName(relative) {
++					return errors.New("identity has an unsupported nested or uppercase credential filename")
++				}
++				matches = append(matches, relative)
 +			}
 +		}
++		return nil
++	})
++	if err != nil {
++		return "", nil, err
 +	}
 +	if len(matches) > 1 {
 +		return "", nil, errors.New("ambiguous identity")
@@ -551,16 +565,17 @@ index 00000000..7956eee1
 +}
 diff --git a/internal/api/handlers/management/bridge_oauth_test.go b/internal/api/handlers/management/bridge_oauth_test.go
 new file mode 100644
-index 00000000..24aeb62c
+index 00000000..5add0547
 --- /dev/null
 +++ b/internal/api/handlers/management/bridge_oauth_test.go
-@@ -0,0 +1,202 @@
+@@ -0,0 +1,236 @@
 +package management
 +
 +import (
 +	"context"
 +	"encoding/json"
 +	"errors"
++	"fmt"
 +	"net/http/httptest"
 +	"net/url"
 +	"os"
@@ -756,6 +771,39 @@ index 00000000..24aeb62c
 +		}
 +	}
 +	bridgeRequest(t, r, "PUT", bridgeTestPath, bridgeTestStart, 409)
++}
++
++// Native enumeration includes nested paths and case-insensitive extensions. The
++// bridge deliberately refuses these records rather than creating a duplicate.
++func TestBridgeOAuthUnsupportedRecordBoundary(t *testing.T) {
++	for _, name := range []string{"nested/existing.json", "existing.JSON", "nested/existing.JSON"} {
++		for _, duplicate := range []bool{false, true} {
++			t.Run(name+fmt.Sprint(duplicate), func(t *testing.T) {
++				_, r, f, dir := bridgeFixture(t)
++				path := filepath.Join(dir, filepath.FromSlash(name))
++				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
++					t.Fatal(err)
++				}
++				data := map[string]any{"type": "codex", "email": "fixture@example.invalid", "refresh_token": "synthetic-existing"}
++				if err := bridgeWrite(path, data); err != nil {
++					t.Fatal(err)
++				}
++				if duplicate {
++					if err := bridgeWrite(filepath.Join(dir, "top-level.json"), data); err != nil {
++						t.Fatal(err)
++					}
++				}
++				bridgeRequest(t, r, "PUT", bridgeTestPath, bridgeTestStart, 409)
++				if f.calls != 0 {
++					t.Fatal("unsupported record exchanged tokens")
++				}
++				matches, err := filepath.Glob(filepath.Join(dir, "codex-bridge-*.json"))
++				if err != nil || len(matches) != 0 {
++					t.Fatal("created duplicate record", matches, err)
++				}
++			})
++		}
++	}
 +}
 diff --git a/internal/api/handlers/management/handler.go b/internal/api/handlers/management/handler.go
 index 21747e58..d8a7a5f8 100644
