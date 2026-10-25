@@ -68,6 +68,17 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build frontend for packaged noVNC acceptance
+        timeout-minutes: 4
+        run: |
+          set -Eeuo pipefail
+          npm ci --ignore-scripts --prefix frontend
+          npm run build --prefix frontend
       - name: Install Python and browser dependencies
         timeout-minutes: 5
         run: |
