@@ -4,7 +4,7 @@ import { api } from "./api";
 import { requestId } from "./id";
 
 type BrowserTask = { id: number; account_id?: number; depends_on_task_id?: number | null; state: string; kind?: string; phase?: string; takeover_available?: boolean };
-const active = new Set(["queued", "running", "waiting_human"]);
+const active = new Set(["queued", "running", "waiting_human", "sync_pending"]);
 export function accountViewerUrl(id: number, interactive: boolean) {
   return `/novnc/vnc.html?autoconnect=true&resize=scale&view_only=${!interactive}&shared=true&path=api/v1/tasks/${id}/${interactive ? "takeover" : "monitor"}`;
 }
@@ -173,8 +173,8 @@ export function useAccountWindow(enabled: boolean) {
     {host && createPortal(<>
       <header style={{ padding: 12, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12 }}>
         <strong>账号窗口 · 账号 #{account.current}</strong>
-        <span role="status">{!task ? "正在准备账号浏览器…" : closing ? "正在保存浏览器状态，请稍候…" : !active.has(task.state) ? task.state === "succeeded" ? "任务已完成。" : "任务已结束，请检查任务记录。" : interactive ? "可操作浏览器" : "正在观察自动操作（只读）"}</span>
-        {task && active.has(task.state) && !idle(task) && !interactive && <button disabled={busy || !available || takeoverRequested} onClick={() => void takeControl()}>{takeoverRequested ? "正在等待接管…" : "接管"}</button>}
+        <span role="status">{!task ? "正在准备账号浏览器…" : closing ? "正在保存浏览器状态，请稍候…" : task.state === "sync_pending" ? "正在同步账号，请稍候…" : !active.has(task.state) ? task.state === "succeeded" ? "任务已完成。" : "任务已结束，请检查任务记录。" : interactive ? "可操作浏览器" : "正在观察自动操作（只读）"}</span>
+        {task && active.has(task.state) && task.state !== "sync_pending" && !idle(task) && !interactive && <button disabled={busy || !available || takeoverRequested} onClick={() => void takeControl()}>{takeoverRequested ? "正在等待接管…" : "接管"}</button>}
         {task && idle(task) && active.has(task.state)
           ? <button disabled={busy || closing || task.state !== "waiting_human"} onClick={() => void finish()}>保存并关闭账号窗口</button>
           : <button onClick={hide}>隐藏账号窗口</button>}
