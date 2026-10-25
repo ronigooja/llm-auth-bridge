@@ -7,7 +7,11 @@ import sqlite3
 from .config import DB_PATH
 from .crypto import encrypt, decrypt
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+IDENTITY_SCHEMA = """
+CREATE TABLE browser_profiles(account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,profile_cipher TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE native_sessions(task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,session_cipher TEXT NOT NULL);
+"""
 SCHEMA = """
 CREATE TABLE accounts (
  id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, password_cipher TEXT NOT NULL,
@@ -46,7 +50,7 @@ CREATE TABLE login_attempts(client TEXT PRIMARY KEY,attempts INTEGER NOT NULL,re
 CREATE TABLE runtime(id TEXT PRIMARY KEY,heartbeat REAL NOT NULL,browser_available INTEGER NOT NULL);
 CREATE TABLE settings(id INTEGER PRIMARY KEY CHECK(id=1),maintenance_enabled INTEGER NOT NULL DEFAULT 1,retention_days INTEGER NOT NULL DEFAULT 30);
 INSERT INTO settings(id) VALUES(1);
-"""
+""" + IDENTITY_SCHEMA
 
 
 def connect(path: Path = DB_PATH):
@@ -185,6 +189,22 @@ def migrate(path: Path, key: bytes):
                     )
             else:
                 _statements(conn, SCHEMA)
+            version = SCHEMA_VERSION
+            conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        if version == 1:
+            # Verify the supplied key before changing an existing versioned DB.
+            admin = conn.execute("SELECT key_check FROM admin WHERE id=1").fetchone()
+            if admin and decrypt(admin["key_check"], key) != "llm-auth-bridge":
+                raise ValueError("database key check failed")
+            for table, column in (
+                ("accounts", "password_cipher"),
+                ("targets", "config_cipher"),
+                ("browser_sessions", "state_cipher"),
+            ):
+                for row in conn.execute(f"SELECT {column} FROM {table}"):
+                    decrypt(row[column], key)
+            # Additive migration: retain existing account and encrypted session rows.
+            _statements(conn, IDENTITY_SCHEMA)
             conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         conn.commit()
         # Scrub dropped plaintext proxy pages from the main file and WAL.
