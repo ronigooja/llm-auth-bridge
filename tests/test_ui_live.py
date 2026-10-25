@@ -96,11 +96,23 @@ def test_built_ui_completes_import_login_human_code_and_sync(settings):
         expect(page.get_by_role("heading", name="Synthetic CPA")).to_be_visible()
         page.get_by_role("button", name="添加目标", exact=True).click()
         page.get_by_label("目标名称").fill("Synthetic Voice")
-        page.get_by_label("类型", exact=True).select_option("chatgpt-web-voice")
+        target_dialog = page.get_by_role("dialog", name="添加目标")
+        # Field wraps the select: its label text can include option contents.
+        # Match the type control by its supported kind, rather than exact label text.
+        target_kind = target_dialog.get_by_role("combobox").filter(
+            has=page.locator('option[value="chatgpt-web-voice"]')
+        )
+        target_kind.select_option("chatgpt-web-voice")
+        expect(target_kind).to_have_value("chatgpt-web-voice")
         page.get_by_label("服务地址", exact=True).fill("https://voice.example.test")
         page.get_by_label("管理员用户名（留空保留）", exact=True).fill("synthetic-admin")
-        page.get_by_label("管理员密码（留空保留）", exact=True).fill("synthetic-voice-secret")
-        page.get_by_role("button", name="保存目标").click()
+        target_dialog.get_by_label("管理员密码（留空保留）", exact=True).fill("synthetic-voice-secret")
+        compatibility = target_dialog.get_by_role("combobox").filter(
+            has=page.locator('option[value="bridge-v1"]')
+        )
+        compatibility.select_option("bridge-v1")
+        expect(compatibility).to_have_value("bridge-v1")
+        target_dialog.get_by_role("button", name="保存目标").click()
         expect(page.get_by_role("heading", name="Synthetic Voice")).to_be_visible()
         page.get_by_role("button", name="账号", exact=True).click()
         page.get_by_role("button", name="导入账号", exact=True).click()
@@ -119,8 +131,13 @@ def test_built_ui_completes_import_login_human_code_and_sync(settings):
         page.get_by_label("Synthetic Voice", exact=True).check()
         page.get_by_role("button", name="保存账号").click()
         page.get_by_role("button", name="登录 Codex", exact=True).click()
-        expect(page.get_by_label("第一步：ChatGPT Web Voice")).to_have_value("2")
-        expect(page.get_by_label("第二步：CLIProxyAPI")).to_have_value("1")
+        login_dialog = page.get_by_role("dialog", name="登录 Codex")
+        expect(login_dialog.get_by_role("combobox").filter(
+            has=page.get_by_role("option", name="Synthetic Voice", exact=True)
+        )).to_have_value("2")
+        expect(login_dialog.get_by_role("combobox").filter(
+            has=page.get_by_role("option", name="Synthetic CPA", exact=True)
+        )).to_have_value("1")
         page.get_by_role("dialog").get_by_role(
             "button", name="登录 Codex", exact=True
         ).click()
