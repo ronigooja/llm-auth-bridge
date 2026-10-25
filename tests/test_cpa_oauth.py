@@ -293,7 +293,7 @@ def test_expired_uncommitted_native_session_does_not_claim_remote_write():
     assert error.value.write_possible is False
 
 
-def test_native_browser_uses_saved_account_context_and_fences_callback(monkeypatch):
+def test_native_browser_uses_saved_account_context_and_fences_callback(monkeypatch, tmp_path):
     from contextlib import contextmanager
     from types import SimpleNamespace
     import app.browser as browser_module
@@ -312,6 +312,7 @@ def test_native_browser_uses_saved_account_context_and_fences_callback(monkeypat
         def route(self, pattern, handler): self.handler = handler
         def set_default_timeout(self, value): pass
         def new_page(self): return Page(self)
+        def cookies(self): return []
         def storage_state(self, *, indexed_db):
             assert indexed_db is True
             return saved
@@ -331,7 +332,7 @@ def test_native_browser_uses_saved_account_context_and_fences_callback(monkeypat
     class Chromium:
         def launch_persistent_context(self, **kwargs):
             assert "storage_state" not in kwargs
-            assert kwargs["user_data_dir"] == "/synthetic-device"
+            assert kwargs["user_data_dir"] == str(tmp_path)
             assert all(kwargs[k] == v for k, v in profile["context"].items())
             assert "identity_seed" not in kwargs
             events.append("context")
@@ -368,7 +369,7 @@ def test_native_browser_uses_saved_account_context_and_fences_callback(monkeypat
     def fake_device(account, control):
         from pathlib import Path
         try:
-            yield SimpleNamespace(path=Path("/synthetic-device"), restored=True)
+            yield SimpleNamespace(path=tmp_path, restored=True)
         finally:
             assert events[-1] == "browser_closed"
 
