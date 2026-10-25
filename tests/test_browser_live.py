@@ -10,6 +10,7 @@ import os
 import json
 import shutil
 import threading
+import time
 from urllib.parse import urlsplit
 
 import httpx
@@ -267,8 +268,18 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, tmp_path, scenario
             yield SimpleNamespace(playwright_proxy=None)
 
         class Control:
+            def __init__(self):
+                self.started = time.monotonic()
+
             def checkpoint(self):
-                pass
+                elapsed = time.monotonic() - self.started
+                if elapsed > 15:
+                    page = pages[0] if pages else None
+                    pytest.fail(
+                        "Synthetic Codex flow exceeded 15s: "
+                        f"url={page.url if page else None} phases={phases} "
+                        f"requests={inputs}"
+                    )
 
             def phase(self, phase, reason):
                 phases.append(phase)
@@ -687,8 +698,18 @@ def test_codex_existing_session_continuation_is_identity_bound_and_recovers(
             yield SimpleNamespace(chromium=Chromium())
 
         class Control:
+            def __init__(self):
+                self.started = time.monotonic()
+
             def checkpoint(self):
-                pass
+                elapsed = time.monotonic() - self.started
+                if elapsed > 15:
+                    page = pages[0] if pages else None
+                    pytest.fail(
+                        "Synthetic Codex flow exceeded 15s: "
+                        f"url={page.url if page else None} phases={phases} "
+                        f"requests={inputs}"
+                    )
 
             def phase(self, phase, reason):
                 phases.append(phase)
