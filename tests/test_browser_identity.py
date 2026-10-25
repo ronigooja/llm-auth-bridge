@@ -157,6 +157,10 @@ def test_backup_restore_preserves_encrypted_profile_and_state(settings, resource
 def version_one(settings, account_id, key):
     cipher = encrypt(json.dumps({'cookies': [], 'origins': []}), key)
     with database(settings.db_path) as conn:
+        conn.execute('DROP TABLE browser_requests')
+        conn.execute('DROP TABLE login_flows')
+        conn.execute('DROP INDEX task_dependency')
+        conn.execute('ALTER TABLE tasks DROP COLUMN depends_on_task_id')
         conn.execute('DROP TABLE browser_devices')
         conn.execute('DROP TABLE browser_profiles')
         conn.execute('DROP TABLE native_sessions')

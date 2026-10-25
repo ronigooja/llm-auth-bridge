@@ -15,6 +15,7 @@ PUBLIC_TASK = (
     "account_id",
     "target_id",
     "kind",
+    "depends_on_task_id",
     "state",
     "phase",
     "message",
@@ -48,11 +49,21 @@ def public_task(row):
     return {k: row[k] for k in PUBLIC_TASK}
 
 
+def settle_dependencies(conn):
+    rows = conn.execute("""SELECT child.id FROM tasks child LEFT JOIN tasks parent ON parent.id=child.depends_on_task_id
+        WHERE child.state='queued' AND child.depends_on_task_id IS NOT NULL
+        AND (parent.id IS NULL OR parent.state IN ('failed','cancelled','interrupted'))""").fetchall()
+    for row in rows:
+        conn.execute("UPDATE tasks SET state='interrupted',phase='prerequisite_failed',message='Previous login did not complete; start a new flow',updated_at=CURRENT_TIMESTAMP WHERE id=?", (row["id"],))
+        conn.execute("INSERT INTO task_events(task_id,state,phase,message,takeover_available) SELECT id,state,phase,message,takeover_available FROM tasks WHERE id=?", (row["id"],))
+
+
 def event(conn, task_id):
     conn.execute(
         "INSERT INTO task_events(task_id,state,phase,message,takeover_available) SELECT id,state,phase,message,takeover_available FROM tasks WHERE id=?",
         (task_id,),
     )
+    settle_dependencies(conn)
 
 
 class Queue:
@@ -63,6 +74,10 @@ class Queue:
         with database(self.settings.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
             if idempotency_key:
+                if conn.execute("SELECT 1 FROM browser_requests WHERE idempotency_key=?", (idempotency_key,)).fetchone():
+                    raise Conflict("idempotency key belongs to another request")
+                if conn.execute("SELECT 1 FROM login_flows WHERE idempotency_key=?", (idempotency_key,)).fetchone():
+                    raise Conflict("idempotency key belongs to another request")
                 old = conn.execute(
                     "SELECT * FROM tasks WHERE idempotency_key=?", (idempotency_key,)
                 ).fetchone()
@@ -115,6 +130,75 @@ class Queue:
                 ).fetchone()
             )
 
+    def create_login_flow(self, account_id, voice_target_id, cli_target_id, idempotency_key=None):
+        with database(self.settings.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if idempotency_key:
+                if conn.execute("SELECT 1 FROM browser_requests WHERE idempotency_key=?", (idempotency_key,)).fetchone():
+                    raise Conflict("idempotency key belongs to another request")
+                old = conn.execute("SELECT * FROM login_flows WHERE idempotency_key=?", (idempotency_key,)).fetchone()
+                if old:
+                    tasks = [conn.execute("SELECT * FROM tasks WHERE id=?", (old[k],)).fetchone() for k in ("voice_task_id", "cli_task_id")]
+                    if [(t["account_id"], t["target_id"]) for t in tasks] != [(account_id, voice_target_id), (account_id, cli_target_id)]:
+                        raise Conflict("idempotency key belongs to another request")
+                    return [public_task(t) for t in tasks]
+                if conn.execute("SELECT 1 FROM tasks WHERE idempotency_key=?", (idempotency_key,)).fetchone():
+                    raise Conflict("idempotency key belongs to another request")
+            account = conn.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+            if not account:
+                raise NotFound("account not found")
+            if account["route_type"] == "unset":
+                raise Conflict("choose direct or proxy before starting login")
+            targets = []
+            for target_id, kind in ((voice_target_id, "chatgpt-web-voice"), (cli_target_id, "cliproxyapi")):
+                target = conn.execute("SELECT * FROM targets WHERE id=?", (target_id,)).fetchone()
+                if not target:
+                    raise NotFound("target not found")
+                if target["kind"] != kind:
+                    raise Conflict("login flow requires ChatGPT Web Voice then CLIProxyAPI")
+                if not conn.execute("SELECT 1 FROM account_targets WHERE account_id=? AND target_id=?", (account_id, target_id)).fetchone():
+                    raise Conflict("bind both targets to this account first")
+                if conn.execute("SELECT 1 FROM tasks WHERE account_id=? AND target_id=? AND state IN ('queued','running','waiting_human','sync_pending')", (account_id, target_id)).fetchone():
+                    raise Conflict("an active task already exists for this account and target")
+                targets.append(target)
+            ids = []
+            for target in targets:
+                cur = conn.execute("INSERT INTO tasks(account_id,target_id,kind,state,phase,message,account_version,target_version,depends_on_task_id) VALUES(?,?,'login','queued',?,?,?,?,?)", (account_id, target["id"], "waiting_prerequisite" if ids else "queued", "Waiting for previous verified login" if ids else "Waiting for worker", account["version"], target["version"], ids[0] if ids else None))
+                ids.append(cur.lastrowid)
+                event(conn, cur.lastrowid)
+            conn.execute("INSERT INTO login_flows VALUES(?,?,?)", (*ids, idempotency_key))
+            return [public_task(conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()) for task_id in ids]
+
+    def open_browser(self, account_id, idempotency_key=None):
+        with database(self.settings.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if idempotency_key:
+                alias = conn.execute("SELECT tasks.* FROM browser_requests JOIN tasks ON tasks.id=browser_requests.task_id WHERE browser_requests.idempotency_key=?", (idempotency_key,)).fetchone()
+                if alias:
+                    if alias["account_id"] != account_id:
+                        raise Conflict("idempotency key belongs to another request")
+                    return public_task(alias)
+                old = conn.execute("SELECT * FROM tasks WHERE idempotency_key=?", (idempotency_key,)).fetchone()
+                if old:
+                    if old["account_id"] != account_id or old["kind"] != "browser_window":
+                        raise Conflict("idempotency key belongs to another request")
+                    return public_task(old)
+                if conn.execute("SELECT 1 FROM login_flows WHERE idempotency_key=?", (idempotency_key,)).fetchone():
+                    raise Conflict("idempotency key belongs to another request")
+            account = conn.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
+            if not account:
+                raise NotFound("account not found")
+            old = conn.execute("SELECT * FROM tasks WHERE account_id=? AND (state IN ('running','waiting_human') OR (state='queued' AND phase NOT IN ('native_recovery_failed','native_cancel_pending') AND (depends_on_task_id IS NULL OR EXISTS (SELECT 1 FROM tasks parent WHERE parent.id=tasks.depends_on_task_id AND parent.state='succeeded')))) ORDER BY CASE state WHEN 'waiting_human' THEN 0 WHEN 'running' THEN 1 ELSE 2 END,id LIMIT 1", (account_id,)).fetchone()
+            if old:
+                if idempotency_key:
+                    conn.execute("INSERT INTO browser_requests VALUES(?,?)", (idempotency_key, old["id"]))
+                return public_task(old)
+            if account["route_type"] == "unset":
+                raise Conflict("choose direct or proxy before opening browser")
+            cur = conn.execute("INSERT INTO tasks(account_id,kind,state,phase,message,account_version,idempotency_key) VALUES(?,'browser_window','queued','queued','Waiting to open account browser',?,?)", (account_id, account["version"], idempotency_key))
+            event(conn, cur.lastrowid)
+            return public_task(conn.execute("SELECT * FROM tasks WHERE id=?", (cur.lastrowid,)).fetchone())
+
     def recover(self):
         """Call only while holding the shared browser file lock."""
         now = time.time()
@@ -142,6 +226,7 @@ class Queue:
         now = time.time()
         with database(self.settings.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
+            settle_dependencies(conn)
             # Database guard complements the process-wide browser file lock.
             if conn.execute(
                 "SELECT 1 FROM tasks WHERE execution_id IS NOT NULL AND lease_until>?",
@@ -153,7 +238,7 @@ class Queue:
             ).fetchone()
             if not row:
                 row = conn.execute(
-                    "SELECT * FROM tasks WHERE state='queued' AND phase NOT IN ('native_recovery_failed','native_cancel_pending') ORDER BY CASE kind WHEN 'login' THEN 0 ELSE 1 END,id LIMIT 1"
+                    "SELECT * FROM tasks WHERE state='queued' AND (depends_on_task_id IS NULL OR EXISTS (SELECT 1 FROM tasks prerequisite WHERE prerequisite.id=tasks.depends_on_task_id AND prerequisite.state='succeeded' AND prerequisite.phase='verified')) AND phase NOT IN ('native_recovery_failed','native_cancel_pending') ORDER BY CASE kind WHEN 'login' THEN 0 ELSE 1 END,id LIMIT 1"
                 ).fetchone()
             if not row:
                 return None
@@ -165,9 +250,9 @@ class Queue:
             ).fetchone()
             if (
                 not a
-                or not t
+                or (row["kind"] != "browser_window" and not t)
                 or a["version"] != row["account_version"]
-                or t["version"] != row["target_version"]
+                or (row["kind"] != "browser_window" and t["version"] != row["target_version"])
             ):
                 if conn.execute("SELECT 1 FROM native_sessions WHERE task_id=?", (row["id"],)).fetchone():
                     conn.execute("UPDATE tasks SET state='queued',phase='native_recovery_failed',message='Configuration changed; native outcome still requires reconciliation' WHERE id=?", (row["id"],))

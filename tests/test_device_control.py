@@ -92,6 +92,10 @@ def test_timezone_persistence_keeps_identity_and_account_version(settings, resou
 
 def as_version_two(settings):
     with database(settings.db_path) as conn:
+        conn.execute('DROP TABLE browser_requests')
+        conn.execute('DROP TABLE login_flows')
+        conn.execute('DROP INDEX task_dependency')
+        conn.execute('ALTER TABLE tasks DROP COLUMN depends_on_task_id')
         conn.execute('DROP TABLE browser_devices')
         conn.execute('PRAGMA user_version=2')
 

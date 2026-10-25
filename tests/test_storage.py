@@ -2,7 +2,7 @@ import os
 import sqlite3
 from dataclasses import replace
 import pytest
-from app.db import SCHEMA, SCHEMA_VERSION, IDENTITY_SCHEMA, DEVICE_SCHEMA, migrate, database, validate_database
+from app.db import SCHEMA, SCHEMA_VERSION, IDENTITY_SCHEMA, DEVICE_SCHEMA, WORKFLOW_SCHEMA, migrate, database, validate_database
 from app.cli import backup, restore, initialize
 from app.crypto import load_key, encrypt, decrypt
 from app.main import create_app
@@ -123,7 +123,7 @@ def version_one_backup(path, key):
     """A synthetic initialized archive from before identity tables existed."""
     conn = sqlite3.connect(path)
     try:
-        conn.executescript(SCHEMA.removesuffix(IDENTITY_SCHEMA).removesuffix(DEVICE_SCHEMA))
+        conn.executescript(SCHEMA.removesuffix(WORKFLOW_SCHEMA).removesuffix(IDENTITY_SCHEMA).removesuffix(DEVICE_SCHEMA).replace("depends_on_task_id INTEGER,", ""))
         conn.execute("PRAGMA user_version=1")
         conn.execute(
             "INSERT INTO admin VALUES(1,'synthetic-hash',?)",

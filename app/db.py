@@ -7,7 +7,12 @@ import sqlite3
 from .config import DB_PATH
 from .crypto import encrypt, decrypt
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+WORKFLOW_SCHEMA = """
+CREATE TABLE login_flows(voice_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,cli_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,idempotency_key TEXT UNIQUE);
+CREATE INDEX task_dependency ON tasks(depends_on_task_id);
+CREATE TABLE browser_requests(idempotency_key TEXT PRIMARY KEY,task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE);
+"""
 DEVICE_SCHEMA = """
 CREATE TABLE browser_devices(account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,archive_cipher BLOB NOT NULL,updated_at REAL NOT NULL);
 """
@@ -31,6 +36,7 @@ CREATE TABLE account_targets(account_id INTEGER REFERENCES accounts(id) ON DELET
  target_id INTEGER REFERENCES targets(id) ON DELETE CASCADE, PRIMARY KEY(account_id,target_id));
 CREATE TABLE tasks (
  id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES accounts(id), target_id INTEGER REFERENCES targets(id),
+ depends_on_task_id INTEGER,
  kind TEXT NOT NULL DEFAULT 'login', state TEXT NOT NULL CHECK(state IN ('queued','running','waiting_human','sync_pending','succeeded','failed','cancelled','interrupted')),
  phase TEXT NOT NULL, message TEXT, account_version INTEGER, target_version INTEGER, remote_id TEXT, execution_id TEXT, lease_until REAL,
  deadline REAL, human_deadline REAL, cancel_requested INTEGER NOT NULL DEFAULT 0, takeover_requested INTEGER NOT NULL DEFAULT 0,
@@ -53,7 +59,7 @@ CREATE TABLE login_attempts(client TEXT PRIMARY KEY,attempts INTEGER NOT NULL,re
 CREATE TABLE runtime(id TEXT PRIMARY KEY,heartbeat REAL NOT NULL,browser_available INTEGER NOT NULL);
 CREATE TABLE settings(id INTEGER PRIMARY KEY CHECK(id=1),maintenance_enabled INTEGER NOT NULL DEFAULT 1,retention_days INTEGER NOT NULL DEFAULT 30);
 INSERT INTO settings(id) VALUES(1);
-""" + DEVICE_SCHEMA + IDENTITY_SCHEMA
+""" + DEVICE_SCHEMA + IDENTITY_SCHEMA + WORKFLOW_SCHEMA
 
 
 def connect(path: Path = DB_PATH):
@@ -224,6 +230,13 @@ def migrate(path: Path, key: bytes):
                 for row in conn.execute(f"SELECT {column} FROM {table}"):
                     decrypt(row[column], key)
             _statements(conn, DEVICE_SCHEMA)
+            version = 3
+        if version == 3:
+            admin = conn.execute("SELECT key_check FROM admin WHERE id=1").fetchone()
+            if admin and decrypt(admin["key_check"], key) != "llm-auth-bridge":
+                raise ValueError("database key check failed")
+            conn.execute("ALTER TABLE tasks ADD COLUMN depends_on_task_id INTEGER")
+            _statements(conn, WORKFLOW_SCHEMA)
             conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         conn.commit()
         # Scrub dropped plaintext proxy pages from the main file and WAL.
