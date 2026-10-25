@@ -40,19 +40,27 @@ def test_built_ui_completes_import_login_human_code_and_sync(settings):
     if not Path("frontend/dist/index.html").exists():
         pytest.skip("build frontend before UI acceptance")
     calls = []
+    sync_calls = []
+    voice_sync_started = threading.Event()
+    release_voice_sync = threading.Event()
+    voice_verified = threading.Event()
 
     def runner(account, target, control, saved):
-        calls.append("login")
+        is_voice = target["kind"] == "chatgpt-web-voice"
+        if not is_voice:
+            assert voice_verified.is_set(), "CLI must wait for verified Voice sync"
+        calls.append("voice" if is_voice else "cli")
         control.browser_ready()
-        control.phase("email_code", "Enter verification code")
-        code = control.wait_human("Enter verification code", phase="email_code_required")
-        assert code == "123456"
+        if is_voice:
+            control.phase("email_code", "Enter verification code")
+            code = control.wait_human("Enter verification code", phase="email_code_required")
+            assert code == "123456"
         control.save_state({"cookies": [], "origins": []})
         control.browser_closed()
         return {
-            "credential_type": "codex_oauth",
+            "credential_type": "chatgpt_web" if is_voice else "codex_oauth",
             "identity": account["username"],
-            "credential": {
+            "credential": {"access_token": "synthetic-voice-access"} if is_voice else {
                 "access_token": "synthetic-access",
                 "refresh_token": "synthetic-refresh",
                 "id_token": "synthetic-id",
@@ -61,11 +69,18 @@ def test_built_ui_completes_import_login_human_code_and_sync(settings):
             "expires_at": time.time() + 7200,
         }
 
-    worker = Worker(
-        settings,
-        runner=runner,
-        syncer=lambda *args: {"remote_id": "synthetic.json", "verified": True},
-    )
+    def syncer(target, result, account, remote_id):
+        is_voice = target["kind"] == "chatgpt-web-voice"
+        sync_calls.append("voice" if is_voice else "cli")
+        if is_voice:
+            voice_sync_started.set()
+            assert release_voice_sync.wait(10), "UI did not release synthetic Voice sync"
+            voice_verified.set()
+        else:
+            assert voice_verified.is_set()
+        return {"remote_id": remote_id, "verified": True}
+
+    worker = Worker(settings, runner=runner, syncer=syncer)
     thread = None
     with web_server(settings) as url, real_browser() as browser:
         page = browser.new_page()
@@ -79,6 +94,14 @@ def test_built_ui_completes_import_login_human_code_and_sync(settings):
         page.get_by_label("管理密钥", exact=True).fill("synthetic-management-secret")
         page.get_by_role("button", name="保存目标").click()
         expect(page.get_by_role("heading", name="Synthetic CPA")).to_be_visible()
+        page.get_by_role("button", name="添加目标", exact=True).click()
+        page.get_by_label("目标名称").fill("Synthetic Voice")
+        page.get_by_label("类型", exact=True).select_option("chatgpt-web-voice")
+        page.get_by_label("服务地址", exact=True).fill("https://voice.example.test")
+        page.get_by_label("管理员用户名（留空保留）", exact=True).fill("synthetic-admin")
+        page.get_by_label("管理员密码（留空保留）", exact=True).fill("synthetic-voice-secret")
+        page.get_by_role("button", name="保存目标").click()
+        expect(page.get_by_role("heading", name="Synthetic Voice")).to_be_visible()
         page.get_by_role("button", name="账号", exact=True).click()
         page.get_by_role("button", name="导入账号", exact=True).click()
         page.get_by_label("账号文本").fill(
@@ -93,8 +116,11 @@ def test_built_ui_completes_import_login_human_code_and_sync(settings):
         page.get_by_role("button", name="编辑与绑定").click()
         page.get_by_label("网络路由").select_option("direct")
         page.get_by_label("Synthetic CPA", exact=True).check()
+        page.get_by_label("Synthetic Voice", exact=True).check()
         page.get_by_role("button", name="保存账号").click()
         page.get_by_role("button", name="开始登录", exact=True).click()
+        expect(page.get_by_label("第一步：ChatGPT Web Voice")).to_have_value("2")
+        expect(page.get_by_label("第二步：CLIProxyAPI")).to_have_value("1")
         page.get_by_role("dialog").get_by_role(
             "button", name="开始登录", exact=True
         ).click()
@@ -103,22 +129,30 @@ def test_built_ui_completes_import_login_human_code_and_sync(settings):
         thread.start()
         try:
             expect(page.get_by_label("验证码")).to_be_visible(timeout=10000)
-            expect(
-                page.get_by_role("button", name="接管浏览器", exact=True)
-            ).to_be_enabled()
+            expect(page.get_by_role("button", name="账号窗口", exact=True)).to_be_enabled()
+            assert calls == ["voice"]
+            assert sync_calls == []
             page.get_by_label("验证码").fill("123456")
             page.get_by_role("button", name="提交验证码").click()
+            assert voice_sync_started.wait(5)
+            assert calls == ["voice"], "CLI ran while Voice sync was still pending"
+            assert sync_calls == ["voice"]
+            release_voice_sync.set()
+            page.get_by_role("button", name="任务 #2", exact=False).click()
+            expect(page.get_by_role("heading", name="任务 #2")).to_be_visible()
             expect(
                 page.locator(".task-detail").get_by_text("已完成", exact=True).first
             ).to_be_visible(timeout=10000)
-            assert calls == ["login"]
+            assert calls == ["voice", "cli"]
+            assert sync_calls == ["voice", "cli"]
             page.reload()
-            expect(page.get_by_role("heading", name="任务 #1")).to_be_visible()
+            expect(page.get_by_role("heading", name="任务 #2")).to_be_visible()
             expect(
                 page.get_by_text("Downstream synchronization verified").first
             ).to_be_visible()
             assert "synthetic-refresh" not in page.content()
         finally:
+            release_voice_sync.set()
             worker.stopping.set()
             thread.join(6)
         page.close()
