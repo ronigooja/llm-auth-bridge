@@ -1,0 +1,76 @@
+name: Deployment artifacts
+on:
+  workflow_dispatch:
+  push:
+    branches: ["deployment/**"]
+permissions:
+  contents: read
+concurrency:
+  group: deployment-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+      - name: Validate deployment inputs
+        env:
+          BRIDGE_TEST_GOST: /tmp/gost
+        run: |
+          set -euo pipefail
+          mkdir -p deployment-logs
+          exec > >(tee deployment-logs/validation.log) 2>&1
+          trap 'printf "%s\n" "$?" > deployment-logs/validation.exit' EXIT
+          git rev-parse HEAD > deployment-logs/source-revision.txt
+          git status --porcelain=v1 -- . ':!deployment-logs' > deployment-logs/uncommitted-inputs.txt
+          printf 'run=%s\njob=%s\nos=%s\narch=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$GITHUB_JOB" "$RUNNER_OS" "$RUNNER_ARCH" > deployment-logs/environment.txt
+          pip install uv==0.8.22
+          uv sync --frozen --extra test --extra browser
+          uv run playwright install --with-deps chromium
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          curl -fsSL https://github.com/go-gost/gost/releases/download/v3.3.1/gost_3.3.1_linux_amd64.tar.gz -o /tmp/gost.tar.gz
+          echo 'e0e3a2c9116e2f025e962bba340749f80696bda318613d45e5ae96dd0bcae37c  /tmp/gost.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/gost.tar.gz -C /tmp gost
+          npm ci --ignore-scripts --prefix frontend
+          npm test --prefix frontend
+          npm run build --prefix frontend
+          uv run pytest -ra --junitxml=deployment-logs/pytest.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deployment-validation-${{ github.sha }}
+          path: deployment-logs/
+          retention-days: 7
+  images:
+    needs: validate
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build native ARM64 deployment images
+        run: |
+          set -euo pipefail
+          mkdir -p deployment-images
+          exec > >(tee deployment-images/build.log) 2>&1
+          trap 'printf "%s\n" "$?" > deployment-images/build.exit' EXIT
+          git rev-parse HEAD > deployment-images/source-revision.txt
+          printf 'run=%s\njob=%s\nos=%s\narch=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$GITHUB_JOB" "$RUNNER_OS" "$RUNNER_ARCH" > deployment-images/environment.txt
+          docker build --target app --label org.opencontainers.image.revision="$GITHUB_SHA" -t "llm-auth-bridge-app:$GITHUB_SHA" .
+          docker build --target worker --label org.opencontainers.image.revision="$GITHUB_SHA" -t "llm-auth-bridge-worker:$GITHUB_SHA" .
+          docker image inspect "llm-auth-bridge-app:$GITHUB_SHA" "llm-auth-bridge-worker:$GITHUB_SHA" --format '{{.Id}} {{.Architecture}} {{index .Config.Labels "org.opencontainers.image.revision"}}' > deployment-images/image-identities.txt
+          docker save "llm-auth-bridge-app:$GITHUB_SHA" "llm-auth-bridge-worker:$GITHUB_SHA" | gzip -1 > deployment-images/images.tar.gz
+          (cd deployment-images && sha256sum images.tar.gz > images.tar.gz.sha256)
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deployment-arm64-${{ github.sha }}
+          path: deployment-images/
+          compression-level: 0
+          retention-days: 2
