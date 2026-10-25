@@ -86,6 +86,7 @@ jobs:
           git -C /tmp/cpa-source fetch --depth=1 origin "$revision"
           git -C /tmp/cpa-source checkout --detach FETCH_HEAD
           git -C /tmp/cpa-source rev-parse HEAD > validation-logs/upstream-revision.txt
+          (cd deploy/cpa && sha256sum -c upstream.patch.sha256)
           sha256sum deploy/cpa/upstream.patch > validation-logs/upstream-patch.sha256
           git -C /tmp/cpa-source apply --check "$GITHUB_WORKSPACE/deploy/cpa/upstream.patch"
           git -C /tmp/cpa-source apply "$GITHUB_WORKSPACE/deploy/cpa/upstream.patch"
