@@ -133,7 +133,7 @@ def test_explicit_direct_route_reaches_real_fixture_despite_proxy_environment(
         "sms_code", "ambiguous_code", "authenticator_heading",
     ],
 )
-def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
+def test_login_wait_phase_matches_synthetic_page(monkeypatch, tmp_path, scenario):
     """Exercise the real adapter against intercepted provider pages only."""
     from types import SimpleNamespace
     import app.browser as module
@@ -249,6 +249,7 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
                     route=context.route,
                     set_default_timeout=context.set_default_timeout,
                     storage_state=context.storage_state,
+                    cookies=context.cookies,
                     close=context.close,
                 )
 
@@ -300,7 +301,7 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
         @contextmanager
         def fake_device(account, control):
             from pathlib import Path
-            yield SimpleNamespace(path=Path("/synthetic-device"), restored=True)
+            yield SimpleNamespace(path=tmp_path, restored=True)
 
         monkeypatch.setattr(module, "device_directory", fake_device)
         monkeypatch.setattr(playwright.sync_api, "sync_playwright", fake_playwright)
@@ -427,6 +428,7 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts(t
     if not os.getenv("DISPLAY"):
         pytest.skip("Headed native device acceptance requires DISPLAY / Xvfb")
     from app.browser_identity import generate_profile, context_options
+    from app.browser import _snapshot_session_cookies, _restore_session_cookies
     first = generate_profile(set())
     dimensions = first["context"]["viewport"]
     second = generate_profile({(dimensions["width"], dimensions["height"])})
@@ -442,6 +444,7 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts(t
                 args=BROWSER_ARGS + ["--no-proxy-server"],
                 **context_options(profile),
             )
+            _restore_session_cookies(context, directory)
             context.route("**/*", lambda route: route.fulfill(body="<p>Synthetic</p>", content_type="text/html"))
             page = context.new_page()
             page.goto("https://device.example.test/")
@@ -452,6 +455,8 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts(t
             context.add_cookies([{"name": "synthetic-session", "value": "first-account",
                 "domain": "device.example.test", "path": "/", "secure": True,
                 "expires": __import__('time').time() + 3600}])
+            context.add_cookies([{"name": "synthetic-tab-session", "value": "first-account-session",
+                "domain": "device.example.test", "path": "/", "secure": True}])
             page.evaluate("""async () => {
                 localStorage.setItem('device', 'first-account');
                 sessionStorage.setItem('tab', 'first-tab');
@@ -467,14 +472,19 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts(t
                     tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
                 }); db.close();
             }""")
-            identity = page.evaluate("({width: innerWidth, height: innerHeight, locale: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})")
+            identity = page.evaluate("({width: innerWidth, height: innerHeight, screenWidth: screen.width, screenHeight: screen.height, locale: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})")
+            print("Synthetic headed device geometry: " + json.dumps(identity, sort_keys=True))
+            assert (identity["width"], identity["height"]) == (1760, 960)
+            assert (identity["screenWidth"], identity["screenHeight"]) == (1920, 1080)
             page.reload()
             assert page.evaluate("sessionStorage.getItem('tab')") == "first-tab"
         finally:
+            _snapshot_session_cookies(context, tmp_path / "first")
             context.close()
         context, page = launch(tmp_path / "first", first)
         try:
             assert page.evaluate("localStorage.getItem('device')") == "first-account"
+            assert any(c["name"] == "synthetic-tab-session" and c["value"] == "first-account-session" and c["expires"] == -1 for c in context.cookies())
             assert any(c["name"] == "synthetic-session" and c["value"] == "first-account" for c in context.cookies())
             assert page.evaluate("""async () => {
                 const db = await new Promise(resolve => {
@@ -487,7 +497,7 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts(t
                 }); db.close(); return value;
             }""") == "synthetic-token"
             assert page.evaluate("sessionStorage.getItem('tab')") is None
-            assert page.evaluate("({width: innerWidth, height: innerHeight, locale: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})") == identity
+            assert page.evaluate("({width: innerWidth, height: innerHeight, screenWidth: screen.width, screenHeight: screen.height, locale: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})") == identity
         finally:
             context.close()
         context, page = launch(tmp_path / "second", second)
@@ -496,6 +506,7 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts(t
             assert context.cookies() == []
             assert page.evaluate("indexedDB.databases().then(dbs => dbs.length)") == 0
             assert page.evaluate("sessionStorage.length") == 0
-            assert page.evaluate("innerWidth") != identity["width"] or page.evaluate("innerHeight") != identity["height"]
+            assert first["identity_seed"] != second["identity_seed"]
+            assert (page.evaluate("innerWidth"), page.evaluate("innerHeight")) == (1760, 960)
         finally:
             context.close()

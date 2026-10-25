@@ -99,7 +99,8 @@ def test_browser_session_identity_and_expiry():
 @pytest.mark.parametrize("mode", ["manual", "maintenance", "cancel"])
 @pytest.mark.parametrize("route_type", ["direct", "proxy"])
 @pytest.mark.parametrize("restored", [False, True])
-def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, mode, route_type, restored):
+@pytest.mark.parametrize("snapshot_failure", [False, True])
+def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path, mode, route_type, restored, snapshot_failure):
     from contextlib import contextmanager
     from types import SimpleNamespace
     import app.browser as module
@@ -128,6 +129,12 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, mode, rou
         def set_default_timeout(self, *a):
             pass
 
+        def cookies(self):
+            events.append("session_snapshot")
+            if snapshot_failure:
+                raise RuntimeError("synthetic cookie read failure")
+            return []
+
         def storage_state(self, *, indexed_db):
             assert indexed_db is True
             return {"cookies": [], "origins": []}
@@ -146,7 +153,7 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, mode, rou
     def fake_device(account, control):
         from pathlib import Path
         try:
-            yield SimpleNamespace(path=Path("/synthetic-device"), restored=restored)
+            yield SimpleNamespace(path=tmp_path, restored=restored)
         finally:
             events.append("device_snapshot")
 
@@ -228,6 +235,9 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, mode, rou
     elif mode == "cancel":
         with pytest.raises(Cancelled):
             module.run_login(account, {"kind": "chatgpt-web-voice"}, Control(), {"cookies": [], "origins": []})
+    elif snapshot_failure:
+        with pytest.raises(BrowserError, match="^Browser device session could not be saved$"):
+            module.run_login(account, {"kind": "chatgpt-web-voice"}, Control(), {"cookies": [], "origins": []})
     else:
         assert (
             module.run_login(account, {"kind": "chatgpt-web-voice"}, Control(), {"cookies": [], "origins": []})
@@ -235,10 +245,10 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, mode, rou
         )
     assert sum(isinstance(e, tuple) and e[0] == "launch" for e in events) == 1
     assert ("manual" in events) == (mode == "manual")
-    assert events[-3:] == ["closed", "control_closed", "device_snapshot"]
+    assert events[-4:] == ["session_snapshot", "closed", "control_closed", "device_snapshot"]
     launch = next(e[1] for e in events if isinstance(e, tuple) and e[0] == "launch")
     options = launch
-    assert launch["user_data_dir"] == "/synthetic-device"
+    assert launch["user_data_dir"] == str(tmp_path)
     assert "storage_state" not in launch
     assert all(options[key] == value for key, value in profile["context"].items())
     assert "identity_seed" not in options
@@ -288,3 +298,54 @@ def test_legacy_state_rejects_invalid_shape_before_browser_mutation(state):
     )
     with pytest.raises(BrowserError, match="^Saved browser session is invalid$"):
         _restore_legacy_state(context, state)
+
+
+def session_cookie(**changes):
+    return {"name": "synthetic-session", "value": "synthetic-secret", "domain": "example.test",
+            "path": "/", "expires": -1, "httpOnly": True, "secure": True, "sameSite": "Lax", **changes}
+
+
+def test_session_cookie_archive_roundtrip_excludes_durable_cookies(tmp_path):
+    import stat
+    from types import SimpleNamespace
+    from app.browser import _snapshot_session_cookies, _restore_session_cookies, SESSION_COOKIE_FILE
+    captured = []
+    context = SimpleNamespace(cookies=lambda: [session_cookie(), session_cookie(name="durable", expires=time.time() + 3600)])
+    _snapshot_session_cookies(context, tmp_path)
+    path = tmp_path / SESSION_COOKIE_FILE
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert json.loads(path.read_text())["cookies"] == [session_cookie()]
+    _restore_session_cookies(SimpleNamespace(add_cookies=captured.extend), tmp_path)
+    assert captured == [session_cookie()]
+    # Logging out removes the old snapshot, including the last session cookie.
+    _snapshot_session_cookies(SimpleNamespace(cookies=lambda: []), tmp_path)
+    captured.clear()
+    _restore_session_cookies(SimpleNamespace(add_cookies=captured.extend), tmp_path)
+    assert captured == []
+
+
+@pytest.mark.parametrize("payload", [
+    b"invalid-json", b"[]", b'{"version":2,"cookies":[]}',
+    json.dumps({"version": 1, "cookies": [session_cookie(expires=123)]}).encode(),
+    json.dumps({"version": 1, "cookies": [session_cookie(secure="true")]}).encode(),
+    json.dumps({"version": 1, "cookies": [session_cookie(value=123)]}).encode(),
+    b"x" * (2 * 1024 * 1024 + 1),
+])
+def test_malformed_session_cookie_archive_fails_before_restoring(tmp_path, payload):
+    from types import SimpleNamespace
+    from app.browser import _restore_session_cookies, SESSION_COOKIE_FILE
+    (tmp_path / SESSION_COOKIE_FILE).write_bytes(payload)
+    with pytest.raises(BrowserError, match="^Saved device session cookies are invalid$"):
+        _restore_session_cookies(SimpleNamespace(add_cookies=lambda cookies: pytest.fail("restored invalid cookies")), tmp_path)
+
+
+def test_failed_session_cookie_refresh_removes_old_snapshot(tmp_path):
+    from types import SimpleNamespace
+    from app.browser import _snapshot_session_cookies, SESSION_COOKIE_FILE
+    path = tmp_path / SESSION_COOKIE_FILE
+    path.write_text("synthetic stale session")
+    def unavailable():
+        raise RuntimeError("synthetic disconnected context")
+    with pytest.raises(RuntimeError, match="synthetic disconnected context"):
+        _snapshot_session_cookies(SimpleNamespace(cookies=unavailable), tmp_path)
+    assert not path.exists()

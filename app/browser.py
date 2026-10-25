@@ -13,6 +13,8 @@ import math
 import os
 import re
 import secrets
+import stat
+import sys
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -37,6 +39,8 @@ TRANSITION_WAIT_SECONDS = 30
 CHALLENGE_SETTLE_SECONDS = 4
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 REDIRECT_URI = "http://localhost:1455/auth/callback"
+SESSION_COOKIE_FILE = ".bridge-session-cookies.json"
+SESSION_COOKIE_LIMIT = 2 * 1024 * 1024
 
 
 class BrowserError(RuntimeError):
@@ -348,6 +352,67 @@ def _restore_legacy_state(context, state):
         )
 
 
+def _session_cookies(value):
+    """Validate only the session cookies Chromium drops on a clean shutdown."""
+    if not isinstance(value, list) or len(value) > 1000:
+        raise ValueError
+    allowed = {"name", "value", "domain", "path", "expires", "httpOnly", "secure", "sameSite", "partitionKey"}
+    for cookie in value:
+        if not isinstance(cookie, dict) or set(cookie) - allowed:
+            raise ValueError
+        if not all(isinstance(cookie.get(k), str) for k in ("name", "value", "domain", "path")):
+            raise ValueError
+        if not cookie["domain"] or not cookie["path"].startswith("/") or cookie.get("expires") != -1:
+            raise ValueError
+        if any(type(cookie.get(k)) is not bool for k in ("httpOnly", "secure")):
+            raise ValueError
+        if cookie.get("sameSite") not in {"Strict", "Lax", "None"}:
+            raise ValueError
+        if "partitionKey" in cookie and not isinstance(cookie["partitionKey"], str):
+            raise ValueError
+    return value
+
+
+def _snapshot_session_cookies(context, directory):
+    """Write only session cookies inside the private, encrypted device archive."""
+    path = directory / SESSION_COOKIE_FILE
+    path.unlink(missing_ok=True)
+    cookies = _session_cookies([c for c in context.cookies() if c.get("expires") == -1])
+    payload = json.dumps({"version": 1, "cookies": cookies}).encode()
+    if len(payload) > SESSION_COOKIE_LIMIT:
+        raise ValueError
+    # No cached older snapshot may survive a failed refresh and resurrect a
+    # logged-out session. The entire parent directory is private and temporary.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(payload)
+
+
+def _restore_session_cookies(context, directory):
+    path = directory / SESSION_COOKIE_FILE
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return
+    except OSError:
+        raise BrowserError("Saved device session cookies are invalid") from None
+    try:
+        with os.fdopen(fd, "rb") as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise ValueError
+            payload = stream.read(SESSION_COOKIE_LIMIT + 1)
+        if len(payload) > SESSION_COOKIE_LIMIT:
+            raise ValueError
+        value = json.loads(payload)
+        if not isinstance(value, dict) or set(value) != {"version", "cookies"} or value["version"] != 1:
+            raise ValueError
+        cookies = _session_cookies(value["cookies"])
+    except (OSError, ValueError, TypeError, RecursionError, UnicodeError):
+        raise BrowserError("Saved device session cookies are invalid") from None
+    if cookies:
+        context.add_cookies(cookies)
+
+
 def _save(context, control):
     control.checkpoint()
     control.save_state(context.storage_state(indexed_db=True))
@@ -447,7 +512,9 @@ def _run_login(
                     accept_downloads=False,
                     service_workers="block",
                 )
-                if not device.restored and saved_state is not None:
+                if device.restored:
+                    _restore_session_cookies(context, device.path)
+                elif saved_state is not None:
                     _restore_legacy_state(context, saved_state)
                 context.set_default_timeout(10000)
                 page = context.new_page()
@@ -660,10 +727,25 @@ def _run_login(
                     "Browser authentication failed; review the account and route"
                 ) from None
             finally:
+                original_failure = sys.exception()
+                cleanup_failure = None
                 if context is not None:
                     try:
-                        context.close()
-                    except PlaywrightError:
-                        pass
+                        _snapshot_session_cookies(context, device.path)
+                    except Exception:
+                        # Cleanup must never replace cancellation, lease loss,
+                        # or provider errors. A successful task must not claim
+                        # a saved device when its session snapshot failed.
+                        cleanup_failure = BrowserError("Browser device session could not be saved")
+                    finally:
+                        try:
+                            context.close()
+                        except Exception:
+                            cleanup_failure = BrowserError("Browser device could not close")
                 if hasattr(control, "browser_closed"):
-                    control.browser_closed()
+                    try:
+                        control.browser_closed()
+                    except Exception:
+                        cleanup_failure = BrowserError("Browser device status could not close")
+                if cleanup_failure is not None and original_failure is None:
+                    raise cleanup_failure
