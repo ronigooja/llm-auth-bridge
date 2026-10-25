@@ -28,13 +28,16 @@ jobs:
           curl -fsSL https://github.com/go-gost/gost/releases/download/v3.3.1/gost_3.3.1_linux_amd64.tar.gz -o /tmp/gost.tar.gz
           echo 'e0e3a2c9116e2f025e962bba340749f80696bda318613d45e5ae96dd0bcae37c  /tmp/gost.tar.gz' | sha256sum -c -
           tar -xzf /tmp/gost.tar.gz -C /tmp gost
-      - run: npm ci --ignore-scripts
+      - id: frontend_deps
+        run: npm ci --ignore-scripts
         working-directory: frontend
       - run: npm test
         working-directory: frontend
-      - run: npm run build
+      - if: ${{ !cancelled() && steps.frontend_deps.outcome == 'success' }}
+        run: npm run build
         working-directory: frontend
       - name: Full pytest suite including headed browser acceptance
+        if: ${{ !cancelled() && steps.frontend_deps.outcome == 'success' }}
         env:
           BRIDGE_TEST_GOST: /tmp/gost
         run: |
