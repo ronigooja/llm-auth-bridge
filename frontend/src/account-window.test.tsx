@@ -10,12 +10,21 @@ function Harness() {
   return <><button onClick={() => void viewer.open(1)}>账号窗口</button><button onClick={() => void viewer.open(2)}>另一个账号窗口</button>{viewer.panel}</>;
 }
 function popup() {
-  const doc = document.implementation.createHTMLDocument();
+  // Accessibility queries need the document's own window for computed styles.
+  // createHTMLDocument() has no defaultView and cannot model a live popup.
+  const frame = document.createElement("iframe");
+  frame.dataset.popupFixture = "true";
+  document.body.appendChild(frame);
+  const doc = frame.contentDocument!;
   const target = { document: doc, closed: false, opener: window, focus: vi.fn(), close: vi.fn() };
   vi.spyOn(window, "open").mockReturnValue(target as unknown as Window);
   return target;
 }
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+afterEach(() => {
+  cleanup();
+  document.querySelectorAll("iframe[data-popup-fixture]").forEach((frame) => frame.remove());
+  vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers();
+});
 describe("unified account window", () => {
   it("reserves one large window and monitors without requesting takeover", async () => {
     const target = popup();
