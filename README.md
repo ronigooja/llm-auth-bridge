@@ -34,7 +34,7 @@ This compatibility does not change the HTTPS recommendation or cookie settings.
 | Chinese built UI and authenticated takeover tunnel | Implemented | Live synthetic HTTP/browser and WebSocket tests passed |
 | OpenAI password/TOTP/OAuth/browser session adapter | Implemented | Synthetic tests passed; real provider unverified |
 | HTTP/HTTPS/SOCKS5 GOST routing, no direct fallback | Implemented | ARM64 local synthetic proxy tests passed; real egress unverified |
-| Stable encrypted per-account browser identity/session across Voice and Codex | Implemented with encrypted persistent Chromium devices | Hosted persistence/isolation and ARM64 runtime acceptance passed; real-account reuse unverified; separate profiles do not imply separate physical hardware |
+| Stable encrypted per-account browser identity/session across Voice and Codex | Implemented with encrypted persistent Chromium devices | Hosted persistence/isolation and ARM64 runtime acceptance passed; assisted real-account Web-to-Codex reuse verified; unattended continuation changes pending hosted and real-account verification; separate profiles do not imply separate physical hardware |
 | Opt-in CLIProxyAPI `cpa-native-oauth-v1` authorization | Requires patched target extension; browser login remains automated | Integrated CI and deployed native/real-account acceptance pending |
 | CLIProxyAPI native auth-files synchronization | Implemented | Mock contracts and deployed management connection passed; real account synchronization unverified |
 | Voice `bridge-v1` compatibility client and session maintenance | Implemented client | Mock contracts passed; disposable real-HTTP acceptance harness supplied; server/deployment and real-account acceptance remain unverified |
@@ -42,8 +42,18 @@ This compatibility does not change the HTTPS recommendation or cookie settings.
 | Automatic site-specific webmail retrieval | Freshness/security primitives only | No site adapter; use manual code/takeover |
 | ARM64/amd64 containers and production Chromium sandbox | Build definitions/CI supplied | ARM64 images built and deployed; nonroot sandbox passed; amd64 runtime unverified |
 
-CLIProxyAPI defaults to `cpa-auth-files-v1`. Select native OAuth only after deploying the [management extension](docs/integrations.md#cliproxyapi-native-oauth-extension); upgrades require the offline schema v3 migration described in [deployment](docs/deployment.md#persistent-account-devices-schema-v3). Stable browser settings do not guarantee complete Canvas/WebGL/font/hardware isolation.
+CLIProxyAPI defaults to `cpa-auth-files-v1`. Select native OAuth only after deploying the [management extension](docs/integrations.md#cliproxyapi-native-oauth-extension); the account workflow update requires the offline schema v4 migration described in [account workflows](docs/account-workflow.md). Stable browser settings do not guarantee complete Canvas/WebGL/font/hardware isolation.
 
 This is an implemented and synthetically exercised bridge, **not full real-account product acceptance**. Read [verification and remaining work](docs/roadmap.md) before deployment. The reviewed public voice gateways require a server patch for the [compatibility contract](docs/integrations.md#server-implementation-requirements); connecting their native account CRUD API alone does not provide synchronization. The [disposable synthetic HTTP acceptance harness](docs/integrations.md#disposable-synthetic-http-acceptance) verifies a candidate patched deployment without provider traffic. No claim of generic automatic webmail support is made.
 
 See [architecture](docs/architecture.md), [authentication](docs/authentication.md), [integrations](docs/integrations.md), [development](docs/development.md), and [UI guidelines](docs/ui-guidelines.md).
+
+
+The account console provides independent **Log in to ChatGPT** and **Log in to
+Codex** actions. ChatGPT runs only the Web Voice task. Codex first checks the
+account's saved ChatGPT session and completes Web login if needed before starting
+its dependent CLIProxyAPI authorization. The unified **Account window** displays
+the current browser or reopens that account's persistent device; live automation
+is read-only until takeover. See [workflow/API behavior](docs/account-workflow.md)
+and [account window controls](docs/frontend-account-window.md). The new UI and
+automated continuation still require hosted validation and real-account acceptance.

@@ -667,7 +667,11 @@ def test_codex_existing_session_continuation_is_identity_bound_and_recovers(
                     if parsed.path == "/oauth/authorize":
                         callback_state = parse_qs(parsed.query)["state"][0]
                         entry = "/unknown" if scenario == "unknown" else "/choose-an-account"
-                        route.fulfill(status=302, headers={"Location": "https://auth.openai.com" + entry})
+                        destination = entry
+                        if destination == "/unknown":
+                            route.fulfill(body='<script>window.location.replace("https://auth.openai.com/unknown")</script>', content_type="text/html")
+                        else:
+                            route.fulfill(body='<script>window.location.replace("https://auth.openai.com/choose-an-account")</script>', content_type="text/html")
                     else:
                         route.fulfill(body=consent() if parsed.path.endswith("/consent") else chooser(), content_type="text/html")
 
@@ -704,7 +708,10 @@ def test_codex_existing_session_continuation_is_identity_bound_and_recovers(
                 pass
 
             def wait_human(self, reason, *, phase):
-                assert scenario in manual_scenarios, "Unexpected early manual pause"
+                assert scenario in manual_scenarios, (
+                    f"Unexpected early manual pause url={pages[0].url} "
+                    f"requests={inputs} phase={phase}"
+                )
                 page = pages[0]
                 waits.append((phase, module.detect_state(page)))
                 assert page.locator('body').get_attribute('data-unsafe') is None
