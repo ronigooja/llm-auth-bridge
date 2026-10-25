@@ -355,6 +355,18 @@ class Worker:
                 return
             self._finish(task, "cancelled", "cancelled", "Task cancelled")
         except LeaseLost:
+            if task["state"] == "sync_pending":
+                # A graceful stop must retain staged credentials and any prior
+                # commit uncertainty, just like expired-owner recovery does.
+                try:
+                    with database(self.settings.db_path) as conn:
+                        conn.execute("BEGIN IMMEDIATE")
+                        self.queue.owned(conn, task["id"], task["execution_id"])
+                        conn.execute("UPDATE tasks SET phase='sync_ready',message='Synchronization interrupted; reconciliation queued',execution_id=NULL,lease_until=NULL,takeover_available=0 WHERE id=? AND execution_id=?", (task["id"], task["execution_id"]))
+                        event(conn, task["id"])
+                except LeaseLost:
+                    pass
+                return
             if self._release_native(task, "native_recovery", "Native OAuth interrupted; reconciliation queued"):
                 return
             # Finishing is fenced; an expired owner is never allowed to update a result.

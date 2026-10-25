@@ -367,3 +367,26 @@ def test_native_browser_uses_saved_account_context_and_fences_callback(monkeypat
     monkeypatch.setattr(browser_module, "pkce_pair", lambda: pytest.fail("native PKCE belongs to CLIProxyAPI"))
     assert run_login({**ACCOUNT, "_browser_profile": profile}, TARGET, Guard(), saved) == result
     assert events == ["context", "navigation", "callback_fenced", "native_callback", "saved", "browser_closed", "native_closed"]
+
+
+def test_graceful_worker_stop_retains_pending_commit_for_reconciliation(settings, resources):
+    account_id, target_id = resources
+    seen = []
+    def runner(account, target, control, saved):
+        control.native_session()
+        return native_result()
+    def syncer(target, result, account, remote_id):
+        seen.append(result["_reconcile_only"])
+        raise LeaseLost()
+    worker = Worker(settings, runner=runner, syncer=syncer)
+    task = worker.queue.create(account_id, target_id)
+    assert worker.run_once()
+    assert worker.run_once()
+    with database(settings.db_path) as conn:
+        row = conn.execute("SELECT state,phase,execution_id FROM tasks").fetchone()
+        assert tuple(row) == ("sync_pending", "sync_ready", None)
+        assert conn.execute("SELECT attempts FROM pending_credentials").fetchone()[0] == 1
+        assert conn.execute("SELECT 1 FROM native_sessions").fetchone()
+    assert seen == [False]
+    assert worker.run_once()
+    assert seen == [False, True]
