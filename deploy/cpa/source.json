@@ -1,8 +1,8 @@
 {
   "repository": "https://github.com/router-for-me/CLIProxyAPI.git",
   "upstream_revision": "07b5a7a1ca267c5d9b743e38dff4ed8ff1da0c91",
-  "native_extension_revision": "25b3aedcaba29cb4dfb46ee72e2bc22773b088f9",
-  "patch_sha256": "0f95fba4cb2edd7583f0ae2f330e2a53c491c61080a071d6aa6489eef7f22e9e",
+  "native_extension_revision": "950873b44d1e03ae367472828a5b9aa81aeeffe7",
+  "patch_sha256": "69592287dda1f727f862abde10ca2291b1ee210c0d453cb6b057ddbf72d367a8",
   "protocol": "cpa-native-oauth-v1",
   "real_provider_verification": "unverified"
 }
