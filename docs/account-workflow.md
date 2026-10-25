@@ -1,11 +1,14 @@
 # Account login flow and browser window
 
 `POST /api/v1/accounts/{account_id}/login-flow` accepts
-`{voice_target_id, cli_target_id, idempotency_key?}` and returns `{tasks: [voice, cli]}`.
-Both targets must exist, have exactly the respective `chatgpt-web-voice` and
-`cliproxyapi` kinds, and be bound to an account with a selected route. Creation
-validates and inserts both tasks in one transaction. The optional key identifies
-the complete request; reusing it with different inputs returns a conflict.
+`{voice_target_id, cli_target_id?, idempotency_key?}`. Voice is required; omit
+`cli_target_id` or send `null` for Voice only, returning `{tasks: [voice]}`.
+Selecting a CLI target opts into the second step and returns `{tasks: [voice, cli]}`.
+Each selected target must exist, have its respective `chatgpt-web-voice` or
+`cliproxyapi` kind, and be bound to an account with a selected route. Creation
+validates and inserts the selected tasks in one transaction. The optional key
+identifies the complete request; reusing it with different inputs, including
+changing whether CLI is selected, returns a conflict.
 
 Public tasks include nullable `depends_on_task_id`. CLI stays queued until the
 voice task succeeds with phase `verified`, after downstream synchronization has
