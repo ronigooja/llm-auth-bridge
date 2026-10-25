@@ -302,14 +302,15 @@ def _account_choice(page, username):
     ):
         return None
     identities = page.get_by_text(re.compile(r"^" + re.escape(username) + r"$", re.I))
-    visible = [identities.nth(i) for i in range(identities.count())
-               if identities.nth(i).is_visible()]
+    # Resolve once: a Locator could select a different same-text element after
+    # validation while control.phase or SPA hydration replaces the original.
+    visible = [handle for handle in identities.element_handles() if handle.is_visible()]
     if len(visible) != 1:
         return None
     identity = visible[0]
     safe = identity.evaluate(r"""(node, username) => {
         const control = node.closest('button, a, [role="button"]');
-        if (!control || node.querySelector('button, a, [role="button"]')
+        if (!node.isConnected || !control || node.querySelector('button, a, [role="button"]')
             || control.matches(':disabled, [aria-disabled="true"]')) return false;
         // Ignore nested controls such as the card's remove button. The click
         // target remains the exact identity node outside those controls.
@@ -347,8 +348,9 @@ def _consent_continue(page):
                                    "/sign-in-with-chatgpt/codex/consent"}):
         return None
     controls = page.get_by_role("button", name=re.compile(r"^Continue$", re.I))
-    visible = [controls.nth(i) for i in range(controls.count())
-               if controls.nth(i).is_visible()]
+    # Keep the validated node fixed through the later phase notification/click.
+    # A detached handle must fail into review instead of resolving a replacement.
+    visible = [handle for handle in controls.element_handles() if handle.is_visible()]
     if len(visible) != 1 or not visible[0].is_enabled():
         return None
     return visible[0]
