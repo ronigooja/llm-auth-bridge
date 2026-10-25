@@ -109,8 +109,8 @@ describe("management interactions", () => {
     });
     render(<App />);
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "开始登录" }));
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "开始登录" }));
+    await user.click(await screen.findByRole("button", { name: "登录 Codex" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "登录 Codex" }));
     expect(await screen.findByRole("heading", { name: "任务 #7" })).toBeTruthy();
     await user.type(await screen.findByLabelText("验证码"), "123456");
     await user.click(screen.getByRole("button", { name: "提交验证码" }));
@@ -501,7 +501,7 @@ it("keeps account editor busy until new route and bindings finish refreshing", a
   expect(screen.getByRole("button", { name: "保存中…" })).toHaveProperty("disabled", true);
   release!(new Response(JSON.stringify({ accounts: [{ ...account, route_type: "direct", target_ids: [1] }] }), { status: 200, headers: { "Content-Type": "application/json" } }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  await user.click(screen.getByRole("button", { name: "开始登录" }));
-  expect(within(screen.getByRole("dialog")).getByRole("button", { name: "开始登录" })).toHaveProperty("disabled", true);
+  await user.click(screen.getByRole("button", { name: "登录 Codex" }));
+  expect(within(screen.getByRole("dialog")).getByRole("button", { name: "登录 Codex" })).toHaveProperty("disabled", true);
   expect(screen.getByText(/请先在“编辑与绑定”中绑定 ChatGPT Web Voice/)).toBeTruthy();
 });

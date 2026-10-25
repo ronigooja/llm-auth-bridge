@@ -1,10 +1,14 @@
 # Fixed login workflow and account window
 
-The management login action always submits `POST /api/v1/accounts/{id}/login-flow` with `voice_target_id`, `cli_target_id`, and an idempotency key. It presents the fixed order: ChatGPT Web Voice login and successful synchronization, followed by CLIProxyAPI login. The backend owns the durable dependency; the UI never starts the second task itself. Task details display `depends_on_task_id` when present.
+The account row offers two login actions. **登录 ChatGPT** submits `POST /api/v1/accounts/{id}/login-flow` with `voice_target_id` and an idempotency key, omitting `cli_target_id`. It logs in and synchronizes ChatGPT Web Voice and works without a bound CLIProxyAPI target.
 
-Only targets bound to the account appear. A single target of each kind is selected automatically. Multiple targets require an explicit selection; a missing kind disables submission and directs the operator to edit account bindings. New account forms initially select supported targets, with visible checkboxes for editing bindings.
+**登录 Codex** submits the same endpoint with both `voice_target_id` and `cli_target_id`. It checks the saved ChatGPT Web session, logs in if needed, then authorizes Codex through CLIProxyAPI. The backend reuses a valid saved Web session and owns the durable dependency: CLI execution starts only after Voice synchronization succeeds. The UI never starts the second task itself. Task details display `depends_on_task_id` when present.
+
+Only targets bound to the account appear. A single target of each relevant kind is selected automatically. Multiple targets require an explicit selection. ChatGPT mode shows and requires only the Voice selector; Codex mode shows and requires both selectors. Missing required targets disable submission and direct the operator to edit account bindings. New account forms initially select supported targets, with visible checkboxes for editing bindings.
 
 The account row and task details expose the same **账号窗口** action. The app reserves one large, resizable same-origin popup during the click, then calls `POST /api/v1/accounts/{id}/browser`. This endpoint reuses the current account task or queues an idle `browser_window` task. A blocked popup does not queue work. Opening another account while the popup remains open requires first closing or hiding the current window, so one account is never silently substituted for another.
+
+When a login task succeeds, an open popup queries the task list and automatically follows an active dependent task for the same account. This carries the viewer from ChatGPT session preparation to Codex authorization without creating an idle browser. Clicking **账号窗口** again for an ended task explicitly rebinds the existing popup through the account browser endpoint; an active task simply receives focus.
 
 The popup embeds the same-origin noVNC viewer. Running automation uses `/api/v1/tasks/{id}/monitor`, `view_only=true`, and `shared=true`, and opening the viewer does not pause automation. **接管** explicitly requests takeover, then waits for the task API to confirm `waiting_human` before switching to the interactive `/takeover` path. The operator resumes login from the task page with **继续任务**.
 

@@ -463,25 +463,15 @@ export function App() {
                         {a.has_mailbox ? "邮箱已设置" : "未设置邮箱"}
                       </p>
                       <div className="actions">
-                        <button
-                          className="primary"
-                          onClick={() =>
-                            setModal(
-                              <StartTask
-                                account={a}
-                                targets={targets || []}
-                                close={close}
-                                started={async (id) => {
-                                  close();
-                                  await refresh();
-                                  openTask(id);
-                                }}
-                              />,
-                            )
-                          }
-                        >
-                          开始登录
-                        </button>
+                        {(["chatgpt", "codex"] as const).map((mode) => (
+                          <button key={mode} className={mode === "chatgpt" ? "primary" : undefined}
+                            onClick={() => setModal(
+                              <StartTask account={a} mode={mode} targets={targets || []} close={close}
+                                started={async (id) => { close(); await refresh(); openTask(id); }} />
+                            )}>
+                            {mode === "chatgpt" ? "登录 ChatGPT" : "登录 Codex"}
+                          </button>
+                        ))}
                         <button onClick={() => void accountWindow.open(a.id)}>账号窗口</button>
                         <button
                           onClick={() =>
@@ -1098,11 +1088,13 @@ function TargetForm({
   );
 }
 function StartTask({
+  mode,
   account,
   targets,
   close,
   started,
 }: {
+  mode: "chatgpt" | "codex";
   account: Account;
   targets: Target[];
   close: () => void;
@@ -1116,23 +1108,23 @@ function StartTask({
   const [key] = useState(requestId);
   const m = useMutation();
   return (
-    <Modal title="开始登录" close={close}>
+    <Modal title={mode === "chatgpt" ? "登录 ChatGPT" : "登录 Codex"} close={close}>
       <form onSubmit={(e) => {
         e.preventDefault();
-        if (!voiceId || !cliId) return;
+        if (!voiceId || (mode === "codex" && !cliId)) return;
         void m.run(async () => {
           const result = await api<{ tasks: Task[] }>(`/accounts/${account.id}/login-flow`, "POST", {
-            voice_target_id: voiceId, cli_target_id: cliId, idempotency_key: key,
+            voice_target_id: voiceId, ...(mode === "codex" ? { cli_target_id: cliId } : {}), idempotency_key: key,
           });
           await started(result.tasks[0].id);
         });
       }}>
         <p>{account.username}</p>
-        <p>固定顺序：先登录并同步 ChatGPT Web Voice，成功后再登录 CLIProxyAPI。</p>
+        <p>{mode === "chatgpt" ? "登录并同步 ChatGPT Web Voice。" : "检查 ChatGPT 会话，必要时先完成登录，然后授权 Codex。"}</p>
         {([
           { title: "第一步：ChatGPT Web Voice", options: voice, value: voiceId, select: setVoiceId },
           { title: "第二步：CLIProxyAPI", options: cli, value: cliId, select: setCliId },
-        ]).map(({ title, options, value, select }) => (
+        ]).filter((_, index) => mode === "codex" || index === 0).map(({ title, options, value, select }) => (
           <Field key={title} title={title}>
             <select required value={value} onChange={(e) => select(Number(e.target.value))}>
               <option value="0" disabled>请选择已绑定目标</option>
@@ -1143,8 +1135,8 @@ function StartTask({
         ))}
         {account.route_type === "unset" && <p className="error">请先设置账号网络路由。</p>}
         <ErrorBox error={m.error} />
-        <button className="primary" disabled={m.busy || !voiceId || !cliId || account.route_type === "unset"}>
-          {m.busy ? "提交中…" : "开始登录"}
+        <button className="primary" disabled={m.busy || !voiceId || (mode === "codex" && !cliId) || account.route_type === "unset"}>
+          {m.busy ? "提交中…" : mode === "chatgpt" ? "登录 ChatGPT" : "登录 Codex"}
         </button>
       </form>
     </Modal>
