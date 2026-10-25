@@ -49,7 +49,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb xauth novnc x11vnc websockify
           set +e
-          xvfb-run -a -s "-screen 0 1920x1080x24" uv run pytest -ra --junitxml=check-logs/pytest.xml 2>&1 | tee check-logs/pytest.log
+          xvfb-run -a -s "-screen 0 1920x1080x24" uv run pytest -v -ra -o faulthandler_timeout=120 --junitxml=check-logs/pytest.xml 2>&1 | tee check-logs/pytest.log
           result=${PIPESTATUS[0]}
           printf '%s\n' "$result" > check-logs/pytest.exit
           exit "$result"
