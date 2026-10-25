@@ -94,3 +94,39 @@ This observation establishes deployed browser startup, navigation to the provide
 manual pause behavior, and cancellation cleanup for task 7. It does not establish
 successful login, credential validity, full proxy egress/DNS behavior, cross-target
 session reuse, or downstream acceptance. Those capabilities remain unverified.
+
+
+## Web-first operator sequence
+
+The operator clarified that verification must follow the existing project task
+sequence: first run the Voice target to establish and persist the account's Web
+session, then run the Codex target and observe whether its authentication can
+reuse that saved session. No change to the application login flow was made.
+Both tasks use the same stored account profile, route, and encrypted account
+session through the normal worker. Different tasks still create separate
+Chromium contexts initialized from that persisted data; this is not a guarantee
+of shared live browser memory or complete browser fingerprint equivalence.
+
+The earlier Codex task 8 was cancelled and its browser closed before beginning
+this sequence. The supplied account was additionally bound to the existing Voice
+target through the authenticated account API. Voice task 9 failed in the browser
+startup/navigation phase with the safe `login_failed` error; the generic message
+does not identify the underlying browser request failure.
+
+A serial retry, Voice task 10, reached the real ChatGPT email form. The worker
+submitted the configured email. The page displayed the provider message
+“We couldn’t sign you in. Please try again” and remained on the email step. The
+adapter paused for review after its bounded transition wait. A single manual
+Continue click in that same worker browser produced a Connecting state, then the
+same provider error. Continuing the task caused it to re-evaluate and pause again.
+No new browser profile, account route, or temporary login browser was substituted.
+No password, authenticator, email-code, or successful authenticated Web session
+was reached in this attempt. No subsequent Codex task was started because the
+required successful Web login had not occurred. Task 10 remains available for
+same-browser review under its normal human-wait timeout.
+
+This verifies the worker's email-form submission and pause after an unsuccessful
+provider transition. It does not identify whether the provider error is caused
+by the route, provider risk controls, browser compatibility, or account state.
+Password validity and Web-to-Codex session reuse remain unverified. Temporary
+display captures were excluded from Git and removed after inspection.
