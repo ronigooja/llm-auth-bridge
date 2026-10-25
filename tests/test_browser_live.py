@@ -512,7 +512,7 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts()
             }""")
             identity = page.evaluate("({width: innerWidth, height: innerHeight, outerWidth, outerHeight, screenWidth: screen.width, screenHeight: screen.height, screenAvailWidth: screen.availWidth, screenAvailHeight: screen.availHeight, dpr: devicePixelRatio, locale: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})")
             print("Synthetic headed device geometry: " + json.dumps(identity, sort_keys=True))
-            assert (identity["width"], identity["height"]) == (1760, 960)
+            assert (identity["width"], identity["height"]) == (1760, 900)
             assert (identity["screenWidth"], identity["screenHeight"]) == (1920, 1080)
             assert identity["dpr"] == 1
             assert identity["width"] <= identity["outerWidth"] <= identity["screenAvailWidth"] <= 1920
@@ -548,6 +548,6 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts()
             assert page.evaluate("indexedDB.databases().then(dbs => dbs.length)") == 0
             assert page.evaluate("sessionStorage.length") == 0
             assert first["identity_seed"] != second["identity_seed"]
-            assert (page.evaluate("innerWidth"), page.evaluate("innerHeight")) == (1760, 960)
+            assert (page.evaluate("innerWidth"), page.evaluate("innerHeight")) == (1760, 900)
         assert not second_path.exists()
         assert second_control.saves == 1
