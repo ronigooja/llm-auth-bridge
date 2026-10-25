@@ -369,7 +369,7 @@ def test_native_browser_uses_saved_account_context_and_fences_callback(monkeypat
     def fake_device(account, control):
         from pathlib import Path
         try:
-            yield SimpleNamespace(path=tmp_path, restored=True)
+            yield SimpleNamespace(path=tmp_path, restored=True, mark_ready=lambda: None, abort_snapshot=lambda: None)
         finally:
             assert events[-1] == "browser_closed"
 

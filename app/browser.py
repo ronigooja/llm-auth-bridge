@@ -40,6 +40,7 @@ CHALLENGE_SETTLE_SECONDS = 4
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 REDIRECT_URI = "http://localhost:1455/auth/callback"
 SESSION_COOKIE_FILE = ".bridge-session-cookies.json"
+DEVICE_READY_FILE = ".bridge-device-ready"
 SESSION_COOKIE_LIMIT = 2 * 1024 * 1024
 
 
@@ -512,10 +513,18 @@ def _run_login(
                     accept_downloads=False,
                     service_workers="block",
                 )
-                if device.restored:
+                initialized = (device.path / DEVICE_READY_FILE).is_file()
+                if initialized:
                     _restore_session_cookies(context, device.path)
                 elif saved_state is not None:
                     _restore_legacy_state(context, saved_state)
+                if not initialized:
+                    fd = os.open(device.path / DEVICE_READY_FILE,
+                                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                    os.close(fd)
+                # An archive alone is not proof that first-time migration
+                # completed. Publish only initialized devices to the archive.
+                device.mark_ready()
                 context.set_default_timeout(10000)
                 page = context.new_page()
                 if hasattr(control, "browser_ready"):
@@ -741,6 +750,7 @@ def _run_login(
                         try:
                             context.close()
                         except Exception:
+                            device.abort_snapshot()
                             cleanup_failure = BrowserError("Browser device could not close")
                 if hasattr(control, "browser_closed"):
                     try:

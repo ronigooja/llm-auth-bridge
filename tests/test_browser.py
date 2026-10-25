@@ -98,9 +98,10 @@ def test_browser_session_identity_and_expiry():
 
 @pytest.mark.parametrize("mode", ["manual", "maintenance", "cancel"])
 @pytest.mark.parametrize("route_type", ["direct", "proxy"])
-@pytest.mark.parametrize("restored", [False, True])
+@pytest.mark.parametrize("restored", [False, True, "incomplete"])
 @pytest.mark.parametrize("snapshot_failure", [False, True])
-def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path, mode, route_type, restored, snapshot_failure):
+@pytest.mark.parametrize("close_failure", [False, True])
+def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path, mode, route_type, restored, snapshot_failure, close_failure):
     from contextlib import contextmanager
     from types import SimpleNamespace
     import app.browser as module
@@ -141,6 +142,8 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path,
 
         def close(self):
             events.append("closed")
+            if close_failure:
+                raise RuntimeError("synthetic close failure")
 
     context = Context()
 
@@ -153,7 +156,10 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path,
     def fake_device(account, control):
         from pathlib import Path
         try:
-            yield SimpleNamespace(path=tmp_path, restored=restored)
+            from app.browser import DEVICE_READY_FILE
+            if restored is True:
+                (tmp_path / DEVICE_READY_FILE).touch(mode=0o600)
+            yield SimpleNamespace(path=tmp_path, restored=bool(restored), mark_ready=lambda: events.append("device_ready"), abort_snapshot=lambda: events.append("device_aborted"))
         finally:
             events.append("device_snapshot")
 
@@ -235,8 +241,9 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path,
     elif mode == "cancel":
         with pytest.raises(Cancelled):
             module.run_login(account, {"kind": "chatgpt-web-voice"}, Control(), {"cookies": [], "origins": []})
-    elif snapshot_failure:
-        with pytest.raises(BrowserError, match="^Browser device session could not be saved$"):
+    elif snapshot_failure or close_failure:
+        expected = "Browser device could not close" if close_failure else "Browser device session could not be saved"
+        with pytest.raises(BrowserError, match="^" + expected + "$"):
             module.run_login(account, {"kind": "chatgpt-web-voice"}, Control(), {"cookies": [], "origins": []})
     else:
         assert (
@@ -245,7 +252,9 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path,
         )
     assert sum(isinstance(e, tuple) and e[0] == "launch" for e in events) == 1
     assert ("manual" in events) == (mode == "manual")
-    assert events[-4:] == ["session_snapshot", "closed", "control_closed", "device_snapshot"]
+    assert [e for e in events if e != "device_aborted"][-4:] == ["session_snapshot", "closed", "control_closed", "device_snapshot"]
+    assert ("device_aborted" in events) == close_failure
+    assert "device_ready" in events
     launch = next(e[1] for e in events if isinstance(e, tuple) and e[0] == "launch")
     options = launch
     assert launch["user_data_dir"] == str(tmp_path)
@@ -253,7 +262,7 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path,
     assert all(options[key] == value for key, value in profile["context"].items())
     assert "identity_seed" not in options
     assert events.index(next(e for e in events if isinstance(e, tuple) and e[0] == "launch")) < events.index("navigation")
-    assert migrations == ([] if restored else [{"cookies": [], "origins": []}])
+    assert migrations == ([] if restored is True else [{"cookies": [], "origins": []}])
     assert ("--no-proxy-server" in launch["args"]) == (route_type == "direct")
     if route_type == "proxy":
         assert events.index("timezone_lookup") < events.index("navigation")
