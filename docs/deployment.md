@@ -98,7 +98,7 @@ docker compose run --rm --no-deps -v "$PWD/backups:/backups:ro" app python -m ap
 docker compose up -d
 ```
 
-Restore the matching encryption key separately. Offline restore accepts initialized schema v1 and current-version archives, verifies the key before creating the destination, and explicitly migrates only the restored copy to the current schema. The archive remains unchanged; unsupported versions are rejected. A failed restore removes its incomplete destination, so keep the preserved database until restoration succeeds. Treat backups as sensitive even though credential fields are encrypted. Test backup and restore with synthetic data before relying on the procedure.
+Restore the matching encryption key separately. Offline restore accepts initialized schema v1–v3 and current-version archives, verifies the key before creating the destination, and explicitly migrates only the restored copy to the current schema. The archive remains unchanged; unsupported versions are rejected. A failed restore removes its incomplete destination, so keep the preserved database until restoration succeeds. Treat backups as sensitive even though credential fields are encrypted. Test backup and restore with synthetic data before relying on the procedure.
 
 ## Target compatibility
 
@@ -197,7 +197,7 @@ Stop app and worker, then run explicit offline `python -m app.cli migrate` with
 the existing master key before starting this release. Migrations accept schema
 v1 and v2, retain existing accounts/profiles/saved sessions, and add encrypted
 account-device storage. Offline restore also accepts initialized v1 and v2
-archives; startup still requires current schema v3. Existing profile seeds remain
+archives. Current startup requires schema v4; see [account workflow](account-workflow.md) for the additive v3 migration. Existing profile seeds remain
 unchanged; first-use profile normalization changes the old geometry once to a
 1760×900 viewport with a 1920×1080 screen. The Xvfb desktop now matches that screen.
 

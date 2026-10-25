@@ -212,3 +212,12 @@ class SettingsBody(Model):
 
 class DiscardBody(Model):
     confirmation: str = Field(min_length=1, max_length=320)
+
+
+class BrowserBody(Model):
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
+
+
+class LoginFlowBody(BrowserBody):
+    voice_target_id: int = Field(gt=0)
+    cli_target_id: int = Field(gt=0)

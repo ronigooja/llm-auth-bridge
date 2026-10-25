@@ -243,11 +243,8 @@ class Worker:
                     "SELECT * FROM accounts WHERE id=?", (task["account_id"],)
                 ).fetchone()
             )
-            target = dict(
-                conn.execute(
-                    "SELECT * FROM targets WHERE id=?", (task["target_id"],)
-                ).fetchone()
-            )
+            target_row = conn.execute("SELECT * FROM targets WHERE id=?", (task["target_id"],)).fetchone()
+            target = dict(target_row) if target_row else None
             stored = conn.execute(
                 "SELECT state_cipher FROM browser_sessions WHERE account_id=?",
                 (task["account_id"],),
@@ -258,7 +255,7 @@ class Worker:
             ("mailbox_url", "mailbox_url_cipher"),
         ]:
             account[name] = (
-                decrypt(account[column], self.key) if account[column] else None
+                decrypt(account[column], self.key) if account[column] and task["kind"] != "browser_window" else None
             )
         account["proxy"] = (
             json.loads(decrypt(account["proxy_cipher"], self.key))
@@ -267,7 +264,8 @@ class Worker:
         )
         account["_browser_profile"] = profile
         account["_maintenance"] = task["kind"] == "maintenance"
-        target["config"] = json.loads(decrypt(target["config_cipher"], self.key))
+        if target is not None:
+            target["config"] = json.loads(decrypt(target["config_cipher"], self.key))
         return (
             account,
             target,
@@ -280,7 +278,15 @@ class Worker:
         try:
             control.checkpoint()
             account, target, saved = self.load(task)
-            if task["state"] == "sync_pending":
+            if task["kind"] == "browser_window":
+                if self.runner:
+                    self.runner(account, None, control, saved)
+                else:
+                    from .browser import run_browser_window
+                    run_browser_window(account, control, saved)
+                control.checkpoint()
+                self.queue.finish(task["id"], task["execution_id"], "succeeded", "browser_closed", "Account browser closed")
+            elif task["state"] == "sync_pending":
                 with database(self.settings.db_path) as conn:
                     stored = conn.execute(
                         "SELECT result_cipher,attempts FROM pending_credentials WHERE task_id=?",
@@ -571,7 +577,7 @@ class Worker:
                 due = []
             # Retain final task audit records for configured days. No secret logs exist.
             conn.execute(
-                "DELETE FROM tasks WHERE state IN ('succeeded','failed','cancelled','interrupted') AND updated_at<datetime('now',?)",
+                "DELETE FROM tasks WHERE state IN ('succeeded','failed','cancelled','interrupted') AND updated_at<datetime('now',?) AND NOT EXISTS (SELECT 1 FROM tasks child WHERE child.depends_on_task_id=tasks.id AND child.state IN ('queued','running','waiting_human','sync_pending'))",
                 (f"-{cfg['retention_days']} days",),
             )
             conn.execute("DELETE FROM sessions WHERE expires_at<?", (now,))

@@ -26,6 +26,8 @@ from .models import (
     PasswordBody,
     ImportBody,
     TaskBody,
+    LoginFlowBody,
+    BrowserBody,
     CodeBody,
     SettingsBody,
     DiscardBody,
@@ -636,6 +638,14 @@ def create_app(settings: Settings | None = None):
     @app.post("/api/v1/accounts/{account_id}/tasks")
     def create_task(account_id: int, body: TaskBody):
         return app.state.queue.create(account_id, body.target_id, body.idempotency_key)
+
+    @app.post("/api/v1/accounts/{account_id}/login-flow")
+    def login_flow(account_id: int, body: LoginFlowBody):
+        return {"tasks": app.state.queue.create_login_flow(account_id, body.voice_target_id, body.cli_target_id, body.idempotency_key)}
+
+    @app.post("/api/v1/accounts/{account_id}/browser")
+    def account_browser(account_id: int, body: BrowserBody | None = None):
+        return {"task": app.state.queue.open_browser(account_id, body.idempotency_key if body else None)}
 
     @app.get("/api/v1/tasks")
     def tasks():
