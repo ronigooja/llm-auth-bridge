@@ -667,7 +667,9 @@ def test_codex_existing_session_continuation_is_identity_bound_and_recovers(
                     if parsed.path == "/oauth/authorize":
                         callback_state = parse_qs(parsed.query)["state"][0]
                         entry = "/unknown" if scenario == "unknown" else "/choose-an-account"
-                        route.fulfill(status=302, headers={"Location": "https://auth.openai.com" + entry})
+                        # Keep the synthetic chooser in the authorization response;
+                        # providers may expose it before SPA URL cleanup.
+                        route.fulfill(body=chooser() if entry.endswith("choose-an-account") else '<h1>Unknown page</h1>', content_type="text/html")
                     else:
                         route.fulfill(body=consent() if parsed.path.endswith("/consent") else chooser(), content_type="text/html")
 

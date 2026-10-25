@@ -283,8 +283,13 @@ def detect_state(page) -> str:
         page, 'button[data-testid="login-button"]:enabled'
     ):
         return "login"
-    if parsed.hostname == "auth.openai.com" and parsed.path == "/choose-an-account":
-        return "account_chooser"
+    if parsed.hostname == "auth.openai.com" and parsed.path in {"/choose-an-account", "/oauth/authorize"}:
+        # Some provider responses render the chooser before SPA URL cleanup.
+        # Require its identifying heading so an authorization/loading page is
+        # never treated as a selectable account by URL alone.
+        heading = _visible(page, 'text=Choose an account to continue to Codex')
+        if parsed.path == "/choose-an-account" or heading is not None:
+            return "account_chooser"
     if parsed.hostname == "auth.openai.com" and "consent" in parsed.path:
         return "consent"
     return "unknown"
