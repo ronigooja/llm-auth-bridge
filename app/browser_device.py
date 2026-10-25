@@ -29,10 +29,24 @@ class DeviceArchiveError(ValueError):
     """A profile archive is malformed, unsafe, or exceeds its resource budget."""
 
 
-@dataclass(frozen=True)
+@dataclass
 class BrowserDevice:
     path: Path
     restored: bool
+    ready: bool = False
+    _discarded: bool = False
+
+    def mark_ready(self):
+        """Allow saving only after browser startup and legacy state import."""
+        self.ready = True
+
+    def abort_snapshot(self):
+        """Keep the previous archive when browser shutdown was not confirmed."""
+        self._discarded = True
+
+    @property
+    def can_save(self):
+        return self.ready and not self._discarded
 
 
 class _LimitedBuffer(io.BytesIO):
@@ -157,9 +171,11 @@ def _snapshot(root):
 def device_directory(account: dict, control):
     """Restore a profile, then save after the caller closes its browser.
 
-    Exceptional exits attempt to save partial progress while preserving the
-    original error (including cancellation and lease failure). Plaintext is
-    always removed. Production must mount /tmp as tmpfs.
+    Call ``mark_ready`` only after startup and legacy import succeed; call
+    ``abort_snapshot`` when browser shutdown fails. Only a ready, undiscarded profile
+    is saved. Exceptional exits preserve the original error, including
+    cancellation and lease failure. Plaintext is always removed. Production
+    must mount /tmp as tmpfs.
     """
     del account  # Control alone determines account ownership and persistence.
     with tempfile.TemporaryDirectory(prefix="llm-device-", dir="/tmp") as directory:
@@ -169,13 +185,16 @@ def device_directory(account: dict, control):
         restored = archive is not None
         if restored:
             _restore(archive, root)
+        device = BrowserDevice(root, restored)
         try:
-            yield BrowserDevice(root, restored)
+            yield device
         except BaseException:
-            try:
-                control.save_device(_snapshot(root))
-            except BaseException:
-                pass
+            if device.can_save:
+                try:
+                    control.save_device(_snapshot(root))
+                except BaseException:
+                    pass
             raise
         else:
-            control.save_device(_snapshot(root))
+            if device.can_save:
+                control.save_device(_snapshot(root))

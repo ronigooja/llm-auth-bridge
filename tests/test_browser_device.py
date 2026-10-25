@@ -49,6 +49,7 @@ def test_roundtrip_keeps_full_profile_and_excludes_transient_data():
         "Default/Preferences", "Default/Extensions/synthetic/manifest.json",
     ]
     with device_directory({"id": "synthetic-a"}, control) as device:
+        device.mark_ready()
         first_path = device.path
         assert not device.restored
         assert first_path.stat().st_mode & 0o777 == 0o700
@@ -64,6 +65,7 @@ def test_roundtrip_keeps_full_profile_and_excludes_transient_data():
     assert not first_path.exists()
     assert control.saves == 1
     with device_directory({"id": "synthetic-a"}, control) as device:
+        device.mark_ready()
         assert device.restored
         assert device.path != first_path
         for name in retained:
@@ -81,12 +83,15 @@ def test_controls_isolate_accounts_and_account_paths_are_ignored(tmp_path):
     # Untrusted account fields must never select the plaintext directory.
     account = {"id": "../synthetic-a", "device_path": str(tmp_path)}
     with device_directory(account, first) as device:
+        device.mark_ready()
         (device.path / "Local State").write_text("synthetic-first")
     with device_directory(account, second) as device:
+        device.mark_ready()
         assert not device.restored
         assert not (device.path / "Local State").exists()
         (device.path / "Local State").write_text("synthetic-second")
     with device_directory(account, first) as device:
+        device.mark_ready()
         assert (device.path / "Local State").read_text() == "synthetic-first"
     assert list(tmp_path.iterdir()) == []
 
@@ -96,12 +101,14 @@ def test_error_snapshots_partial_profile_and_removes_plaintext():
     original = RuntimeError("synthetic browser failure")
     with pytest.raises(RuntimeError) as caught:
         with device_directory({}, control) as device:
+            device.mark_ready()
             (device.path / "Local State").write_text("synthetic-progress")
             raise original
     assert caught.value is original
     assert not device.path.exists()
     assert control.saves == 1
     with device_directory({}, control) as device:
+        device.mark_ready()
         assert (device.path / "Local State").read_text() == "synthetic-progress"
 
 
@@ -111,6 +118,7 @@ def test_save_failure_preserves_cancellation_and_cleanup():
     original = KeyboardInterrupt("synthetic cancellation")
     with pytest.raises(KeyboardInterrupt) as caught:
         with device_directory({}, control) as device:
+            device.mark_ready()
             raise original
     assert caught.value is original
     assert not device.path.exists()
@@ -121,6 +129,7 @@ def test_normal_save_failure_is_visible_and_plaintext_removed():
     control.fail_save = True
     with pytest.raises(RuntimeError, match="lease expired"):
         with device_directory({}, control) as device:
+            device.mark_ready()
             (device.path / "Local State").write_text("synthetic")
     assert not device.path.exists()
 
@@ -194,6 +203,7 @@ def test_member_limit_and_snapshot_limit(monkeypatch):
     control = Control()
     with pytest.raises(DeviceArchiveError, match="member limit"):
         with device_directory({}, control) as device:
+            device.mark_ready()
             (device.path / "first").touch()
             (device.path / "second").touch()
     assert not device.path.exists()
@@ -204,6 +214,7 @@ def test_snapshot_rejects_non_transient_symlink():
     control = Control()
     with pytest.raises(DeviceArchiveError, match="Unsupported"):
         with device_directory({}, control) as device:
+            device.mark_ready()
             (device.path / "synthetic-link").symlink_to("/synthetic/target")
     assert not device.path.exists()
     assert control.saves == 0
@@ -215,6 +226,7 @@ def test_snapshot_size_limit_cleans_up_without_saving(monkeypatch, limit):
     control = Control()
     with pytest.raises(DeviceArchiveError, match="size limit"):
         with device_directory({}, control) as device:
+            device.mark_ready()
             (device.path / "Local State").write_bytes(b"synthetic" * 100)
     assert not device.path.exists()
     assert control.saves == 0
@@ -225,3 +237,44 @@ def test_truncated_gzip_archive_is_rejected():
     with pytest.raises(DeviceArchiveError):
         with device_directory({}, Control(archive[:-8])):
             pytest.fail("Truncated archive yielded a directory")
+
+
+@pytest.mark.parametrize("restored", [False, True])
+@pytest.mark.parametrize("error", [False, True])
+def test_startup_failure_or_unready_exit_preserves_archive(restored, error):
+    archive = packed([("Local State", tarfile.REGTYPE, b"synthetic-old")]) if restored else None
+    control = Control(archive)
+    original = RuntimeError("synthetic startup or import failure")
+    try:
+        with device_directory({}, control) as device:
+            assert not device.ready
+            assert device.restored is restored
+            (device.path / "Local State").write_text("synthetic-incomplete")
+            if error:
+                raise original
+    except RuntimeError as caught:
+        assert error and caught is original
+    assert control.saves == 0
+    assert control.archive is archive
+    assert not device.path.exists()
+
+
+@pytest.mark.parametrize("error", [False, True])
+def test_close_failure_discard_preserves_previous_archive(error):
+    archive = packed([("Local State", tarfile.REGTYPE, b"synthetic-old")])
+    control = Control(archive)
+    original = RuntimeError("synthetic browser error")
+    try:
+        with device_directory({}, control) as device:
+            device.mark_ready()
+            (device.path / "Local State").write_text("synthetic-progress")
+            device.abort_snapshot()
+            # Discard is permanent even if another caller marks it ready again.
+            device.mark_ready()
+            if error:
+                raise original
+    except RuntimeError as caught:
+        assert error and caught is original
+    assert control.saves == 0
+    assert control.archive is archive
+    assert not device.path.exists()
