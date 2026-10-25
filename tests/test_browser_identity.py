@@ -29,7 +29,7 @@ def test_native_options_independent_seeds_coherent_private():
     options = context_options(first)
     second = generate_profile({(options['viewport']['width'], options['viewport']['height'])})
     assert first['identity_seed'] != second['identity_seed']
-    assert options['viewport'] == context_options(second)['viewport'] == {'width': 1760, 'height': 960}
+    assert options['viewport'] == context_options(second)['viewport'] == {'width': 1760, 'height': 900}
     assert options['screen'] == {'width': 1920, 'height': 1080}
     assert options['screen']['height'] > options['viewport']['height']
     assert options['device_scale_factor'] == 1
@@ -213,7 +213,7 @@ def test_profile_v1_upgrade_preserves_seed_preferences_and_cipher_once(settings,
     assert upgraded['version'] == 2
     assert upgraded['identity_seed'] == legacy['identity_seed']
     expected = dict(legacy['context'])
-    expected.update(viewport={'width': 1760, 'height': 960}, screen={'width': 1920, 'height': 1080})
+    expected.update(viewport={'width': 1760, 'height': 900}, screen={'width': 1920, 'height': 1080})
     assert context_options(upgraded) == expected
     with database(settings.db_path) as conn:
         row = conn.execute('SELECT * FROM browser_profiles').fetchone()

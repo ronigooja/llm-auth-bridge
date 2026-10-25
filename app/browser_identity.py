@@ -12,7 +12,7 @@ from .db import database
 from .queue import Cancelled
 
 PROFILE_VERSION = 2
-VIEWPORT = {"width": 1760, "height": 960}
+VIEWPORT = {"width": 1760, "height": 900}
 SCREEN = {"width": 1920, "height": 1080}
 
 
