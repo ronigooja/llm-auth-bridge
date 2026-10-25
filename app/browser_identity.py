@@ -11,33 +11,24 @@ from .crypto import decrypt, encrypt
 from .db import database
 from .queue import Cancelled
 
-PROFILE_VERSION = 1
-MIN_WIDTH, WIDTH_COUNT = 1200, 720
-MIN_HEIGHT, HEIGHT_COUNT = 700, 500
-PROFILE_CAPACITY = WIDTH_COUNT * HEIGHT_COUNT
+PROFILE_VERSION = 2
+VIEWPORT = {"width": 1280, "height": 720}
+SCREEN = {"width": 1440, "height": 900}
 
 
-def generate_profile(used_dimensions: set[tuple[int, int]]) -> dict:
-    """Allocate a distinct desktop viewport, with a random private identity seed.
+def generate_profile(used_dimensions: set[tuple[int, int]] | None = None) -> dict:
+    """Create native preferences and an independent account identity seed.
 
-    The caller serializes allocation. Only the encrypted profile persists these
-    dimensions. A finite capacity fails closed rather than reusing a viewport.
+    ``used_dimensions`` is retained for callers of version one and is ignored.
+    Device separation comes from each account's persistent browser directory;
+    unique window dimensions are not a device identity mechanism.
     """
-    if len(used_dimensions) >= PROFILE_CAPACITY:
-        raise RuntimeError("Browser profile capacity exhausted")
-    start = secrets.randbelow(PROFILE_CAPACITY)
-    for offset in range(PROFILE_CAPACITY):
-        slot = (start + offset) % PROFILE_CAPACITY
-        width = MIN_WIDTH + slot % WIDTH_COUNT
-        height = MIN_HEIGHT + slot // WIDTH_COUNT
-        if (width, height) not in used_dimensions:
-            break
     return {
         "version": PROFILE_VERSION,
         "identity_seed": secrets.token_hex(32),
         "context": {
-            "viewport": {"width": width, "height": height},
-            "screen": {"width": width, "height": height + 80},
+            "viewport": dict(VIEWPORT),
+            "screen": dict(SCREEN),
             "device_scale_factor": 1,
             "locale": "en-US",
             "timezone_id": "UTC",
@@ -48,6 +39,16 @@ def generate_profile(used_dimensions: set[tuple[int, int]]) -> dict:
             "has_touch": False,
         },
     }
+
+
+def _upgrade_profile(profile: dict) -> dict:
+    """Normalize legacy geometry without changing the account seed or prefs."""
+    if profile.get("version") == 1:
+        profile = json.loads(json.dumps(profile))
+        profile["version"] = PROFILE_VERSION
+        profile["context"].update(viewport=dict(VIEWPORT), screen=dict(SCREEN))
+    context_options(profile)
+    return profile
 
 
 def context_options(profile: dict) -> dict:
@@ -68,7 +69,7 @@ def context_options(profile: dict) -> dict:
 def load_or_create_profile(path, key: bytes, queue, task: dict) -> dict:
     """Commit a profile under the current lease before the caller opens a browser.
 
-    BEGIN IMMEDIATE serializes first allocation across workers and targets.
+    BEGIN IMMEDIATE serializes allocation and upgrades across workers and targets.
     Existing profiles are never regenerated on failure or account/target edits.
     """
     with database(path) as conn:
@@ -82,16 +83,22 @@ def load_or_create_profile(path, key: bytes, queue, task: dict) -> dict:
             (account_id,),
         ).fetchone()
         if row:
-            profile = json.loads(decrypt(row["profile_cipher"], key))
-            context_options(profile)
+            existing = json.loads(decrypt(row["profile_cipher"], key))
+            profile = _upgrade_profile(existing)
+            if profile != existing:
+                owned = queue.owned(conn, task["id"], task["execution_id"])
+                if owned["cancel_requested"]:
+                    raise Cancelled()
+                conn.execute(
+                    "UPDATE browser_profiles SET profile_cipher=? WHERE account_id=?",
+                    (encrypt(json.dumps(profile), key), account_id),
+                )
             return profile
-        used = set()
-        for existing in conn.execute("SELECT profile_cipher FROM browser_profiles"):
-            options = context_options(json.loads(decrypt(existing["profile_cipher"], key)))
-            used.add((options["viewport"]["width"], options["viewport"]["height"]))
-        profile = generate_profile(used)
-        # Recheck after allocation; an expired owner must not create a profile.
-        queue.owned(conn, task["id"], task["execution_id"])
+        profile = generate_profile()
+        # Recheck after allocation; an expired/cancelled owner cannot persist.
+        owned = queue.owned(conn, task["id"], task["execution_id"])
+        if owned["cancel_requested"]:
+            raise Cancelled()
         conn.execute(
             "INSERT INTO browser_profiles(account_id,profile_cipher) VALUES(?,?)",
             (account_id, encrypt(json.dumps(profile), key)),
