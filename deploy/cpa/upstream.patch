@@ -1,0 +1,788 @@
+diff --git a/docs/bridge-oauth-v8.md b/docs/bridge-oauth-v8.md
+new file mode 100644
+index 00000000..f82f3c84
+--- /dev/null
++++ b/docs/bridge-oauth-v8.md
+@@ -0,0 +1,26 @@
++# Native bridge OAuth (v8)
++
++This extension is available only with the native file token store. Real-account verification is **unverified**. All routes require the normal management bearer authentication under `/v8/management/bridge/oauth`; no public callback listener is created.
++
++| Method | Path | Request |
++| --- | --- | --- |
++| GET | `/capabilities` | None |
++| PUT | `/sessions/{session_id}` | `{"identity":"fixture@example.invalid","route":{"type":"direct"}}` |
++| GET | `/sessions/{session_id}` | None |
++| POST | `/sessions/{session_id}/callback` | `{"redirect_url":"http://localhost:1455/auth/callback?code=...&state=..."}` |
++| POST | `/sessions/{session_id}/commit` | `{}` |
++| DELETE | `/sessions/{session_id}` | None |
++
++Capabilities return `protocol: cpa-native-oauth-v1`, `providers: [codex]`, and `session_timeout_seconds: 2700`. Session IDs are 16–128 ASCII letters, digits, underscores or hyphens. Identity is a case-insensitive email address. Optional `remote_id` identifies an exact native credential filename, including `.json`. Proxy routes use `{"type":"proxy","url":"http://proxy.example:8080"}`. Routes are explicit: direct bypasses inherited and environment proxies. The bridge must apply the same route to its browser. Proxy URLs can contain credentials and must not be logged.
++
++Every successful session operation returns HTTP 200 and fields `protocol`, `session_id`, `identity`, `route`, `remote_id`, `state`, `authorization_url`, `provider_state`, `expires_at`, `error`, `credential_digest`, and `record`. Empty strings and null record are normal before staging/commit. Start is idempotent for the same binding. Conflicting identity, route or remote ID returns 409. Invalid requests return 400, unknown sessions 404, unsupported stores 503 and persistence failures 500. Errors contain only a sanitized `error` string.
++
++States are `pending`, `exchanging`, `staged`, `committing`, `completed`, `cancelled`, `expired`, `failed` and `exchange_uncertain`. The callback requires the exact native loopback redirect, one state matching the session, one nonempty code and no provider error; duplicate parameters are rejected. Native Codex PKCE and token exchange are reused. Credentials are never returned by this API. A durable exchange fence precedes the single exchange. A lost process or unsuccessful exchange yields `exchange_uncertain`; create a fresh session instead of replaying a code. The exchange has a 30-second acquisition deadline.
++
++Sessions survive restart under `auth-dir/.bridge-oauth`, outside the credential scanner. Secret session files and credential files use mode 0600 and the session directory uses 0700. Writes are atomic and synced before the next irreversible operation. Session operations share process and file locks. Cancellation serializes with an in-flight exchange; it removes staged secrets after that exchange ends. A committing or completed session cannot be cancelled. Pending/staged sessions expire after 45 minutes; expiry is applied and secrets scrubbed on the next access. Unaccessed expired files remain restricted on disk, so operators should retain this directory as credential material.
++
++Start resolves exactly one identity record, including disabled records; duplicates and different identities are rejected. Before exchange and commit, the extension rechecks identity and the original credential fingerprint. Commit locks the native credential file and refuses to overwrite credentials refreshed since start. Unrelated current settings are preserved; the explicit route replaces `proxy_url`. The atomic credential write includes a session marker. A lost commit response is reconciled using that marker before any replacement write, preserving subsequently rotated tokens. A committing session must be retried through POST commit to reconcile; GET alone does not perform a commit.
++
++The staged `credential_digest` is an opaque expected token fingerprint. Completed replies include `record: {remote_id, identity, route, credential_digest}` from an actual disk read on every response. Clients must compare all four fields against the expected session binding and staged digest before declaring synchronization successful. A later refresh changes the record digest; retries never roll it back. The normal native auth-directory watcher activates the committed file asynchronously. This disk readback does not assert runtime reload completion, deployed health or provider acceptance. The extension does not support alternate token storage backends or execute login itself.
++
++Validation uses synthetic fixtures only. Regression tests cover staging isolation, restart, repeat commit after rotation, compare-and-swap rejection, settings preservation, exchange uncertainty, cancellation, expiry, ambiguous identity and strict callback validation. Compilation and executable tests must run in GitHub Actions; do not run them on the controller.
+diff --git a/internal/api/handlers/management/bridge_oauth.go b/internal/api/handlers/management/bridge_oauth.go
+new file mode 100644
+index 00000000..7956eee1
+--- /dev/null
++++ b/internal/api/handlers/management/bridge_oauth.go
+@@ -0,0 +1,513 @@
++package management
++
++import (
++	"context"
++	"crypto/sha256"
++	"encoding/hex"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"net/http"
++	"net/mail"
++	"net/url"
++	"os"
++	"path/filepath"
++	"regexp"
++	"strings"
++	"time"
++
++	"github.com/gin-gonic/gin"
++	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codex"
++	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
++	"github.com/router-for-me/CLIProxyAPI/v8/internal/misc"
++	sdkAuth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
++	"github.com/router-for-me/CLIProxyAPI/v8/sdk/proxyutil"
++)
++
++const bridgeOAuthProtocol = "cpa-native-oauth-v1"
++const bridgeOAuthTTL = 45 * time.Minute
++
++var bridgeSessionID = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
++
++type bridgeRoute struct {
++	Type string `json:"type"`
++	URL  string `json:"url,omitempty"`
++}
++type bridgeBinding struct {
++	Identity string      `json:"identity"`
++	RemoteID string      `json:"remote_id,omitempty"`
++	Route    bridgeRoute `json:"route"`
++}
++type bridgeSession struct {
++	bridgeBinding
++	Protocol         string                   `json:"protocol"`
++	SessionID        string                   `json:"session_id"`
++	State            string                   `json:"state"`
++	AuthorizationURL string                   `json:"authorization_url,omitempty"`
++	ProviderState    string                   `json:"provider_state,omitempty"`
++	ExpiresAt        time.Time                `json:"expires_at"`
++	Error            string                   `json:"error,omitempty"`
++	PKCE             *codex.PKCECodes         `json:"pkce,omitempty"`
++	Token            *codex.CodexTokenStorage `json:"token,omitempty"`
++	Baseline         string                   `json:"baseline"`
++	CredentialDigest string                   `json:"credential_digest,omitempty"`
++	Record           map[string]any           `json:"-"`
++}
++
++func (s *bridgeSession) public() gin.H {
++	return gin.H{"protocol": s.Protocol, "session_id": s.SessionID, "identity": s.Identity, "remote_id": s.RemoteID, "route": s.Route, "state": s.State, "authorization_url": s.AuthorizationURL, "provider_state": s.ProviderState, "expires_at": s.ExpiresAt, "error": s.Error, "credential_digest": s.CredentialDigest, "record": s.Record}
++}
++func (s *bridgeSession) scrub() {
++	s.PKCE = nil
++	s.Token = nil
++	s.AuthorizationURL = ""
++	s.ProviderState = ""
++}
++func bridgeWrite(path string, value any) error {
++	raw, err := json.Marshal(value)
++	if err != nil {
++		return err
++	}
++	var data map[string]any
++	if err = json.Unmarshal(raw, &data); err != nil {
++		return err
++	}
++	return bridgeWriteDurable(path, data)
++}
++
++// Sync both the replacement and its directory before an irreversible operation.
++func bridgeWriteDurable(path string, data map[string]any) error {
++	if err := codex.WriteJSONFileAtomic(path, data); err != nil {
++		return err
++	}
++	file, err := os.OpenFile(path, os.O_RDWR, 0)
++	if err != nil {
++		return err
++	}
++	err = file.Sync()
++	_ = file.Close()
++	if err != nil {
++		return err
++	}
++	directory, err := os.Open(filepath.Dir(path))
++	if err != nil {
++		return err
++	}
++	defer directory.Close()
++	return directory.Sync()
++}
++func bridgeTokenDigest(data map[string]any) string {
++	fields := map[string]any{}
++	for _, key := range []string{"access_token", "refresh_token", "id_token", "account_id", "email"} {
++		fields[key] = data[key]
++	}
++	raw, _ := json.Marshal(fields)
++	sum := sha256.Sum256(raw)
++	return hex.EncodeToString(sum[:])
++}
++func (s *bridgeSession) readback(dir string) error {
++	if s.State != "completed" {
++		return nil
++	}
++	_, data, err := bridgeResolve(dir, s.bridgeBinding)
++	if err != nil {
++		return err
++	}
++	if data == nil {
++		return errors.New("committed credential is missing")
++	}
++	route := bridgeRoute{Type: "proxy"}
++	proxy, _ := data["proxy_url"].(string)
++	if proxy == "direct" {
++		route.Type = "direct"
++	} else {
++		route.URL = proxy
++	}
++	s.Record = map[string]any{"remote_id": s.RemoteID, "identity": data["email"], "route": route, "credential_digest": bridgeTokenDigest(data)}
++	return nil
++}
++func bridgeRead(path string) (map[string]any, error) {
++	raw, err := os.ReadFile(path)
++	if err != nil {
++		return nil, err
++	}
++	var data map[string]any
++	if err = json.Unmarshal(raw, &data); err != nil || data == nil {
++		return nil, errors.New("invalid credential record")
++	}
++	return data, nil
++}
++func bridgeFingerprint(data map[string]any) string {
++	if data == nil {
++		return "absent"
++	}
++	fields := map[string]any{}
++	for _, key := range []string{"type", "email", "account_id", "access_token", "refresh_token", "id_token", "last_refresh", "siwc"} {
++		fields[key] = data[key]
++	}
++	raw, _ := json.Marshal(fields)
++	sum := sha256.Sum256(raw)
++	return hex.EncodeToString(sum[:])
++}
++func bridgeRecordName(id string) bool {
++	return id != "" && filepath.Base(id) == id && id != "." && strings.HasSuffix(id, ".json") && !strings.ContainsAny(id, `/\`)
++}
++
++// Resolve against persisted records, including disabled records. Never select an arbitrary duplicate.
++func bridgeResolve(dir string, b bridgeBinding) (string, map[string]any, error) {
++	entries, err := os.ReadDir(dir)
++	if err != nil {
++		return "", nil, err
++	}
++	matches := []string{}
++	for _, entry := range entries {
++		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
++			continue
++		}
++		data, errRead := bridgeRead(filepath.Join(dir, entry.Name()))
++		if errRead != nil {
++			return "", nil, errors.New("cannot inspect credential records")
++		}
++		if data["type"] == "codex" {
++			email, _ := data["email"].(string)
++			if strings.EqualFold(email, b.Identity) {
++				matches = append(matches, entry.Name())
++			}
++		}
++	}
++	if len(matches) > 1 {
++		return "", nil, errors.New("ambiguous identity")
++	}
++	if b.RemoteID != "" {
++		if !bridgeRecordName(b.RemoteID) {
++			return "", nil, errors.New("invalid remote_id")
++		}
++		data, errRead := bridgeRead(filepath.Join(dir, b.RemoteID))
++		if errRead != nil && !os.IsNotExist(errRead) {
++			return "", nil, errors.New("cannot inspect remote_id")
++		}
++		if errRead == nil {
++			email, _ := data["email"].(string)
++			if data["type"] != "codex" || !strings.EqualFold(email, b.Identity) {
++				return "", nil, errors.New("remote_id identity mismatch")
++			}
++		}
++		if len(matches) == 1 && matches[0] != b.RemoteID {
++			return "", nil, errors.New("identity already has a different remote_id")
++		}
++		return b.RemoteID, data, nil
++	}
++	if len(matches) == 1 {
++		data, errRead := bridgeRead(filepath.Join(dir, matches[0]))
++		return matches[0], data, errRead
++	}
++	sum := sha256.Sum256([]byte(strings.ToLower(b.Identity)))
++	return "codex-bridge-" + hex.EncodeToString(sum[:16]) + ".json", nil, nil
++}
++
++func (h *Handler) bridgeOAuthService(cfg *config.Config, proxy string) codexOAuthService {
++	if h.bridgeOAuthFactory != nil {
++		return h.bridgeOAuthFactory(cfg, proxy)
++	}
++	return codex.NewCodexAuthWithProxyURL(cfg, proxy)
++}
++
++func (h *Handler) BridgeOAuthCapabilities(c *gin.Context) {
++	if _, ok := h.tokenStore.(*sdkAuth.FileTokenStore); !ok {
++		c.JSON(503, gin.H{"error": "native bridge requires file token store"})
++		return
++	}
++	c.JSON(200, gin.H{"protocol": bridgeOAuthProtocol, "providers": []string{"codex"}, "session_timeout_seconds": int(bridgeOAuthTTL / time.Second)})
++}
++
++// BridgeOAuthSession keeps the durable exchange fence before contacting the provider.
++// A process loss after this fence is never resolved by replaying the authorization code.
++func (h *Handler) BridgeOAuthSession(c *gin.Context) {
++	if _, ok := h.tokenStore.(*sdkAuth.FileTokenStore); !ok {
++		c.JSON(503, gin.H{"error": "native bridge requires file token store"})
++		return
++	}
++	id := c.Param("session_id")
++	if !bridgeSessionID.MatchString(id) {
++		c.JSON(400, gin.H{"error": "invalid session_id"})
++		return
++	}
++	cfg := h.configSnapshot()
++	if cfg == nil || cfg.AuthDir == "" {
++		c.JSON(503, gin.H{"error": "auth directory unavailable"})
++		return
++	}
++	dir := filepath.Join(cfg.AuthDir, ".bridge-oauth")
++	if err := os.MkdirAll(dir, 0700); err != nil {
++		c.JSON(500, gin.H{"error": "session storage unavailable"})
++		return
++	}
++	path := filepath.Join(dir, id+".session")
++	status := 200
++	var reply any
++	err := codex.WithFileLock(path, func() error {
++		raw, errRead := os.ReadFile(path)
++		var s bridgeSession
++		if errRead != nil && !os.IsNotExist(errRead) {
++			return errRead
++		}
++		if errRead == nil {
++			if err := json.Unmarshal(raw, &s); err != nil {
++				return err
++			}
++		}
++		save := func() error { return bridgeWrite(path, &s) }
++		conflict := func(message string) error { status = 409; reply = gin.H{"error": message}; return nil }
++		if os.IsNotExist(errRead) {
++			if c.Request.Method != http.MethodPut {
++				status = 404
++				reply = gin.H{"error": "session not found"}
++				return nil
++			}
++			var b bridgeBinding
++			if err := c.ShouldBindJSON(&b); err != nil {
++				status = 400
++				reply = gin.H{"error": "invalid start body"}
++				return nil
++			}
++			b.Identity = strings.ToLower(strings.TrimSpace(b.Identity))
++			address, err := mail.ParseAddress(b.Identity)
++			if err != nil || address.Address != b.Identity {
++				status = 400
++				reply = gin.H{"error": "identity must be an email address"}
++				return nil
++			}
++			if (b.Route.Type == "direct" && b.Route.URL != "") || (b.Route.Type != "direct" && (b.Route.Type != "proxy" || !proxyutil.ValidRequestProxy(b.Route.URL))) {
++				status = 400
++				reply = gin.H{"error": "invalid explicit route"}
++				return nil
++			}
++			remote, data, err := bridgeResolve(cfg.AuthDir, b)
++			if err != nil {
++				return conflict(err.Error())
++			}
++			b.RemoteID = remote
++			pkce, err := codex.GeneratePKCECodes()
++			if err != nil {
++				return err
++			}
++			state, err := misc.GenerateRandomState()
++			if err != nil {
++				return err
++			}
++			proxy := b.Route.URL
++			if b.Route.Type == "direct" {
++				proxy = "direct"
++			}
++			authURL, err := h.bridgeOAuthService(cfg, proxy).GenerateAuthURL(state, pkce)
++			if err != nil {
++				return err
++			}
++			s = bridgeSession{bridgeBinding: b, Protocol: bridgeOAuthProtocol, SessionID: id, State: "pending", AuthorizationURL: authURL, ProviderState: state, ExpiresAt: time.Now().Add(bridgeOAuthTTL), PKCE: pkce, Baseline: bridgeFingerprint(data)}
++			if err = save(); err != nil {
++				return err
++			}
++			reply = s.public()
++			return nil
++		}
++		if s.State == "exchanging" {
++			s.State = "exchange_uncertain"
++			s.Error = "authorization exchange outcome unknown; start a new session"
++			s.scrub()
++			if err := save(); err != nil {
++				return err
++			}
++		}
++		if time.Now().After(s.ExpiresAt) && s.State != "completed" && s.State != "committing" && s.State != "cancelled" {
++			s.State = "expired"
++			s.scrub()
++			if err := save(); err != nil {
++				return err
++			}
++		}
++		switch c.Request.Method {
++		case http.MethodGet:
++			if err := s.readback(cfg.AuthDir); err != nil {
++				return conflict(err.Error())
++			}
++			reply = s.public()
++			return nil
++		case http.MethodPut:
++			var b bridgeBinding
++			if err := c.ShouldBindJSON(&b); err != nil {
++				return conflict("invalid repeated start")
++			}
++			b.Identity = strings.ToLower(strings.TrimSpace(b.Identity))
++			if b.Identity != s.Identity || b.Route != s.Route || (b.RemoteID != "" && b.RemoteID != s.RemoteID) {
++				return conflict("session binding mismatch")
++			}
++		case http.MethodDelete:
++			if s.State == "completed" || s.State == "committing" {
++				return conflict("commit cannot be cancelled")
++			}
++			s.State = "cancelled"
++			s.scrub()
++			if err := save(); err != nil {
++				return err
++			}
++		case http.MethodPost:
++			if strings.HasSuffix(c.Request.URL.Path, "/callback") {
++				if s.State != "pending" {
++					return conflict("callback is not pending")
++				}
++				var body struct {
++					RedirectURL string `json:"redirect_url"`
++				}
++				if err := c.ShouldBindJSON(&body); err != nil {
++					status = 400
++					reply = gin.H{"error": "invalid callback body"}
++					return nil
++				}
++				code, err := bridgeCallbackCode(body.RedirectURL, s.ProviderState)
++				if err != nil {
++					status = 400
++					reply = gin.H{"error": err.Error()}
++					return nil
++				}
++				_, current, errResolve := bridgeResolve(cfg.AuthDir, s.bridgeBinding)
++				if errResolve != nil {
++					return conflict(errResolve.Error())
++				}
++				if bridgeFingerprint(current) != s.Baseline {
++					return conflict("credential changed since start")
++				}
++				s.State = "exchanging"
++				if err = save(); err != nil {
++					return err
++				}
++				proxy := s.Route.URL
++				if s.Route.Type == "direct" {
++					proxy = "direct"
++				}
++				service := h.bridgeOAuthService(cfg, proxy)
++				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
++				defer cancel()
++				bundle, errExchange := service.ExchangeCodeForTokens(ctx, code, s.PKCE)
++				if errExchange != nil {
++					s.State = "exchange_uncertain"
++					s.Error = "token exchange did not complete; start a new session"
++					s.scrub()
++				} else if bundle == nil || !strings.EqualFold(bundle.TokenData.Email, s.Identity) || bundle.TokenData.AccessToken == "" || bundle.TokenData.RefreshToken == "" {
++					s.State = "failed"
++					s.Error = "provider identity mismatch or incomplete tokens"
++					s.scrub()
++				} else {
++					s.Token = service.CreateTokenStorage(bundle)
++					s.Token.Type = "codex"
++					rawToken, _ := json.Marshal(s.Token)
++					var tokenMap map[string]any
++					_ = json.Unmarshal(rawToken, &tokenMap)
++					s.CredentialDigest = bridgeTokenDigest(tokenMap)
++					s.PKCE = nil
++					s.AuthorizationURL = ""
++					s.ProviderState = ""
++					s.State = "staged"
++				}
++				if err = save(); err != nil {
++					return err
++				}
++			} else {
++				if s.State != "staged" && s.State != "committing" && s.State != "completed" {
++					return conflict("session is not staged")
++				}
++				if s.State != "completed" {
++					if err := h.bridgeCommit(cfg.AuthDir, path, &s); err != nil {
++						return conflict(err.Error())
++					}
++				}
++			}
++		}
++		if err := s.readback(cfg.AuthDir); err != nil {
++			return conflict(err.Error())
++		}
++		reply = s.public()
++		return nil
++	})
++	if err != nil {
++		c.JSON(500, gin.H{"error": "native session persistence failed"})
++		return
++	}
++	c.JSON(status, reply)
++}
++
++func bridgeCallbackCode(raw, state string) (string, error) {
++	u, err := url.Parse(raw)
++	if err != nil || u.Scheme != "http" || u.Host != "localhost:1455" || u.Path != "/auth/callback" || u.RawPath != "" || u.User != nil || u.Fragment != "" || u.Opaque != "" {
++		return "", errors.New("invalid callback redirect")
++	}
++	q, err := url.ParseQuery(u.RawQuery)
++	if err != nil {
++		return "", errors.New("invalid callback query")
++	}
++	for _, v := range q {
++		if len(v) != 1 {
++			return "", errors.New("duplicate callback parameter")
++		}
++	}
++	if q.Get("state") != state || q.Get("code") == "" || q.Get("error") != "" {
++		return "", errors.New("callback state or code invalid")
++	}
++	return q.Get("code"), nil
++}
++
++// A persisted marker reconciles a lost commit response even after token rotation.
++// The baseline prevents replacing credentials changed since session creation.
++func (h *Handler) bridgeCommit(dir, path string, s *bridgeSession) error {
++	return codex.WithFileLock(filepath.Join(dir, ".bridge-oauth", "commit"), func() error {
++		return codex.WithFileLock(filepath.Join(dir, s.RemoteID), func() error {
++			remote, current, err := bridgeResolve(dir, s.bridgeBinding)
++			if err != nil {
++				return err
++			}
++			if remote != s.RemoteID {
++				return errors.New("resolved record changed")
++			}
++			if current != nil && current["bridge_oauth_session_id"] == s.SessionID {
++				s.State = "completed"
++				s.scrub()
++				return bridgeWrite(path, s)
++			}
++			if bridgeFingerprint(current) != s.Baseline {
++				return errors.New("credential changed since start")
++			}
++			if s.Token == nil {
++				return errors.New("staged token unavailable")
++			}
++			s.State = "committing"
++			if err = bridgeWrite(path, s); err != nil {
++				return err
++			}
++			raw, err := json.Marshal(s.Token)
++			if err != nil {
++				return err
++			}
++			var tokens map[string]any
++			if err = json.Unmarshal(raw, &tokens); err != nil {
++				return err
++			}
++			if current == nil {
++				current = map[string]any{}
++			}
++			for _, key := range []string{"id_token", "access_token", "refresh_token", "account_id", "last_refresh", "email", "type", "expired", "plan_type"} {
++				current[key] = tokens[key]
++			}
++			proxy := s.Route.URL
++			if s.Route.Type == "direct" {
++				proxy = "direct"
++			}
++			current["proxy_url"] = proxy
++			current["bridge_oauth_session_id"] = s.SessionID
++			if err = bridgeWriteDurable(filepath.Join(dir, s.RemoteID), current); err != nil {
++				return fmt.Errorf("credential write failed")
++			}
++			s.State = "completed"
++			s.scrub()
++			return bridgeWrite(path, s)
++		})
++	})
++}
+diff --git a/internal/api/handlers/management/bridge_oauth_test.go b/internal/api/handlers/management/bridge_oauth_test.go
+new file mode 100644
+index 00000000..24aeb62c
+--- /dev/null
++++ b/internal/api/handlers/management/bridge_oauth_test.go
+@@ -0,0 +1,202 @@
++package management
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"net/http/httptest"
++	"net/url"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/gin-gonic/gin"
++	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codex"
++	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
++	sdkAuth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
++)
++
++type bridgeFakeOAuth struct {
++	calls int
++	email string
++	fail  bool
++}
++
++func (f *bridgeFakeOAuth) GenerateAuthURL(state string, p *codex.PKCECodes) (string, error) {
++	return "https://example.invalid?state=" + state, nil
++}
++func (f *bridgeFakeOAuth) ExchangeCodeForTokens(context.Context, string, *codex.PKCECodes) (*codex.CodexAuthBundle, error) {
++	f.calls++
++	if f.fail {
++		return nil, errors.New("synthetic provider error")
++	}
++	return &codex.CodexAuthBundle{TokenData: codex.CodexTokenData{Email: f.email, AccessToken: "synthetic-access", RefreshToken: "synthetic-refresh", AccountID: "synthetic-account"}}, nil
++}
++func (f *bridgeFakeOAuth) CreateTokenStorage(b *codex.CodexAuthBundle) *codex.CodexTokenStorage {
++	return codex.NewCodexAuthWithProxyURL(nil, "direct").CreateTokenStorage(b)
++}
++func bridgeFixture(t *testing.T) (*Handler, *gin.Engine, *bridgeFakeOAuth, string) {
++	t.Helper()
++	gin.SetMode(gin.TestMode)
++	dir := t.TempDir()
++	f := &bridgeFakeOAuth{email: "fixture@example.invalid"}
++	h := &Handler{cfg: &config.Config{AuthDir: dir}, tokenStore: sdkAuth.NewFileTokenStore()}
++	h.bridgeOAuthFactory = func(_ *config.Config, proxy string) codexOAuthService {
++		if proxy != "direct" {
++			t.Errorf("route inherited: %q", proxy)
++		}
++		return f
++	}
++	r := gin.New()
++	r.PUT("/sessions/:session_id", h.BridgeOAuthSession)
++	r.GET("/sessions/:session_id", h.BridgeOAuthSession)
++	r.DELETE("/sessions/:session_id", h.BridgeOAuthSession)
++	r.POST("/sessions/:session_id/callback", h.BridgeOAuthSession)
++	r.POST("/sessions/:session_id/commit", h.BridgeOAuthSession)
++	return h, r, f, dir
++}
++func bridgeRequest(t *testing.T, r *gin.Engine, method, path, body string, status int) map[string]any {
++	t.Helper()
++	w := httptest.NewRecorder()
++	req := httptest.NewRequest(method, path, strings.NewReader(body))
++	req.Header.Set("Content-Type", "application/json")
++	r.ServeHTTP(w, req)
++	if w.Code != status {
++		t.Fatalf("%s %s: status %d body %s", method, path, w.Code, w.Body.String())
++	}
++	var result map[string]any
++	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
++		t.Fatal(err)
++	}
++	return result
++}
++
++const bridgeTestPath = "/sessions/synthetic-session-0001"
++const bridgeTestStart = `{"identity":"fixture@example.invalid","route":{"type":"direct"}}`
++
++func bridgeStage(t *testing.T, r *gin.Engine) map[string]any {
++	t.Helper()
++	start := bridgeRequest(t, r, "PUT", bridgeTestPath, bridgeTestStart, 200)
++	callback := "http://localhost:1455/auth/callback?code=synthetic-code&state=" + url.QueryEscape(start["provider_state"].(string))
++	body, _ := json.Marshal(map[string]string{"redirect_url": callback})
++	return bridgeRequest(t, r, "POST", bridgeTestPath+"/callback", string(body), 200)
++}
++func TestBridgeOAuthStageCommitAndRotation(t *testing.T) {
++	h, r, f, dir := bridgeFixture(t)
++	stage := bridgeStage(t, r)
++	if stage["state"] != "staged" || f.calls != 1 {
++		t.Fatal(stage)
++	}
++	remote := stage["remote_id"].(string)
++	if _, err := os.Stat(filepath.Join(dir, remote)); !os.IsNotExist(err) {
++		t.Fatal("staged credential activated")
++	}
++	restarted := &Handler{cfg: h.cfg, tokenStore: sdkAuth.NewFileTokenStore()}
++	h = restarted
++	r = gin.New()
++	r.GET("/sessions/:session_id", h.BridgeOAuthSession)
++	r.POST("/sessions/:session_id/commit", h.BridgeOAuthSession)
++	completed := bridgeRequest(t, r, "POST", bridgeTestPath+"/commit", "{}", 200)
++	record := completed["record"].(map[string]any)
++	if completed["state"] != "completed" || record["credential_digest"] != stage["credential_digest"] {
++		t.Fatal(completed)
++	}
++	data, err := bridgeRead(filepath.Join(dir, remote))
++	if err != nil {
++		t.Fatal(err)
++	}
++	data["refresh_token"] = "synthetic-rotated"
++	if err = bridgeWrite(filepath.Join(dir, remote), data); err != nil {
++		t.Fatal(err)
++	}
++	again := bridgeRequest(t, r, "POST", bridgeTestPath+"/commit", "{}", 200)
++	if again["record"].(map[string]any)["credential_digest"] == stage["credential_digest"] {
++		t.Fatal("rotation hidden")
++	}
++	saved, _ := bridgeRead(filepath.Join(dir, remote))
++	if saved["refresh_token"] != "synthetic-rotated" {
++		t.Fatal("rotation overwritten")
++	}
++}
++func TestBridgeOAuthCASPreservesSettingsAndRejectsRefresh(t *testing.T) {
++	h, r, _, dir := bridgeFixture(t)
++	existing := map[string]any{"type": "codex", "email": "fixture@example.invalid", "refresh_token": "old", "label": "keep"}
++	if err := bridgeWrite(filepath.Join(dir, "existing.json"), existing); err != nil {
++		t.Fatal(err)
++	}
++	stage := bridgeStage(t, r)
++	existing["label"] = "new setting"
++	if err := bridgeWrite(filepath.Join(dir, "existing.json"), existing); err != nil {
++		t.Fatal(err)
++	}
++	bridgeRequest(t, r, "POST", bridgeTestPath+"/commit", "{}", 200)
++	saved, _ := bridgeRead(filepath.Join(dir, "existing.json"))
++	if saved["label"] != "new setting" || stage["remote_id"] != "existing.json" {
++		t.Fatal(saved)
++	}
++	s := bridgeSession{bridgeBinding: bridgeBinding{Identity: "fixture@example.invalid", RemoteID: "existing.json", Route: bridgeRoute{Type: "direct"}}, SessionID: "second-session-0001", State: "staged", Baseline: bridgeFingerprint(saved), Token: &codex.CodexTokenStorage{Email: "fixture@example.invalid", RefreshToken: "replacement"}}
++	saved["refresh_token"] = "newer"
++	if err := bridgeWrite(filepath.Join(dir, "existing.json"), saved); err != nil {
++		t.Fatal(err)
++	}
++	if err := h.bridgeCommit(dir, filepath.Join(dir, ".bridge-oauth", "second.session"), &s); err == nil {
++		t.Fatal("refresh overwritten")
++	}
++}
++func TestBridgeOAuthUncertainExchangeCancellationAndExpiry(t *testing.T) {
++	_, r, f, dir := bridgeFixture(t)
++	bridgeRequest(t, r, "PUT", bridgeTestPath, bridgeTestStart, 200)
++	path := filepath.Join(dir, ".bridge-oauth", "synthetic-session-0001.session")
++	raw, _ := os.ReadFile(path)
++	var s bridgeSession
++	_ = json.Unmarshal(raw, &s)
++	s.State = "exchanging"
++	if err := bridgeWrite(path, &s); err != nil {
++		t.Fatal(err)
++	}
++	got := bridgeRequest(t, r, "GET", bridgeTestPath, "", 200)
++	if got["state"] != "exchange_uncertain" || f.calls != 0 {
++		t.Fatal(got)
++	}
++	bridgeRequest(t, r, "POST", bridgeTestPath+"/callback", `{}`, 409)
++	cancelled := bridgeRequest(t, r, "DELETE", bridgeTestPath, "", 200)
++	if cancelled["state"] != "cancelled" {
++		t.Fatal(cancelled)
++	}
++	s.State = "pending"
++	s.ExpiresAt = time.Now().Add(-time.Minute)
++	s.Token = &codex.CodexTokenStorage{RefreshToken: "synthetic-expiring-secret"}
++	if err := bridgeWrite(path, &s); err != nil {
++		t.Fatal(err)
++	}
++	expired := bridgeRequest(t, r, "GET", bridgeTestPath, "", 200)
++	if expired["state"] != "expired" {
++		t.Fatal(expired)
++	}
++	raw, _ = os.ReadFile(path)
++	if strings.Contains(string(raw), "synthetic-expiring-secret") {
++		t.Fatal("expired secret retained")
++	}
++}
++func TestBridgeCallbackStrictValidation(t *testing.T) {
++	for _, raw := range []string{"http://127.0.0.1:1455/auth/callback?state=s&code=c", "http://localhost:1455/auth/callback?state=s&state=s&code=c", "http://localhost:1455/auth/callback?state=s&code=c&code=c", "http://localhost:1455/auth/callback?state=wrong&code=c", "http://localhost:1455/auth/callback?state=s&code=c#error", "http://localhost:1455/auth/callback?state=s&code=c&error=denied"} {
++		if _, err := bridgeCallbackCode(raw, "s"); err == nil {
++			t.Errorf("accepted %s", raw)
++		}
++	}
++	if code, err := bridgeCallbackCode("http://localhost:1455/auth/callback?state=s&code=c", "s"); err != nil || code != "c" {
++		t.Fatal(code, err)
++	}
++}
++func TestBridgeOAuthBindingAndAmbiguousIdentity(t *testing.T) {
++	_, r, _, dir := bridgeFixture(t)
++	bridgeRequest(t, r, "PUT", bridgeTestPath, `{"identity":"fixture@example.invalid","route":{"type":"proxy","url":"ftp://invalid"}}`, 400)
++	for _, name := range []string{"a.json", "b.json"} {
++		if err := bridgeWrite(filepath.Join(dir, name), map[string]any{"type": "codex", "email": "fixture@example.invalid"}); err != nil {
++			t.Fatal(err)
++		}
++	}
++	bridgeRequest(t, r, "PUT", bridgeTestPath, bridgeTestStart, 409)
++}
+diff --git a/internal/api/handlers/management/handler.go b/internal/api/handlers/management/handler.go
+index 21747e58..d8a7a5f8 100644
+--- a/internal/api/handlers/management/handler.go
++++ b/internal/api/handlers/management/handler.go
+@@ -63,6 +63,7 @@ type Handler struct {
+ 	pluginReleases          pluginReleaseCache
+ 	siwcOAuthFactory        func(*config.Config) siwcOAuthService
+ 	siwcCommitMu            sync.Mutex
++	bridgeOAuthFactory      func(*config.Config, string) codexOAuthService
+ }
+ 
+ type configReloadSnapshot struct {
+diff --git a/internal/api/server_management_v8.go b/internal/api/server_management_v8.go
+index a25b33f6..1e40c6b8 100644
+--- a/internal/api/server_management_v8.go
++++ b/internal/api/server_management_v8.go
+@@ -18,6 +18,12 @@ func (s *Server) registerManagementV8Routes() {
+ 	v8.Use(s.managementAvailabilityMiddleware(), s.mgmt.Middleware(), func(c *gin.Context) {
+ 		c.Set(management.ConfigV8ContextKey, true)
+ 	})
++	v8.GET("/bridge/oauth/capabilities", s.mgmt.BridgeOAuthCapabilities)
++	v8.PUT("/bridge/oauth/sessions/:session_id", s.mgmt.BridgeOAuthSession)
++	v8.GET("/bridge/oauth/sessions/:session_id", s.mgmt.BridgeOAuthSession)
++	v8.POST("/bridge/oauth/sessions/:session_id/callback", s.mgmt.BridgeOAuthSession)
++	v8.POST("/bridge/oauth/sessions/:session_id/commit", s.mgmt.BridgeOAuthSession)
++	v8.DELETE("/bridge/oauth/sessions/:session_id", s.mgmt.BridgeOAuthSession)
+ 	v8.GET("/config", s.mgmt.ConfigV8)
+ 	v8.PUT("/config", s.mgmt.ConfigV8)
+ 	v8.PATCH("/config", s.mgmt.ConfigV8)
