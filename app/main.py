@@ -764,8 +764,17 @@ def create_app(settings: Settings | None = None):
             headers={"X-Accel-Buffering": "no", "Cache-Control": "no-store"},
         )
 
+    @app.websocket("/api/v1/tasks/{task_id}/monitor")
+    async def monitor(ws: WebSocket, task_id: int):
+        await account_window(ws, task_id, read_only=True)
+
     @app.websocket("/api/v1/tasks/{task_id}/takeover")
     async def takeover(ws: WebSocket, task_id: int):
+        await account_window(ws, task_id, read_only=False)
+
+    async def account_window(ws: WebSocket, task_id: int, *, read_only: bool):
+        from .rfb_monitor import ReadOnlyRFB
+
         cookie = ws.cookies.get("bridge_session")
         if (
             not session(cookie)
@@ -775,21 +784,33 @@ def create_app(settings: Settings | None = None):
             await ws.close(code=1008)
             return
 
+        states = ("running", "waiting_human") if read_only else ("waiting_human",)
+        owner = None
+
         def valid():
+            nonlocal owner
             if not session(cookie):
                 return False
             with database(settings.db_path) as conn:
-                r = conn.execute(
-                    "SELECT 1 FROM tasks WHERE id=? AND state='waiting_human' AND takeover_available=1 AND lease_until>? AND cancel_requested=0",
+                row = conn.execute(
+                    "SELECT account_id,execution_id,state FROM tasks WHERE id=? "
+                    "AND execution_id IS NOT NULL AND takeover_available=1 "
+                    "AND lease_until>? AND cancel_requested=0",
                     (task_id, time.time()),
                 ).fetchone()
-                return bool(r)
+                if not row or row["state"] not in states:
+                    return False
+                identity = (row["account_id"], row["execution_id"])
+                if owner is None:
+                    owner = identity
+                return identity == owner
 
         if not valid():
             await ws.close(code=1008)
             return
         import websockets
 
+        reader = ReadOnlyRFB() if read_only else None
         await ws.accept()
         try:
             async with websockets.connect(
@@ -803,11 +824,15 @@ def create_app(settings: Settings | None = None):
                             return
                         if not valid():
                             return
-                        await remote.send(
-                            msg.get("bytes")
-                            if msg.get("bytes") is not None
-                            else msg.get("text", "")
-                        )
+                        data = msg.get("bytes")
+                        if reader is not None:
+                            # Forward only complete, validated RFB client messages.
+                            for frame in reader.feed(data):
+                                if not valid():
+                                    return
+                                await remote.send(frame)
+                        else:
+                            await remote.send(data if data is not None else msg.get("text", ""))
 
                 async def to_client():
                     async for msg in remote:
@@ -815,8 +840,10 @@ def create_app(settings: Settings | None = None):
                             return
                         if isinstance(msg, bytes):
                             await ws.send_bytes(msg)
-                        else:
+                        elif reader is None:
                             await ws.send_text(msg)
+                        else:
+                            return
 
                 async def revocation():
                     while valid():
