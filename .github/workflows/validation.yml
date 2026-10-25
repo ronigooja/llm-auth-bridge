@@ -1,0 +1,111 @@
+name: Native OAuth validation
+on:
+  workflow_dispatch:
+  push:
+    branches: ["validation/**"]
+permissions:
+  contents: read
+concurrency:
+  group: native-validation-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  bridge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record source and runner
+        run: |
+          mkdir -p validation-logs
+          git rev-parse HEAD > validation-logs/source-revision.txt
+          git status --porcelain=v1 > validation-logs/uncommitted-inputs.txt
+          printf 'run=%s\njob=%s\nos=%s\narch=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$GITHUB_JOB" "$RUNNER_OS" "$RUNNER_ARCH" > validation-logs/environment.txt
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Provision synthetic test prerequisites
+        id: provision
+        run: |
+          set -euxo pipefail
+          exec > >(tee validation-logs/provision.log) 2>&1
+          trap 'printf "%s\n" "$?" > validation-logs/provision.exit' EXIT
+          pip install uv==0.8.22
+          uv sync --frozen --extra test --extra browser
+          uv run playwright install --with-deps chromium
+          curl -fsSL https://github.com/go-gost/gost/releases/download/v3.3.1/gost_3.3.1_linux_amd64.tar.gz -o /tmp/gost.tar.gz
+          echo 'e0e3a2c9116e2f025e962bba340749f80696bda318613d45e5ae96dd0bcae37c  /tmp/gost.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/gost.tar.gz -C /tmp gost
+          npm ci --ignore-scripts --prefix frontend
+      - name: Frontend tests and build
+        run: |
+          set -euxo pipefail
+          exec > >(tee validation-logs/frontend.log) 2>&1
+          trap 'printf "%s\n" "$?" > validation-logs/frontend.exit' EXIT
+          npm test --prefix frontend
+          npm run build --prefix frontend
+      - name: Full synthetic pytest suite
+        if: ${{ !cancelled() && steps.provision.outcome != 'failure' }}
+        env:
+          BRIDGE_TEST_GOST: /tmp/gost
+        run: |
+          set -euxo pipefail
+          exec > >(tee validation-logs/pytest.log) 2>&1
+          trap 'printf "%s\n" "$?" > validation-logs/pytest.exit' EXIT
+          uv run pytest -ra --junitxml=validation-logs/pytest.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bridge-validation-${{ github.sha }}
+          path: validation-logs/
+          retention-days: 7
+  cpa:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record source and runner
+        run: |
+          mkdir -p validation-logs
+          git rev-parse HEAD > validation-logs/source-revision.txt
+          git status --porcelain=v1 > validation-logs/uncommitted-inputs.txt
+          printf 'run=%s\njob=%s\nos=%s\narch=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$GITHUB_JOB" "$RUNNER_OS" "$RUNNER_ARCH" > validation-logs/environment.txt
+      - name: Fetch pinned upstream and apply extension
+        run: |
+          set -euxo pipefail
+          exec > >(tee validation-logs/source.log) 2>&1
+          trap 'printf "%s\n" "$?" > validation-logs/source.exit' EXIT
+          revision=$(cat deploy/cpa/UPSTREAM_REVISION)
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          git init /tmp/cpa-source
+          git -C /tmp/cpa-source remote add origin https://github.com/router-for-me/CLIProxyAPI.git
+          git -C /tmp/cpa-source fetch --depth=1 origin "$revision"
+          git -C /tmp/cpa-source checkout --detach FETCH_HEAD
+          git -C /tmp/cpa-source rev-parse HEAD > validation-logs/upstream-revision.txt
+          sha256sum deploy/cpa/upstream.patch > validation-logs/upstream-patch.sha256
+          git -C /tmp/cpa-source apply --check "$GITHUB_WORKSPACE/deploy/cpa/upstream.patch"
+          git -C /tmp/cpa-source apply "$GITHUB_WORKSPACE/deploy/cpa/upstream.patch"
+          git -C /tmp/cpa-source diff --stat > validation-logs/upstream-input-changes.txt
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: /tmp/cpa-source/go.mod
+          cache-dependency-path: /tmp/cpa-source/go.sum
+      - name: Upstream Go tests and compile
+        working-directory: /tmp/cpa-source
+        run: |
+          set -euxo pipefail
+          exec > >(tee "$GITHUB_WORKSPACE/validation-logs/go.log") 2>&1
+          trap 'printf "%s\n" "$?" > "$GITHUB_WORKSPACE/validation-logs/go.exit"' EXIT
+          go version
+          go test ./...
+          go build ./cmd/server
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cpa-validation-${{ github.sha }}
+          path: validation-logs/
+          retention-days: 7

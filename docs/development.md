@@ -1,6 +1,6 @@
 # Development
 
-Python 3.12 is the supported runtime; app imports have no initialization side effects. Install and verify with the committed locks:
+Python 3.12 is the supported runtime; app imports have no initialization side effects. Run executable checks on GitHub-hosted runners, not on the controller or local Mac. The committed locks and CI use these commands:
 
 ```sh
 uv sync --frozen --extra test --extra browser --python 3.12
@@ -12,7 +12,7 @@ cd ..
 uv run pytest
 ```
 
-To enable real local synthetic browser tests, install Chromium (`uv run playwright install --with-deps chromium`) or set `BRIDGE_TEST_CHROMIUM` to a system Chromium. Test-only root launches disable the sandbox; production `run_login` requires it. Set `BRIDGE_TEST_GOST` to a checksum-verified GOST 3.3.1 release executable to run all three proxy protocol tests. Missing browser/GOST or frontend build causes the corresponding local acceptance tests to skip; CI explicitly provisions those prerequisites. No test contacts a provider account. Live test HTTP servers use loopback and synthetic data; no traces, HAR, video or screenshots are collected.
+The synthetic browser job installs Chromium (`uv run playwright install --with-deps chromium`) or set `BRIDGE_TEST_CHROMIUM` to a system Chromium. Test-only root launches disable the sandbox; production `run_login` requires it. Set `BRIDGE_TEST_GOST` to a checksum-verified GOST 3.3.1 release executable to run all three proxy protocol tests. Missing browser/GOST or frontend build causes the corresponding acceptance tests to skip; CI explicitly provisions those prerequisites. No test contacts a provider account. Live test HTTP servers use loopback and synthetic data; no traces, HAR, video or screenshots are collected.
 
 `tests/test_ui_live.py` exercises built UI -> real FastAPI -> serial synthetic worker -> human code -> synchronization -> refresh. Other suites cover migrations/rollback, wrong/missing keys, backup/restore, auth/CSRF/login concurrency, durable queue locks/leases, cancellation boundaries, human timeout, sync uncertainty and correction, adapter contracts, fresh-mail selection, TOTP, route isolation, and authenticated WebSocket logout revocation.
 
@@ -25,3 +25,9 @@ Main owns architecture, contracts, migrations, scheduling, integration and seria
 Never read real `auth.txt` in an agent task. Use synthetic fixtures; credentials and browser/database/mail data stay out of Git. Real account logins are main-only and serial. Record unverified capabilities as unverified.
 
 Browser adapters implement `run_login(account,target,control,saved_state)`, typed credential result/identity/expiry, and safe fixed error messages. Control checkpoints enforce cancellation/leases and manual pauses. Downstream adapters implement `sync_credential` with stable remote IDs, explicit routes, identity/type validation, and write-uncertainty classification. Unknown exceptions must preserve uncertainty. Future mailbox adapters need pinned public egress, redirect enforcement, baseline/freshness/ambiguity tests and their exact site contract before activation. Update English documentation for every interface change.
+
+## Remote validation evidence
+
+The `Native OAuth validation` workflow (`.github/workflows/validation.yml`) runs on pushes to `validation/**` and supports manual dispatch after the workflow exists on the default branch. Push an integrated commit to a validation branch to exercise the full Python synthetic suite, including browser/proxy acceptance prerequisites, frontend tests/build, and the pinned CLIProxyAPI extension's Go tests and executable compilation. General `Checks` ignores validation branches to avoid duplicate checks and multiarchitecture Docker builds. Other push and pull request checks retain their existing behavior.
+
+Validation uploads `bridge-validation-<revision>` and `cpa-validation-<revision>` artifacts even on failure, retained for seven days. They contain the bridge source revision, uncommitted input state, run/job/runner environment, traced commands, command exit statuses, pytest JUnit output, upstream revision, patch checksum, and upstream changed-file summary. Download required artifacts before expiry and record the run URL and actual job outcomes in the handoff. Successful synthetic checks do not establish real-account verification, deployment, or Apple platform success. No local executable-suite fallback is permitted when CI is blocked.
