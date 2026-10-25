@@ -419,16 +419,38 @@ def test_legacy_localstorage_migration_is_origin_bound_and_does_not_reset_values
         context.close()
 
 
-def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts(tmp_path):
+def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts():
     """Synthetic native Chromium acceptance; requires CI Xvfb, never a provider.
 
-    A persistent device preserves durable storage, while sessionStorage belongs
+    Full profiles cross AESGCM-encrypted archive roundtrips into new /tmp
+    directories. A persistent device preserves storage, while sessionStorage belongs
     to the original tab and is deliberately not resurrected by the adapter.
     """
     if not os.getenv("DISPLAY"):
         pytest.skip("Headed native device acceptance requires DISPLAY / Xvfb")
     from app.browser_identity import generate_profile, context_options
-    from app.browser import _snapshot_session_cookies, _restore_session_cookies
+    from app.browser import _snapshot_session_cookies, _restore_session_cookies, DEVICE_READY_FILE
+    from app.browser_device import device_directory
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    class EncryptedControl:
+        def __init__(self):
+            self.key = AESGCM.generate_key(bit_length=256)
+            self.ciphertext = None
+            self.saves = 0
+
+        def load_device(self):
+            if self.ciphertext is None:
+                return None
+            return AESGCM(self.key).decrypt(self.ciphertext[:12], self.ciphertext[12:], b"synthetic-device")
+
+        def save_device(self, archive):
+            nonce = os.urandom(12)
+            self.ciphertext = nonce + AESGCM(self.key).encrypt(nonce, archive, b"synthetic-device")
+            self.saves += 1
+
+    first_control, second_control = EncryptedControl(), EncryptedControl()
+    first_account, second_account = {"id": "synthetic-first"}, {"id": "synthetic-second"}
     first = generate_profile(set())
     dimensions = first["context"]["viewport"]
     second = generate_profile({(dimensions["width"], dimensions["height"])})
@@ -437,21 +459,37 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts(t
         if not executable and not os.path.exists(playwright.chromium.executable_path):
             pytest.skip("Chromium is not installed")
 
-        def launch(directory, profile):
-            context = playwright.chromium.launch_persistent_context(
-                user_data_dir=str(directory), executable_path=executable,
-                headless=False, chromium_sandbox=os.geteuid() != 0,
-                args=BROWSER_ARGS + ["--no-proxy-server"],
-                **context_options(profile),
-            )
-            _restore_session_cookies(context, directory)
-            context.route("**/*", lambda route: route.fulfill(body="<p>Synthetic</p>", content_type="text/html"))
-            page = context.new_page()
-            page.goto("https://device.example.test/")
-            return context, page
+        @contextmanager
+        def launch(account, control, profile):
+            with device_directory(account, control) as device:
+                assert device.restored is (control.saves > 0)
+                context = playwright.chromium.launch_persistent_context(
+                    user_data_dir=str(device.path), executable_path=executable,
+                    headless=False, chromium_sandbox=os.geteuid() != 0,
+                    proxy=None, accept_downloads=False, service_workers="block",
+                    env={**os.environ, "DISPLAY": os.getenv("DISPLAY", ":99")},
+                    args=BROWSER_ARGS + ["--no-proxy-server"],
+                    **context_options(profile),
+                )
+                try:
+                    _restore_session_cookies(context, device.path)
+                    (device.path / DEVICE_READY_FILE).touch(mode=0o600, exist_ok=True)
+                    device.mark_ready()
+                    context.route("**/*", lambda route: route.fulfill(body="<p>Synthetic</p>", content_type="text/html"))
+                    page = context.new_page()
+                    page.goto("https://device.example.test/")
+                    yield context, page, device.path
+                finally:
+                    try:
+                        _snapshot_session_cookies(context, device.path)
+                    finally:
+                        try:
+                            context.close()
+                        except BaseException:
+                            device.abort_snapshot()
+                            raise
 
-        context, page = launch(tmp_path / "first", first)
-        try:
+        with launch(first_account, first_control, first) as (context, page, first_path):
             context.add_cookies([{"name": "synthetic-session", "value": "first-account",
                 "domain": "device.example.test", "path": "/", "secure": True,
                 "expires": __import__('time').time() + 3600}])
@@ -472,17 +510,20 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts(t
                     tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
                 }); db.close();
             }""")
-            identity = page.evaluate("({width: innerWidth, height: innerHeight, screenWidth: screen.width, screenHeight: screen.height, locale: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})")
+            identity = page.evaluate("({width: innerWidth, height: innerHeight, outerWidth, outerHeight, screenWidth: screen.width, screenHeight: screen.height, screenAvailWidth: screen.availWidth, screenAvailHeight: screen.availHeight, dpr: devicePixelRatio, locale: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})")
             print("Synthetic headed device geometry: " + json.dumps(identity, sort_keys=True))
             assert (identity["width"], identity["height"]) == (1760, 960)
             assert (identity["screenWidth"], identity["screenHeight"]) == (1920, 1080)
+            assert identity["dpr"] == 1
+            assert identity["width"] <= identity["outerWidth"] <= identity["screenAvailWidth"] <= 1920
+            assert identity["height"] <= identity["outerHeight"] <= identity["screenAvailHeight"] <= 1080
             page.reload()
             assert page.evaluate("sessionStorage.getItem('tab')") == "first-tab"
-        finally:
-            _snapshot_session_cookies(context, tmp_path / "first")
-            context.close()
-        context, page = launch(tmp_path / "first", first)
-        try:
+        assert not first_path.exists()
+        assert first_control.saves == 1 and first_control.ciphertext is not None
+        assert b"synthetic-token" not in first_control.ciphertext
+        with launch(first_account, first_control, first) as (context, page, restored_path):
+            assert restored_path != first_path
             assert page.evaluate("localStorage.getItem('device')") == "first-account"
             assert any(c["name"] == "synthetic-tab-session" and c["value"] == "first-account-session" and c["expires"] == -1 for c in context.cookies())
             assert any(c["name"] == "synthetic-session" and c["value"] == "first-account" for c in context.cookies())
@@ -497,16 +538,16 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts(t
                 }); db.close(); return value;
             }""") == "synthetic-token"
             assert page.evaluate("sessionStorage.getItem('tab')") is None
-            assert page.evaluate("({width: innerWidth, height: innerHeight, screenWidth: screen.width, screenHeight: screen.height, locale: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})") == identity
-        finally:
-            context.close()
-        context, page = launch(tmp_path / "second", second)
-        try:
+            assert page.evaluate("({width: innerWidth, height: innerHeight, outerWidth, outerHeight, screenWidth: screen.width, screenHeight: screen.height, screenAvailWidth: screen.availWidth, screenAvailHeight: screen.availHeight, dpr: devicePixelRatio, locale: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})") == identity
+        assert not restored_path.exists()
+        assert first_control.saves == 2
+        with launch(second_account, second_control, second) as (context, page, second_path):
+            assert second_path not in (first_path, restored_path)
             assert page.evaluate("localStorage.length") == 0
             assert context.cookies() == []
             assert page.evaluate("indexedDB.databases().then(dbs => dbs.length)") == 0
             assert page.evaluate("sessionStorage.length") == 0
             assert first["identity_seed"] != second["identity_seed"]
             assert (page.evaluate("innerWidth"), page.evaluate("innerHeight")) == (1760, 960)
-        finally:
-            context.close()
+        assert not second_path.exists()
+        assert second_control.saves == 1
