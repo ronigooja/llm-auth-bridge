@@ -60,7 +60,7 @@ restarts; accounts have separate archives and directories. Recreating a deleted
 account creates a new device. Browser processes and tabs remain task-scoped.
 A hard crash can lose progress since the last committed archive.
 
-Profile format v2 normalizes the viewport to 1760×960 and screen to 1920×1080,
+Profile format v2 normalizes the viewport to 1760×900 and screen to 1920×1080,
 matching the worker Xvfb desktop, without changing the existing identity seed.
 Proxy tasks resolve their actual public exit IP's IANA timezone through the same
 account HTTP route before browser navigation, persist it without regenerating

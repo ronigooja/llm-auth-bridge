@@ -199,7 +199,7 @@ v1 and v2, retain existing accounts/profiles/saved sessions, and add encrypted
 account-device storage. Offline restore also accepts initialized v1 and v2
 archives; startup still requires current schema v3. Existing profile seeds remain
 unchanged; first-use profile normalization changes the old geometry once to a
-1760×960 viewport with a 1920×1080 screen. The Xvfb desktop now matches that screen.
+1760×900 viewport with a 1920×1080 screen. The Xvfb desktop now matches that screen.
 
 Every account's Chromium user-data is encrypted in SQLite, restored only into a
 0700 temporary directory on the worker's `/tmp` tmpfs, and removed after closing
