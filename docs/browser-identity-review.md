@@ -1,5 +1,9 @@
 # Browser identity consistency review
 
+The implementation reviewed below has since been updated; see the
+[persistent-device deployment results](verification-persistent-devices-20261025.md).
+The original findings are retained as the historical review of the cited revision.
+
 ## Scope and conclusion
 
 Two independent read-only sub-agent reviews examined revision

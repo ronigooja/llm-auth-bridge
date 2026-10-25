@@ -34,7 +34,7 @@ This compatibility does not change the HTTPS recommendation or cookie settings.
 | Chinese built UI and authenticated takeover tunnel | Implemented | Live synthetic HTTP/browser and WebSocket tests passed |
 | OpenAI password/TOTP/OAuth/browser session adapter | Implemented | Synthetic tests passed; real provider unverified |
 | HTTP/HTTPS/SOCKS5 GOST routing, no direct fallback | Implemented | ARM64 local synthetic proxy tests passed; real egress unverified |
-| Stable encrypted per-account browser identity/session across Voice and Codex | Implemented with encrypted persistent Chromium devices | Integrated CI pending; real-account reuse unverified; separate profiles do not imply separate physical hardware |
+| Stable encrypted per-account browser identity/session across Voice and Codex | Implemented with encrypted persistent Chromium devices | Hosted persistence/isolation and ARM64 runtime acceptance passed; real-account reuse unverified; separate profiles do not imply separate physical hardware |
 | Opt-in CLIProxyAPI `cpa-native-oauth-v1` authorization | Requires patched target extension; browser login remains automated | Integrated CI and deployed native/real-account acceptance pending |
 | CLIProxyAPI native auth-files synchronization | Implemented | Mock contracts and deployed management connection passed; real account synchronization unverified |
 | Voice `bridge-v1` compatibility client and session maintenance | Implemented client | Mock contracts passed; disposable real-HTTP acceptance harness supplied; server/deployment and real-account acceptance remain unverified |
