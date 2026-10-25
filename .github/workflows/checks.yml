@@ -5,9 +5,13 @@ on:
   pull_request:
 permissions:
   contents: read
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   check:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -18,8 +22,17 @@ jobs:
           node-version: "22.14.0"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: pip install uv==0.8.22
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.22"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
       - run: uv sync --frozen --extra test --extra browser
+      - name: Cache Playwright browser binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ hashFiles('uv.lock') }}
       - run: uv run playwright install --with-deps chromium
       - name: Enable Chromium sandbox namespaces on ephemeral runner
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
@@ -60,7 +73,9 @@ jobs:
           path: check-logs/
           retention-days: 7
   images:
+    needs: check
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     strategy:
       matrix:
         target: [app, worker]
@@ -74,3 +89,5 @@ jobs:
           target: ${{ matrix.target }}
           platforms: linux/amd64,linux/arm64
           push: false
+          cache-from: type=gha,scope=bridge-checks-${{ matrix.target }}
+          cache-to: type=gha,scope=bridge-checks-${{ matrix.target }},mode=max

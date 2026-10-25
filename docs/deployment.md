@@ -221,3 +221,18 @@ The deployment workflow runs pytest under a 1920×1080 Xvfb display to exercise 
 headed synthetic persistence/isolation acceptance in addition to form tests.
 Real-account login and Web-to-Codex reuse must still pass serial acceptance;
 profile persistence alone does not establish provider acceptance.
+
+
+## CI dependency caches
+
+The Checks workflow caches uv downloads keyed by `uv.lock`, npm downloads keyed
+by `frontend/package-lock.json`, and Playwright browser binaries keyed by runner
+OS, architecture, and `uv.lock`. Chromium installation still runs with
+`--with-deps` on every runner so restoring binaries does not skip required OS
+packages. Docker builds start only after checks succeed and reuse separate
+GitHub Actions BuildKit cache scopes for the app and worker targets. These caches
+contain dependencies, browser executables, and image layers; account databases,
+credentials, saved browser devices, and runtime state are excluded. Cache storage
+uses GitHub Actions repository retention and eviction limits; test logs remain
+separate artifacts retained for seven days. New runs cancel older Checks runs
+for the same ref, and check/image jobs have explicit execution timeouts.
