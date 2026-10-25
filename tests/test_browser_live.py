@@ -557,7 +557,8 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts()
     "matching", "nested_remove", "mismatch", "duplicate", "suffix", "remove", "other_account",
     "multiple_identities", "external_link", "unsupported_card", "unknown", "absent", "disabled", "ambiguous",
     "delayed", "delayed_disabled", "workspace", "click_failure",
-    "wrong_result_identity", "invalid_callback",
+    "wrong_result_identity", "invalid_callback", "chooser_replaced_remove",
+    "chooser_replaced_external", "consent_replaced",
 ])
 def test_codex_existing_session_continuation_is_identity_bound_and_recovers(
     monkeypatch, tmp_path, scenario,
@@ -576,7 +577,7 @@ def test_codex_existing_session_continuation_is_identity_bound_and_recovers(
     manual_scenarios = {
         "mismatch", "duplicate", "suffix", "remove", "other_account",
         "multiple_identities", "external_link", "unsupported_card", "unknown", "absent", "disabled", "ambiguous",
-        "click_failure",
+        "click_failure", "chooser_replaced_remove", "chooser_replaced_external", "consent_replaced",
     }
     monkeypatch.setattr(module, "TRANSITION_WAIT_SECONDS", 1.5)
 
@@ -687,6 +688,17 @@ def test_codex_existing_session_continuation_is_identity_bound_and_recovers(
 
             def phase(self, phase, reason):
                 phases.append(phase)
+                replacement = None
+                # Replace after validation, before click: the same text must
+                # never let a Locator silently target a new dangerous control.
+                if phase == "account_chooser" and scenario == "chooser_replaced_remove":
+                    replacement = '<button aria-label="Remove account" onclick="document.body.dataset.unsafe=1"><span>' + identity.upper() + '</span></button>'
+                elif phase == "account_chooser" and scenario == "chooser_replaced_external":
+                    replacement = '<a href="https://untrusted.example.test/" onclick="event.preventDefault(); document.body.dataset.unsafe=1"><span>' + identity.upper() + '</span></a>'
+                elif phase == "consent" and scenario == "consent_replaced":
+                    replacement = '<button onclick="document.body.dataset.unsafe=1">Continue</button>'
+                if replacement is not None:
+                    pages[0].locator("body").evaluate("(node, html) => {node.innerHTML = html}", replacement)
 
             def save_state(self, state):
                 pass
@@ -729,9 +741,14 @@ def test_codex_existing_session_continuation_is_identity_bound_and_recovers(
     assert len(exchanges) == (0 if scenario == "invalid_callback" else 1)
     assert bool(waits) == (scenario in manual_scenarios)
     assert not {"email", "password", "totp"}.intersection(phases)
-    if scenario in {"absent", "disabled", "ambiguous", "click_failure"}:
+    if scenario in {"absent", "disabled", "ambiguous", "click_failure", "consent_replaced"}:
         assert waits == [("waiting_human", "consent")]
-    if scenario in {"mismatch", "duplicate", "suffix", "remove", "other_account", "multiple_identities", "external_link", "unsupported_card"}:
+    if scenario in {"mismatch", "duplicate", "suffix", "remove", "other_account", "multiple_identities", "external_link", "unsupported_card", "chooser_replaced_remove", "chooser_replaced_external"}:
         assert waits == [("waiting_human", "account_chooser")]
     if scenario == "unknown":
         assert waits == [("waiting_human", "unknown")]
+
+    if scenario in {"chooser_replaced_remove", "chooser_replaced_external"}:
+        assert phases.count("account_chooser") == 1, "Detached choices must never be replayed"
+    if scenario == "consent_replaced":
+        assert phases.count("consent") == 1, "Detached consent must never be replayed"
