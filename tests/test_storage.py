@@ -2,7 +2,7 @@ import os
 import sqlite3
 from dataclasses import replace
 import pytest
-from app.db import migrate, database, validate_database
+from app.db import SCHEMA, SCHEMA_VERSION, IDENTITY_SCHEMA, migrate, database, validate_database
 from app.cli import backup, restore, initialize
 from app.crypto import load_key, encrypt, decrypt
 from app.main import create_app
@@ -117,6 +117,112 @@ def test_wrong_restore_key_rejected(settings, tmp_path):
     with pytest.raises(ValueError):
         restore(replace(settings, key_file=wrong, db_path=destination), source)
     assert not destination.exists()
+
+
+def version_one_backup(path, key):
+    """A synthetic initialized archive from before identity tables existed."""
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(SCHEMA.removesuffix(IDENTITY_SCHEMA))
+        conn.execute("PRAGMA user_version=1")
+        conn.execute(
+            "INSERT INTO admin VALUES(1,'synthetic-hash',?)",
+            (encrypt("llm-auth-bridge", key),),
+        )
+        conn.execute(
+            "INSERT INTO accounts(id,username,password_cipher,route_type,status,version) VALUES(1,?,?,'direct','ready',7)",
+            ("synthetic@example.com", encrypt("synthetic-password", key)),
+        )
+        conn.execute(
+            "INSERT INTO browser_sessions VALUES(1,?,123.0)",
+            (encrypt('{"cookies":[]}', key),),
+        )
+        conn.execute(
+            "INSERT INTO tasks(id,account_id,state,phase) VALUES(1,1,'succeeded','complete')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_restore_v1_migrates_only_destination(settings, tmp_path):
+    key = load_key(settings.key_file)
+    source = tmp_path / "v1.db"
+    version_one_backup(source, key)
+    original = source.read_bytes()
+    source.chmod(0o444)
+    original_mtime = source.stat().st_mtime_ns
+    restored = replace(settings, db_path=tmp_path / "restored" / "bridge.db")
+    # Services must still reject old schemas instead of migrating on startup.
+    with pytest.raises(RuntimeError):
+        validate_database(source, key)
+    restore(restored, source)
+    validate_database(restored.db_path, key)
+    assert source.read_bytes() == original
+    assert source.stat().st_mtime_ns == original_mtime
+    assert not source.with_name(source.name + "-wal").exists()
+    assert not source.with_name(source.name + "-shm").exists()
+    with database(restored.db_path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        account = conn.execute("SELECT * FROM accounts").fetchone()
+        assert (account["username"], account["route_type"], account["status"], account["version"]) == (
+            "synthetic@example.com", "direct", "ready", 7
+        )
+        assert decrypt(account["password_cipher"], key) == "synthetic-password"
+        assert decrypt(conn.execute("SELECT state_cipher FROM browser_sessions").fetchone()[0], key) == '{"cookies":[]}'
+        assert tuple(conn.execute("SELECT state,phase FROM tasks").fetchone()) == ("succeeded", "complete")
+        assert conn.execute("SELECT count(*) FROM browser_profiles").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM native_sessions").fetchone()[0] == 0
+    assert restored.db_path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("failure", ["wrong-key", "unversioned", "future"])
+def test_restore_v1_preflight_rejects_before_destination_creation(settings, tmp_path, failure):
+    source = tmp_path / "v1.db"
+    version_one_backup(source, load_key(settings.key_file))
+    if failure == "wrong-key":
+        wrong = tmp_path / "wrong-key"
+        wrong.write_bytes(os.urandom(32))
+        settings = replace(settings, key_file=wrong)
+    else:
+        with sqlite3.connect(source) as conn:
+            conn.execute(f"PRAGMA user_version={0 if failure == 'unversioned' else SCHEMA_VERSION + 1}")
+    original = source.read_bytes()
+    destination = tmp_path / "absent" / "restored.db"
+    with pytest.raises((RuntimeError, ValueError)):
+        restore(replace(settings, db_path=destination), source)
+    assert not destination.parent.exists()
+    assert source.read_bytes() == original
+
+
+def test_restore_migration_failure_removes_incomplete_destination(settings, tmp_path, monkeypatch):
+    source = tmp_path / "v1.db"
+    version_one_backup(source, load_key(settings.key_file))
+    original = source.read_bytes()
+    destination = tmp_path / "restored.db"
+
+    def fail_migration(path, key):
+        path.with_name(path.name + "-wal").write_bytes(b"synthetic incomplete journal")
+        raise RuntimeError("synthetic migration failure")
+
+    monkeypatch.setattr("app.cli.migrate", fail_migration)
+    with pytest.raises(RuntimeError, match="synthetic migration failure"):
+        restore(replace(settings, db_path=destination), source)
+    assert not destination.exists()
+    assert not destination.with_name(destination.name + "-wal").exists()
+    assert source.read_bytes() == original
+
+
+@pytest.mark.parametrize("suffix", ["", "-wal", "-shm", "-journal"])
+def test_restore_preserves_preexisting_destination_paths(settings, tmp_path, suffix):
+    source = tmp_path / "v1.db"
+    version_one_backup(source, load_key(settings.key_file))
+    destination = tmp_path / "restored.db"
+    preserved = destination.with_name(destination.name + suffix)
+    preserved.write_bytes(b"synthetic preexisting data")
+    with pytest.raises(ValueError, match="destination must not exist"):
+        restore(replace(settings, db_path=destination), source)
+    assert preserved.read_bytes() == b"synthetic preexisting data"
 
 
 def test_existing_database_never_gets_replacement_key(tmp_path):

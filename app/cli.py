@@ -9,7 +9,7 @@ import sqlite3
 from argon2 import PasswordHasher
 from .config import Settings
 from .crypto import load_key, encrypt
-from .db import migrate, database, validate_database, connect
+from .db import SCHEMA_VERSION, migrate, database, validate_database, connect
 
 
 def initialize(settings: Settings, password: str):
@@ -53,23 +53,39 @@ def backup(settings: Settings, destination: Path):
 
 def restore(settings: Settings, source: Path):
     key = load_key(settings.key_file)
-    validate_database(source, key)
-    if settings.db_path.exists():
+    # Only explicit offline restore accepts an older versioned archive. Service
+    # startup and backup retain the default current-schema validation.
+    validate_database(source, key, supported_versions=(1, SCHEMA_VERSION))
+    destination_paths = [
+        settings.db_path,
+        *(Path(str(settings.db_path) + suffix) for suffix in ("-wal", "-shm", "-journal")),
+    ]
+    if any(path.exists() for path in destination_paths):
         raise ValueError(
             "restore destination must not exist; stop services and move existing database first"
         )
     settings.db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(settings.db_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     os.close(fd)
-    source_conn = connect(source)
-    target = sqlite3.connect(settings.db_path)
     try:
-        source_conn.backup(target)
-        target.execute("PRAGMA journal_mode=WAL").fetchone()
-    finally:
-        source_conn.close()
-        target.close()
-    validate_database(settings.db_path, key)
+        # Never migrate the archive or require a writable backup mount.
+        source_conn = sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            target = sqlite3.connect(settings.db_path)
+            try:
+                source_conn.backup(target)
+            finally:
+                target.close()
+        finally:
+            source_conn.close()
+        migrate(settings.db_path, key)
+        validate_database(settings.db_path, key)
+    except Exception:
+        # These paths were absent before our exclusive destination creation.
+        # Leave no partial restore that could be mistaken for a valid database.
+        for path in destination_paths:
+            path.unlink(missing_ok=True)
+        raise
 
 
 def main():
