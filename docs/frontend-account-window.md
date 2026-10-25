@@ -1,0 +1,15 @@
+# Fixed login workflow and account window
+
+The management login action always submits `POST /api/v1/accounts/{id}/login-flow` with `voice_target_id`, `cli_target_id`, and an idempotency key. It presents the fixed order: ChatGPT Web Voice login and successful synchronization, followed by CLIProxyAPI login. The backend owns the durable dependency; the UI never starts the second task itself. Task details display `depends_on_task_id` when present.
+
+Only targets bound to the account appear. A single target of each kind is selected automatically. Multiple targets require an explicit selection; a missing kind disables submission and directs the operator to edit account bindings. New account forms initially select supported targets, with visible checkboxes for editing bindings.
+
+The account row and task details expose the same **账号窗口** action. The app reserves one large, resizable same-origin popup during the click, then calls `POST /api/v1/accounts/{id}/browser`. This endpoint reuses the current account task or queues an idle `browser_window` task. A blocked popup does not queue work. Opening another account while the popup remains open requires first closing or hiding the current window, so one account is never silently substituted for another.
+
+The popup embeds the same-origin noVNC viewer. Running automation uses `/api/v1/tasks/{id}/monitor`, `view_only=true`, and `shared=true`, and opening the viewer does not pause automation. **接管** explicitly requests takeover, then waits for the task API to confirm `waiting_human` before switching to the interactive `/takeover` path. The operator resumes login from the task page with **继续任务**.
+
+An idle browser task becomes interactive when it reaches `waiting_human`. **保存并关闭账号窗口** posts `continue`, displays a saving status, and keeps polling until the worker reports successful completion before closing the viewer. A terminal failure is displayed without claiming persistence succeeded. Closing the native popup also releases an idle browser session through `continue`; if the task is still queued, the controller waits until it is ready. Save failures remain visible in the management page. An unfinished idle session blocks switching to another account until saving completes, and can be reopened while saving. Hiding or closing a live login viewer does not continue or cancel its task. The popup explains these different close behaviors. The controller remains mounted across management page navigation and polls the task every second while active.
+
+The native-close cleanup depends on the management page remaining open. Closing the entire management page or losing its network connection can leave the idle session active until backend recovery or timeout. Browser state persistence is performed by the backend, not the viewer.
+
+Real-account provider login, persistence, live noVNC interaction, and popup behavior across production browser policies remain unverified until serial real-account acceptance. Synthetic frontend tests cover endpoint contracts, target selection, monitor-to-takeover gating, explicit and native popup closure, and blocked popups.

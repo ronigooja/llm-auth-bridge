@@ -100,9 +100,9 @@ describe("management interactions", () => {
       const path = String(input);
       calls.push({ path, init });
       if (path.endsWith("/auth/session")) return response({ csrf_token: "synthetic" });
-      if (path.endsWith("/accounts/1/tasks")) return response(task);
-      if (path.endsWith("/accounts")) return response({ accounts: [{ id: 1, username: "synthetic@example.test", status: "unverified", route_type: "direct", target_ids: [2] }] });
-      if (path.endsWith("/targets")) return response({ targets: [{ id: 2, name: "Synthetic", kind: "cliproxyapi" }] });
+      if (path.endsWith("/accounts/1/login-flow")) return response({ tasks: [task, { ...task, id: 8, depends_on_task_id: 7 }] });
+      if (path.endsWith("/accounts")) return response({ accounts: [{ id: 1, username: "synthetic@example.test", status: "unverified", route_type: "direct", target_ids: [2, 3] }] });
+      if (path.endsWith("/targets")) return response({ targets: [{ id: 2, name: "Synthetic", kind: "cliproxyapi" }, { id: 3, name: "Voice", kind: "chatgpt-web-voice" }] });
       if (path.endsWith("/tasks")) return response({ tasks: [task] });
       if (path.endsWith("/events")) return response({ events: [] });
       return response(task);
@@ -116,8 +116,9 @@ describe("management interactions", () => {
     await user.click(screen.getByRole("button", { name: "提交验证码" }));
     await waitFor(() => expect(calls.some((call) => call.path.endsWith("/tasks/7/code"))).toBe(true));
     const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-    const start = calls.find((call) => call.path.endsWith("/accounts/1/tasks"))!;
+    const start = calls.find((call) => call.path.endsWith("/accounts/1/login-flow"))!;
     const code = calls.find((call) => call.path.endsWith("/tasks/7/code"))!;
+    expect(JSON.parse(String(start.init?.body))).toMatchObject({ voice_target_id: 3, cli_target_id: 2 });
     expect(JSON.parse(String(start.init?.body)).idempotency_key).toMatch(uuid);
     expect(JSON.parse(String(code.init?.body)).submission_id).toMatch(uuid);
     expect(JSON.parse(String(start.init?.body)).idempotency_key).not.toBe(JSON.parse(String(code.init?.body)).submission_id);
@@ -156,7 +157,7 @@ describe("management interactions", () => {
     );
     expect(screen.getByLabelText("网络路由")).toHaveProperty("value", "proxy");
     expect(screen.getByLabelText("CLIProxyAPI")).toHaveProperty("checked", true);
-    expect(screen.getByLabelText("Voice")).toHaveProperty("checked", false);
+    expect(screen.getByLabelText("Voice")).toHaveProperty("checked", true);
     await user.type(screen.getByLabelText("代理 URL"), "socks5://user:p%40ss@proxy.example.test:1080");
     await user.click(screen.getByRole("button", { name: "保存账号" }));
     await waitFor(() =>
@@ -175,7 +176,7 @@ describe("management interactions", () => {
     expect(JSON.parse(String(call.init?.body))).toMatchObject({
       username: "synthetic@example.test",
       route_type: "proxy",
-      target_ids: [1],
+      target_ids: [1, 2],
       proxy: { server: "socks5://proxy.example.test:1080", username: "user", password: "p@ss" },
     });
   });
@@ -245,7 +246,7 @@ describe("management interactions", () => {
       code: "123456",
       submission_id: expect.any(String),
     });
-    expect(screen.getByRole("button", { name: "接管浏览器" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "账号窗口" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "取消任务" })).toBeTruthy();
   });
   it.each(["waiting_human", "password_required"])("offers takeover and continue without a code form for %s", async (phase) => {
@@ -263,7 +264,7 @@ describe("management interactions", () => {
     });
     render(<App />);
     expect(await screen.findByRole("button", { name: "继续任务" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "接管浏览器" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "账号窗口" })).toBeTruthy();
     expect(screen.queryByLabelText("验证码")).toBeNull();
     expect(screen.queryByRole("button", { name: "提交验证码" })).toBeNull();
     expect(screen.getByText(phase === "password_required"
@@ -377,7 +378,7 @@ describe("management interactions", () => {
       );
     });
     expect(screen.getAllByText("Browser ready")).toHaveLength(1);
-    expect(screen.getByRole("button", { name: "接管浏览器" })).toHaveProperty(
+    expect(screen.getByRole("button", { name: "账号窗口" })).toHaveProperty(
       "disabled",
       false,
     );
@@ -501,5 +502,6 @@ it("keeps account editor busy until new route and bindings finish refreshing", a
   release!(new Response(JSON.stringify({ accounts: [{ ...account, route_type: "direct", target_ids: [1] }] }), { status: 200, headers: { "Content-Type": "application/json" } }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   await user.click(screen.getByRole("button", { name: "开始登录" }));
-  expect(within(screen.getByRole("dialog")).getByRole("button", { name: "开始登录" })).toHaveProperty("disabled", false);
+  expect(within(screen.getByRole("dialog")).getByRole("button", { name: "开始登录" })).toHaveProperty("disabled", true);
+  expect(screen.getByText(/请先在“编辑与绑定”中绑定 ChatGPT Web Voice/)).toBeTruthy();
 });

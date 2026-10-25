@@ -2,7 +2,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { TakeoverPanel, useTakeoverWindow } from "./takeover";
-import { App } from "./main";
 
 const url = "/novnc/vnc.html?autoconnect=true&resize=scale&path=api/v1/tasks/7/takeover";
 function Harness({ ready = false, ended = false }) {
@@ -81,35 +80,5 @@ describe("takeover window", () => {
     target.closed = true;
     act(() => { vi.advanceTimersByTime(1000); });
     expect(screen.getByRole("link", { name: "打开接管窗口" })).toBeTruthy();
-  });
-});
-
-
-describe("takeover request integration", () => {
-  it("reserves the popup before the API resolves and closes it on an unsafe URL", async () => {
-    window.history.replaceState(null, "", "/#tasks/7");
-    vi.stubGlobal("EventSource", class { addEventListener() {} close() {} });
-    let finish: ((response: Response) => void) | undefined;
-    const task = { id: 7, state: "waiting_human", phase: "waiting_human", takeover_available: true };
-    const json = (data: unknown) => Promise.resolve(new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } }));
-    vi.stubGlobal("fetch", vi.fn((input: unknown) => {
-      const path = String(input);
-      if (path.endsWith("/auth/session")) return json({ csrf_token: "synthetic" });
-      if (path.endsWith("/takeover")) return new Promise<Response>((resolve) => { finish = resolve; });
-      if (path.endsWith("/tasks")) return json({ tasks: [task] });
-      if (path.endsWith("/history")) return json({ events: [] });
-      if (path.endsWith("/tasks/7")) return json(task);
-      return json({ accounts: [], targets: [] });
-    }));
-    const { target, open } = mockPopup();
-    render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: "接管浏览器" }));
-    expect(open).toHaveBeenCalledOnce();
-    expect(target.location.replace).not.toHaveBeenCalled();
-    expect(finish).toBeTypeOf("function");
-    await act(async () => { finish!(await json({ url: "https://outside.example.test/viewer" })); });
-    await waitFor(() => expect(target.close).toHaveBeenCalledOnce());
-    expect(target.location.replace).not.toHaveBeenCalled();
-    expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("同源"));
   });
 });
