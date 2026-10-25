@@ -291,3 +291,79 @@ def test_expired_uncommitted_native_session_does_not_claim_remote_write():
         sync_credential(TARGET, native_result(), ACCOUNT, RID,
                         _transport=transport(lambda r: response(session("expired"))))
     assert error.value.write_possible is False
+
+
+def test_native_browser_uses_saved_account_context_and_fences_callback(monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    import app.browser as browser_module
+    import app.cpa_oauth as native_module
+    import playwright.sync_api
+    from app.browser_identity import generate_profile
+
+    events = []
+    saved = {"cookies": [], "origins": []}
+    profile = generate_profile(set())
+    callback = REDIRECT_URI + "?state=synthetic-state&code=synthetic-code"
+    pending = session()
+    result = native_result()
+
+    class Context:
+        def route(self, pattern, handler): self.handler = handler
+        def set_default_timeout(self, value): pass
+        def new_page(self): return Page(self)
+        def storage_state(self): return saved
+
+    context = Context()
+
+    class Page:
+        def __init__(self, context): self.context = context
+        def goto(self, url, **kwargs):
+            assert events[-1] == "context"
+            events.append("navigation")
+            assert url == pending["authorization_url"]
+            request_route = SimpleNamespace(request=SimpleNamespace(url=callback), fulfill=lambda **kw: None)
+            self.context.handler(request_route)
+
+    class Browser:
+        def new_context(self, **kwargs):
+            assert kwargs["storage_state"] is saved
+            assert all(kwargs[k] == v for k, v in profile["context"].items())
+            assert "identity_seed" not in kwargs
+            events.append("context")
+            return context
+        def close(self): events.append("browser_closed")
+
+    class Native:
+        def __init__(self, *a, **kw): pass
+        def check(self): pass
+        def get(self): return pending
+        def callback(self, url, state):
+            assert events[-1] == "callback_fenced"
+            assert url == callback and state == "synthetic-state"
+            events.append("native_callback")
+            return session("staged")
+        def result(self, value): assert value["state"] == "staged"; return result
+        def close(self): events.append("native_closed")
+
+    class Guard:
+        def checkpoint(self): pass
+        def phase(self, *a): pass
+        def native_session(self): return {"session_id": SESSION_ID, "callback_submitted": False}
+        def native_callback_submitted(self): events.append("callback_fenced")
+        def save_state(self, state): assert state is saved; events.append("saved")
+
+    @contextmanager
+    def fake_playwright():
+        yield SimpleNamespace(chromium=SimpleNamespace(launch=lambda **kw: Browser()))
+
+    @contextmanager
+    def fake_route(account):
+        yield SimpleNamespace(playwright_proxy=None, session=None)
+
+    monkeypatch.setattr(native_module, "NativeOAuth", Native)
+    monkeypatch.setattr(playwright.sync_api, "sync_playwright", fake_playwright)
+    monkeypatch.setattr(browser_module, "account_route", fake_route)
+    monkeypatch.setattr(browser_module, "pkce_pair", lambda: pytest.fail("native PKCE belongs to CLIProxyAPI"))
+    assert run_login({**ACCOUNT, "_browser_profile": profile}, TARGET, Guard(), saved) == result
+    assert events == ["context", "navigation", "callback_fenced", "native_callback", "saved", "browser_closed", "native_closed"]
