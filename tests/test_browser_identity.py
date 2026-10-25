@@ -24,14 +24,13 @@ def profile_for(settings, key, queue, task):
     return load_or_create_profile(settings.db_path, key, queue, task)
 
 
-def test_native_options_distinct_coherent_private(monkeypatch):
-    monkeypatch.setattr('app.browser_identity.secrets.randbelow', lambda n: 0)
+def test_native_options_independent_seeds_coherent_private():
     first = generate_profile(set())
     options = context_options(first)
     second = generate_profile({(options['viewport']['width'], options['viewport']['height'])})
     assert first['identity_seed'] != second['identity_seed']
-    assert options['viewport'] != context_options(second)['viewport']
-    assert options['screen']['width'] == options['viewport']['width']
+    assert options['viewport'] == context_options(second)['viewport'] == {'width': 1280, 'height': 720}
+    assert options['screen'] == {'width': 1440, 'height': 900}
     assert options['screen']['height'] > options['viewport']['height']
     assert options['device_scale_factor'] == 1
     assert options['is_mobile'] is False and options['has_touch'] is False
@@ -129,7 +128,7 @@ def test_accounts_distinct_delete_cascades_recreate_has_new_seed(settings, resou
     _, _, task = claimed(settings, second_id, target_id)
     second = profile_for(settings, key, queue, task)
     assert first['identity_seed'] != second['identity_seed']
-    assert context_options(first)['viewport'] != context_options(second)['viewport']
+    assert context_options(first)['viewport'] == context_options(second)['viewport']
     queue.finish(task['id'], task['execution_id'], 'failed', 'failed', 'Synthetic failure')
     assert admin.delete(f'/api/v1/accounts/{second_id}').status_code == 200
     with database(settings.db_path) as conn:
@@ -158,6 +157,7 @@ def test_backup_restore_preserves_encrypted_profile_and_state(settings, resource
 def version_one(settings, account_id, key):
     cipher = encrypt(json.dumps({'cookies': [], 'origins': []}), key)
     with database(settings.db_path) as conn:
+        conn.execute('DROP TABLE browser_devices')
         conn.execute('DROP TABLE browser_profiles')
         conn.execute('DROP TABLE native_sessions')
         conn.execute('PRAGMA user_version=1')
@@ -190,3 +190,57 @@ def test_v1_wrong_key_rolls_back_schema_and_sessions(settings, resources):
         assert conn.execute('PRAGMA user_version').fetchone()[0] == 1
         assert conn.execute("SELECT name FROM sqlite_master WHERE name='browser_profiles'").fetchone() is None
         assert conn.execute('SELECT state_cipher FROM browser_sessions').fetchone()[0] == cipher
+
+
+def legacy_profile(settings, account_id, key):
+    profile = generate_profile()
+    profile['version'] = 1
+    profile['context'].update(
+        viewport={'width': 1777, 'height': 1111},
+        screen={'width': 1777, 'height': 1191},
+        locale='fr-FR', timezone_id='Europe/Paris', color_scheme='dark',
+    )
+    cipher = encrypt(json.dumps(profile), key)
+    with database(settings.db_path) as conn:
+        conn.execute('INSERT INTO browser_profiles VALUES(?,?)', (account_id, cipher))
+    return profile, cipher
+
+
+def test_profile_v1_upgrade_preserves_seed_preferences_and_cipher_once(settings, resources):
+    key, queue, task = claimed(settings, *resources)
+    legacy, old_cipher = legacy_profile(settings, resources[0], key)
+    upgraded = profile_for(settings, key, queue, task)
+    assert upgraded['version'] == 2
+    assert upgraded['identity_seed'] == legacy['identity_seed']
+    expected = dict(legacy['context'])
+    expected.update(viewport={'width': 1280, 'height': 720}, screen={'width': 1440, 'height': 900})
+    assert context_options(upgraded) == expected
+    with database(settings.db_path) as conn:
+        row = conn.execute('SELECT * FROM browser_profiles').fetchone()
+    assert row['account_id'] == resources[0]
+    assert row['profile_cipher'] != old_cipher
+    assert json.loads(decrypt(row['profile_cipher'], key)) == upgraded
+    assert profile_for(settings, key, queue, task) == upgraded
+    with database(settings.db_path) as conn:
+        assert conn.execute('SELECT profile_cipher FROM browser_profiles').fetchone()[0] == row['profile_cipher']
+
+
+@pytest.mark.parametrize('failure', ['lease', 'cancel'])
+def test_profile_upgrade_fenced_before_write(settings, resources, monkeypatch, failure):
+    key, queue, task = claimed(settings, *resources)
+    _, cipher = legacy_profile(settings, resources[0], key)
+    original = queue.owned
+    calls = []
+    def fenced(*args):
+        owned = original(*args)
+        calls.append(True)
+        if len(calls) == 2:
+            if failure == 'lease':
+                raise LeaseLost()
+            return dict(owned, cancel_requested=1)
+        return owned
+    monkeypatch.setattr(queue, 'owned', fenced)
+    with pytest.raises(LeaseLost if failure == 'lease' else Cancelled):
+        profile_for(settings, key, queue, task)
+    with database(settings.db_path) as conn:
+        assert conn.execute('SELECT profile_cipher FROM browser_profiles').fetchone()[0] == cipher
