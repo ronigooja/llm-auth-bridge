@@ -130,7 +130,7 @@ class Queue:
                 ).fetchone()
             )
 
-    def create_login_flow(self, account_id, voice_target_id, cli_target_id, idempotency_key=None):
+    def create_login_flow(self, account_id, voice_target_id, cli_target_id=None, idempotency_key=None):
         with database(self.settings.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
             if idempotency_key:
@@ -138,8 +138,11 @@ class Queue:
                     raise Conflict("idempotency key belongs to another request")
                 old = conn.execute("SELECT * FROM login_flows WHERE idempotency_key=?", (idempotency_key,)).fetchone()
                 if old:
-                    tasks = [conn.execute("SELECT * FROM tasks WHERE id=?", (old[k],)).fetchone() for k in ("voice_task_id", "cli_task_id")]
-                    if [(t["account_id"], t["target_id"]) for t in tasks] != [(account_id, voice_target_id), (account_id, cli_target_id)]:
+                    tasks = [conn.execute("SELECT * FROM tasks WHERE id=?", (old[k],)).fetchone() for k in ("voice_task_id", "cli_task_id") if old[k] is not None]
+                    expected = [(account_id, voice_target_id)]
+                    if cli_target_id is not None:
+                        expected.append((account_id, cli_target_id))
+                    if [(t["account_id"], t["target_id"]) for t in tasks] != expected:
                         raise Conflict("idempotency key belongs to another request")
                     return [public_task(t) for t in tasks]
                 if conn.execute("SELECT 1 FROM tasks WHERE idempotency_key=?", (idempotency_key,)).fetchone():
@@ -150,14 +153,17 @@ class Queue:
             if account["route_type"] == "unset":
                 raise Conflict("choose direct or proxy before starting login")
             targets = []
-            for target_id, kind in ((voice_target_id, "chatgpt-web-voice"), (cli_target_id, "cliproxyapi")):
+            selected = [(voice_target_id, "chatgpt-web-voice")]
+            if cli_target_id is not None:
+                selected.append((cli_target_id, "cliproxyapi"))
+            for target_id, kind in selected:
                 target = conn.execute("SELECT * FROM targets WHERE id=?", (target_id,)).fetchone()
                 if not target:
                     raise NotFound("target not found")
                 if target["kind"] != kind:
-                    raise Conflict("login flow requires ChatGPT Web Voice then CLIProxyAPI")
+                    raise Conflict("login flow requires a Voice target and, when selected, a CLIProxyAPI target")
                 if not conn.execute("SELECT 1 FROM account_targets WHERE account_id=? AND target_id=?", (account_id, target_id)).fetchone():
-                    raise Conflict("bind both targets to this account first")
+                    raise Conflict("bind each selected target to this account first")
                 if conn.execute("SELECT 1 FROM tasks WHERE account_id=? AND target_id=? AND state IN ('queued','running','waiting_human','sync_pending')", (account_id, target_id)).fetchone():
                     raise Conflict("an active task already exists for this account and target")
                 targets.append(target)
@@ -166,7 +172,7 @@ class Queue:
                 cur = conn.execute("INSERT INTO tasks(account_id,target_id,kind,state,phase,message,account_version,target_version,depends_on_task_id) VALUES(?,?,'login','queued',?,?,?,?,?)", (account_id, target["id"], "waiting_prerequisite" if ids else "queued", "Waiting for previous verified login" if ids else "Waiting for worker", account["version"], target["version"], ids[0] if ids else None))
                 ids.append(cur.lastrowid)
                 event(conn, cur.lastrowid)
-            conn.execute("INSERT INTO login_flows VALUES(?,?,?)", (*ids, idempotency_key))
+            conn.execute("INSERT INTO login_flows VALUES(?,?,?)", (ids[0], ids[1] if len(ids) > 1 else None, idempotency_key))
             return [public_task(conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()) for task_id in ids]
 
     def open_browser(self, account_id, idempotency_key=None):

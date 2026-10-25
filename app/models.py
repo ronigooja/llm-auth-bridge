@@ -220,4 +220,4 @@ class BrowserBody(Model):
 
 class LoginFlowBody(BrowserBody):
     voice_target_id: int = Field(gt=0)
-    cli_target_id: int = Field(gt=0)
+    cli_target_id: int | None = Field(default=None, gt=0)

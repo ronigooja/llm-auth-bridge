@@ -9,7 +9,7 @@ from .crypto import encrypt, decrypt
 
 SCHEMA_VERSION = 4
 WORKFLOW_SCHEMA = """
-CREATE TABLE login_flows(voice_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,cli_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,idempotency_key TEXT UNIQUE);
+CREATE TABLE login_flows(voice_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,cli_task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,idempotency_key TEXT UNIQUE);
 CREATE INDEX task_dependency ON tasks(depends_on_task_id);
 CREATE TABLE browser_requests(idempotency_key TEXT PRIMARY KEY,task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE);
 """

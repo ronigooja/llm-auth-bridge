@@ -140,7 +140,7 @@ def test_v3_additive_migration(settings, resources):
 def test_flow_rejects_unbound_target_without_partial_insert(settings, flow, admin):
     q, a, voice, cli = flow
     assert admin.patch(f'/api/v1/accounts/{a}', json={'target_ids': [voice]}).status_code == 200
-    with pytest.raises(Conflict, match='bind both'):
+    with pytest.raises(Conflict, match='bind each selected'):
         q.create_login_flow(a, voice, cli)
     with database(settings.db_path) as conn:
         assert conn.execute('SELECT count(*) FROM tasks').fetchone()[0] == 0
@@ -184,3 +184,46 @@ def test_browser_idempotency_tracks_reused_login(settings, resources):
     assert q.open_browser(a, 'reuse-request')['id'] == login['id']
     with pytest.raises(Conflict):
         q.create(a, cli, 'reuse-request')
+
+
+def test_voice_only_flow_requires_no_cli_binding(settings, flow, admin):
+    q, a, voice, cli = flow
+    assert admin.patch(f'/api/v1/accounts/{a}', json={'target_ids': [voice]}).status_code == 200
+    tasks = q.create_login_flow(a, voice, idempotency_key='voice-only-request')
+    assert len(tasks) == 1
+    assert tasks[0]['target_id'] == voice
+    assert tasks[0]['depends_on_task_id'] is None
+    assert q.create_login_flow(a, voice, None, 'voice-only-request') == tasks
+    with pytest.raises(Conflict, match='another request'):
+        q.create_login_flow(a, voice, cli, 'voice-only-request')
+    claimed = q.claim()
+    q.finish(claimed['id'], claimed['execution_id'], 'succeeded', 'verified', 'Verified')
+    assert q.claim() is None
+    with database(settings.db_path) as conn:
+        assert conn.execute('SELECT cli_task_id FROM login_flows').fetchone()[0] is None
+        assert conn.execute('SELECT count(*) FROM tasks').fetchone()[0] == 1
+
+
+def test_both_target_flow_key_cannot_be_reused_as_voice_only(flow):
+    q, a, voice, cli = flow
+    q.create_login_flow(a, voice, cli, 'both-target-request')
+    with pytest.raises(Conflict, match='another request'):
+        q.create_login_flow(a, voice, idempotency_key='both-target-request')
+
+
+@pytest.mark.parametrize('explicit_null', [False, True])
+def test_voice_only_api_accepts_missing_or_null_cli(flow, admin, explicit_null):
+    _, a, voice, _ = flow
+    body = {'voice_target_id': voice, 'idempotency_key': 'optional-cli-request'}
+    if explicit_null:
+        body['cli_target_id'] = None
+    response = admin.post(f'/api/v1/accounts/{a}/login-flow', json=body)
+    assert response.status_code == 200
+    tasks = response.json()['tasks']
+    assert len(tasks) == 1
+    assert tasks[0]['target_id'] == voice
+    replay = admin.post(f'/api/v1/accounts/{a}/login-flow', json={
+        'voice_target_id': voice, 'cli_target_id': None, 'idempotency_key': 'optional-cli-request',
+    })
+    assert replay.status_code == 200
+    assert replay.json()['tasks'] == tasks
