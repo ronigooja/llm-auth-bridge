@@ -5,6 +5,7 @@ import pytest
 
 from app.route_timezone import GEOLOCATION_URL, MAX_RESPONSE_BYTES, resolve_timezone
 from app.routing import RouteError
+from app.queue import Cancelled, LeaseLost
 
 
 def payload():
@@ -16,7 +17,7 @@ def test_timezone_uses_supplied_route_and_caller_ip_mapping():
     def respond(request):
         requests.append(request)
         assert str(request.url) == GEOLOCATION_URL
-        assert request.extensions['timeout'] == dict(connect=10, read=10, write=10, pool=10)
+        assert request.extensions['timeout'] == dict(connect=10, read=5, write=10, pool=10)
         # The provider determines the caller's public address; it is not supplied.
         assert not request.url.query
         assert request.headers['x-synthetic-route'] == 'account-route'
@@ -74,3 +75,31 @@ def test_route_failure_does_not_expose_sensitive_error(error):
             resolve_timezone(session)
     assert str(raised.value) == 'Could not verify account route timezone'
     assert raised.value.__suppress_context__
+
+
+def test_total_deadline_stops_trickling_response(monkeypatch):
+    clock = [0]
+    monkeypatch.setattr('app.route_timezone.time.monotonic', lambda: clock[0])
+    class Trickle(httpx.SyncByteStream):
+        def __iter__(self):
+            for _ in range(10):
+                clock[0] += 4
+                yield b' '
+    with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, stream=Trickle()))) as session:
+        with pytest.raises(RouteError, match='^Could not verify account route timezone$'):
+            resolve_timezone(session)
+    assert clock[0] == 16
+
+
+@pytest.mark.parametrize('error', [Cancelled, LeaseLost])
+@pytest.mark.parametrize('boundary', [1, 2, 3, 4, 5])
+def test_checkpoint_errors_propagate_at_io_boundaries(error, boundary):
+    calls = []
+    def checkpoint():
+        calls.append(True)
+        if len(calls) == boundary:
+            raise error()
+    with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload()))) as session:
+        with pytest.raises(error):
+            resolve_timezone(session, checkpoint=checkpoint)
+    assert len(calls) == boundary
