@@ -506,7 +506,7 @@ def test_connection(target: dict, *, _transport=None, _sleep=time.sleep) -> dict
     try:
         if enabled(target):
             data = adapter.data(adapter.request("GET", ROOT + "/capabilities"))
-            if data.get("protocol") != PROTOCOL or "codex" not in data.get("providers", []):
+            if data.get("protocol") != PROTOCOL or not isinstance(data.get("providers"), list) or "codex" not in data["providers"]:
                 raise IntegrationError("Install the cpa-native-oauth-v1 native OAuth API.")
         else:
             adapter.check()

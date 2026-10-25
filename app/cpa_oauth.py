@@ -34,7 +34,7 @@ class NativeOAuth:
 
     def check(self):
         data = self.adapter.data(self.adapter.request("GET", ROOT + "/capabilities"))
-        if data.get("protocol") != PROTOCOL or "codex" not in data.get("providers", []):
+        if data.get("protocol") != PROTOCOL or not isinstance(data.get("providers"), list) or "codex" not in data["providers"]:
             raise IntegrationError("Install the cpa-native-oauth-v1 native OAuth API.")
 
     def _session(self, response):
@@ -44,7 +44,8 @@ class NativeOAuth:
         if (data.get("protocol") != PROTOCOL or data.get("session_id") != self.session_id
             or not isinstance(data.get("identity"), str)
             or data["identity"].casefold() != self.account["username"].casefold()
-            or data.get("route") != self.route or data.get("state") not in STATES):
+            or data.get("route") != self.route or not isinstance(data.get("state"), str)
+            or data["state"] not in STATES):
             raise IntegrationError("Native OAuth session identity, route or protocol does not match.")
         rid = data.get("remote_id")
         if rid is not None:
@@ -120,7 +121,8 @@ class NativeOAuth:
                 pass
             session = self.get()
         if not session or session["state"] != "completed":
-            raise IntegrationError("Native OAuth commit outcome remains pending; retry reconciliation.", write_possible=True)
+            raise IntegrationError("Native OAuth commit outcome remains pending; retry reconciliation.",
+                                   write_possible=self.write_possible or bool(session and session["state"] in {"committing", "completed"}))
         self.verify_record(session, rid)
         return {"remote_id": rid, "verified": True}
 

@@ -243,4 +243,3 @@ def test_cancellation_is_not_converted_to_login_error():
         run_login(
             {"username": "synthetic@example.com"}, {"kind": "cliproxyapi"}, Control()
         )
-

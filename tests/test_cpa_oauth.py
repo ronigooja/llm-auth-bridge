@@ -284,3 +284,10 @@ def test_native_configuration_change_does_not_allow_another_authorization(settin
         assert conn.execute("SELECT 1 FROM native_sessions").fetchone()
     with pytest.raises(Conflict):
         worker.queue.create(*resources)
+
+
+def test_expired_uncommitted_native_session_does_not_claim_remote_write():
+    with pytest.raises(IntegrationError) as error:
+        sync_credential(TARGET, native_result(), ACCOUNT, RID,
+                        _transport=transport(lambda r: response(session("expired"))))
+    assert error.value.write_possible is False
