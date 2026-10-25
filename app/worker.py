@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 from .config import Settings
 from .crypto import load_key, encrypt, decrypt
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from .db import database, validate_database
 from .queue import Queue, LeaseLost, Cancelled, HumanTimeout, Conflict, event
 
@@ -95,6 +96,66 @@ class Control:
                     time.time(),
                 ),
             )
+
+    def load_device(self):
+        """Read only this leased account's authenticated profile archive."""
+        self.checkpoint()
+        with database(self.worker.settings.db_path) as conn:
+            row = self.queue.owned(conn, self.id, self.execution_id)
+            stored = conn.execute(
+                "SELECT archive_cipher FROM browser_devices WHERE account_id=?",
+                (row["account_id"],),
+            ).fetchone()
+        if stored is None:
+            return None
+        blob = bytes(stored[0])
+        aad = f"browser-device-v1:{row['account_id']}".encode()
+        try:
+            return AESGCM(self.worker.key).decrypt(blob[:12], blob[12:], aad)
+        except Exception:
+            raise ValueError("encrypted browser device cannot be read") from None
+
+    def save_device(self, archive):
+        """Checkpoint the closed device, including progress before cancellation.
+
+        Cancellation stops provider operations but must not discard the device.
+        A still-valid execution lease is mandatory; expired owners cannot write.
+        """
+        from .browser_device import MAX_COMPRESSED_BYTES
+        if not isinstance(archive, bytes) or len(archive) > MAX_COMPRESSED_BYTES:
+            raise ValueError("invalid browser device archive")
+        with database(self.worker.settings.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = self.queue.owned(conn, self.id, self.execution_id)
+            nonce = os.urandom(12)
+            aad = f"browser-device-v1:{row['account_id']}".encode()
+            cipher = nonce + AESGCM(self.worker.key).encrypt(nonce, archive, aad)
+            conn.execute(
+                "INSERT INTO browser_devices(account_id,archive_cipher,updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(account_id) DO UPDATE SET archive_cipher=excluded.archive_cipher,updated_at=excluded.updated_at",
+                (row["account_id"], cipher, time.time()),
+            )
+
+    def update_timezone(self, timezone):
+        """Persist verified route preference without replacing device identity."""
+        from zoneinfo import ZoneInfo
+        ZoneInfo(timezone)
+        self.checkpoint()
+        with database(self.worker.settings.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = self.queue.owned(conn, self.id, self.execution_id)
+            if row["cancel_requested"]:
+                raise Cancelled()
+            stored = conn.execute(
+                "SELECT profile_cipher FROM browser_profiles WHERE account_id=?",
+                (row["account_id"],),
+            ).fetchone()
+            if not stored:
+                raise ValueError("browser profile is unavailable")
+            profile = json.loads(decrypt(stored[0], self.worker.key))
+            profile["context"]["timezone_id"] = timezone
+            conn.execute("UPDATE browser_profiles SET profile_cipher=? WHERE account_id=?",
+                         (encrypt(json.dumps(profile), self.worker.key), row["account_id"]))
 
     def wait_human(self, reason, *, phase="waiting_human"):
         start = time.time()

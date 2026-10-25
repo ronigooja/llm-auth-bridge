@@ -189,3 +189,35 @@ Source revision `5c63d34` includes authenticator titles outside the input form, 
 A complete standard worker runtime build succeeded as image `sha256:052c7065f06877f7b2ae43ffa653dc3bfb373b3dc61271c0b341b95ca3449e98`. Rebuilding again after source changes stalled while reinstalling Playwright; that redundant build was stopped. The final worker reuses this local runtime image under the checked alias `llm-auth-bridge/worker-runtime:20261024-authenticator` and copies only `app/` with `bridge:bridge` ownership, with `org.opencontainers.image.revision=5c63d34`. Dependency manifests, Dockerfile, and Compose configuration were unchanged. The app used the standard Compose build. Deployed image IDs are worker `sha256:f376957df379e17455ac47296ce5109f93efc1fa5143ac3fbdc36e9d21de4607` and app `sha256:e34f7bcf82fa7795e8fcb1d1f0b03630de7ec6ae6eb127f9ec8e9fc670fd3abc`.
 
 Both services passed Compose health checks and `/readyz` returned HTTP 200. The worker's browser, integration, queue, and worker source hashes match the reviewed checkout. A non-root, sandbox-enabled headed Chromium instance classified an entirely intercepted synthetic authenticator challenge successfully. Existing volumes and both Compose networks were retained. No new provider login was performed during this deployment; fully automatic real-account acceptance of these fixes remains unverified. Existing duplicate remote files were not deleted or migrated, and stored remote IDs continue to take precedence.
+
+
+## Persistent account devices (schema v3)
+
+Stop app and worker, then run explicit offline `python -m app.cli migrate` with
+the existing master key before starting this release. Migrations accept schema
+v1 and v2, retain existing accounts/profiles/saved sessions, and add encrypted
+account-device storage. Offline restore also accepts initialized v1 and v2
+archives; startup still requires current schema v3. Existing profile seeds remain
+unchanged; first-use profile normalization changes the old geometry once to a
+1760×960 viewport with a 1920×1080 screen. The Xvfb desktop now matches that screen.
+
+Every account's Chromium user-data is encrypted in SQLite, restored only into a
+0700 temporary directory on the worker's `/tmp` tmpfs, and removed after closing
+the browser and saving its archive. Keep the tmpfs mount; never replace it with a
+persistent plaintext bind mount. Account deletion cascades to its encrypted
+device archive. Browser upgrades can still change browser version and native
+hardware/runtime properties. Backups contain encrypted device data and remain
+sensitive. A hard worker/container crash before archive save can lose changes
+from that task; previously committed device data remains available.
+
+Proxy logins additionally require HTTPS access to `https://ipwho.is/` through the
+configured account proxy. A failed or invalid geolocation response stops the task
+before provider navigation. The service receives the public proxy exit IP; no
+account identifier, password or OTP is sent. Direct routing keeps the existing
+profile timezone. A rotating proxy can change exit IP between requests, so this
+lookup does not guarantee a stable regional route throughout a task.
+
+The deployment workflow runs pytest under a 1920×1080 Xvfb display to exercise the
+headed synthetic persistence/isolation acceptance in addition to form tests.
+Real-account login and Web-to-Codex reuse must still pass serial acceptance;
+profile persistence alone does not establish provider acceptance.

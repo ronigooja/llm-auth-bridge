@@ -16,7 +16,7 @@ POST /accounts/{id}/tasks accepts `{target_id,idempotency_key?}`. GET /tasks/{id
 
 Main owns app/config.py, crypto.py, db.py, main.py, models.py, queue.py, worker.py, cli.py and API tests. Browser agent owns app/browser.py, app/routing.py, app/mailbox.py, app/totp.py, tests/test_browser*.py and tests/test_routing*.py. Integration agent owns app/integrations.py, tests/test_integrations.py. UI agent owns frontend/, Dockerfile, docker-compose.yml, .dockerignore, .github/, docs/deployment.md. Other docs remain main-owned.
 
-Browser entrypoint: `run_login(account: dict, target: dict, control, saved_state: dict | None = None) -> dict`. Account has decrypted username,password,totp,mailbox_url,allow_http_mailbox,route_type,proxy. Target has kind and config. control exposes `phase(name,message)`, `checkpoint()` (raises on cancellation/lease loss), `wait_human(reason, *, phase="waiting_human") -> str | None` (code or continuation), `save_state(dict)`. Browser result is `{credential_type:'codex_oauth'|'chatgpt_web',credential:dict,expires_at:float|None,identity:str}`. Exceptions safe fixed messages only; no secrets. Optional control `browser_ready(port)` and `browser_closed()` support takeover. Blocking sync Playwright allowed. Same worker owns global browser file lock.
+Browser entrypoint: `run_login(account: dict, target: dict, control, saved_state: dict | None = None) -> dict`. Account has decrypted username,password,totp,mailbox_url,allow_http_mailbox,route_type,proxy. Target has kind and config. control exposes `phase(name,message)`, `checkpoint()` (raises on cancellation/lease loss), `wait_human(reason, *, phase="waiting_human") -> str | None` (code or continuation), `save_state(dict)`, `load_device() -> bytes | None`, `save_device(bytes)` and `update_timezone(iana_id)`. Device methods bind the encrypted archive to the currently leased account. `save_device` may preserve closed-browser progress after cancellation while the lease is still owned; it cannot authorize further provider actions or writes by an expired owner. Browser result is `{credential_type:'codex_oauth'|'chatgpt_web',credential:dict,expires_at:float|None,identity:str}`. Exceptions safe fixed messages only; no secrets. Optional control `browser_ready(port)` and `browser_closed()` support takeover. Blocking sync Playwright allowed. Same worker owns global browser file lock.
 
 Integration entrypoint: `sync_credential(target: dict, result: dict, account: dict, remote_id: str | None = None) -> dict` returns `{remote_id,verified:bool}`. `test_connection(target: dict) -> dict` returns `{reachable,verification:'unverified'}`. target includes kind,config; account includes username,route_type,proxy. Never infer direct from an empty downstream proxy. Unknown downstream contracts fail closed with actionable safe exception. No fabricated successful verification.
 
@@ -47,3 +47,25 @@ Schema v2 adds `browser_profiles(account_id, profile_cipher, created_at)` and `n
 Native recovery uses queued phases `native_recovery`, `native_recovery_failed` and `native_cancel_pending`. The latter two require operator `/retry-sync` to requeue reconciliation and expose that action in the UI; ordinary cancellation remains available before commit. Persisted callback submission always prevents callback replay or silent session recreation.
 
 Any active task with a persisted native session blocks account mutation and target binding changes, including queued recovery/cancellation phases. Idle queued recovery or idle pending sync permits only target management-key/name repair at the same endpoint/kind/protocol, atomically updating affected frozen target versions. A worker-owned task does not permit this correction. Terminal task session remnants do not permanently lock resources. Ordinary non-native idle sync retains administrator-secret correction.
+
+
+### Persistent account device and route timezone
+
+Schema v3 adds `browser_devices(account_id, archive_cipher, updated_at)` with
+cascading account deletion. Ciphertext is AES-GCM with account-ID associated data.
+The complete Chromium user-data archive is restricted to a per-task 0700 tmpfs
+directory while active, then encrypted and committed after context close. Tasks
+for the same account restore this device across Voice/Codex, retries and worker
+restarts; accounts have separate archives and directories. Recreating a deleted
+account creates a new device. Browser processes and tabs remain task-scoped.
+A hard crash can lose progress since the last committed archive.
+
+Profile format v2 normalizes the viewport to 1760×960 and screen to 1920×1080,
+matching the worker Xvfb desktop, without changing the existing identity seed.
+Proxy tasks resolve their actual public exit IP's IANA timezone through the same
+account HTTP route before browser navigation, persist it without regenerating
+the profile, and fail safely when it cannot be verified. Direct tasks retain the
+stored timezone. No automatic language or user-agent fabrication is performed.
+The fixed public lookup endpoint is `https://ipwho.is/`; response bodies are
+bounded, redirects refused and IP/timezone fields validated. Login credentials
+are never sent to the lookup service.

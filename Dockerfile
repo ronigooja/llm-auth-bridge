@@ -53,7 +53,7 @@ RUN <<'SH'
 cat > /usr/local/bin/bridge-worker <<'SCRIPT'
 #!/bin/sh
 set -eu
-Xvfb :99 -screen 0 1440x900x24 -nolisten tcp &
+Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp &
 xvfb_pid=$!
 # Wait for the local display socket before connecting the VNC server.
 n=0
