@@ -202,7 +202,7 @@ def legacy_profile(settings, account_id, key):
     )
     cipher = encrypt(json.dumps(profile), key)
     with database(settings.db_path) as conn:
-        conn.execute('INSERT INTO browser_profiles VALUES(?,?)', (account_id, cipher))
+        conn.execute('INSERT INTO browser_profiles(account_id,profile_cipher) VALUES(?,?)', (account_id, cipher))
     return profile, cipher
 
 
