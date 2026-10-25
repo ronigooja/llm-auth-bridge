@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useAccountWindow } from "./account-window";
 import { App } from "./main";
 
 const json = (value: unknown) => Promise.resolve(new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } }));
 function Harness() {
   const viewer = useAccountWindow(true);
-  return <><button onClick={() => void viewer.open(1)}>账号窗口</button>{viewer.panel}</>;
+  return <><button onClick={() => void viewer.open(1)}>账号窗口</button><button onClick={() => void viewer.open(2)}>另一个账号窗口</button>{viewer.panel}</>;
 }
 function popup() {
   const doc = document.implementation.createHTMLDocument();
@@ -15,7 +15,7 @@ function popup() {
   vi.spyOn(window, "open").mockReturnValue(target as unknown as Window);
   return target;
 }
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 describe("unified account window", () => {
   it("reserves one large window and monitors without requesting takeover", async () => {
     const target = popup();
@@ -78,6 +78,44 @@ describe("unified account window", () => {
     await waitFor(() => expect(target.close).toHaveBeenCalled(), { timeout: 2500 });
     if (kind === "browser_window") await waitFor(() => expect(calls).toContain("/api/v1/tasks/8/continue"));
     else expect(calls.some((path) => /\/(continue|takeover|cancel)$/.test(path))).toBe(false);
+  });
+  it("polls a natively closed idle session through saving and then permits another account", async () => {
+    vi.useFakeTimers();
+    const target = popup();
+    const task = { id: 8, kind: "browser_window", state: "waiting_human", phase: "browser_window", takeover_available: true };
+    const calls: string[] = [];
+    const polledStates: string[] = [];
+    vi.stubGlobal("fetch", vi.fn((input) => {
+      const path = String(input);
+      calls.push(path);
+      if (path === "/api/v1/tasks/8") polledStates.push(task.state);
+      return json({ task });
+    }));
+    render(<Harness />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "账号窗口" })); });
+    target.closed = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(calls.filter((path) => path.endsWith("/continue"))).toHaveLength(1);
+    expect(target.close).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "另一个账号窗口" }));
+    expect(screen.getByRole("alert").textContent).toContain("等待保存完成");
+    expect(window.open).toHaveBeenCalledOnce();
+
+    // The server can still report waiting_human after accepting Continue.
+    // Saving must not repeatedly re-enter finish() and starve this GET.
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(polledStates).toEqual(["waiting_human"]);
+    task.state = "running";
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    task.state = "succeeded";
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(polledStates).toEqual(["waiting_human", "running", "succeeded"]);
+    expect(calls.filter((path) => path.endsWith("/continue"))).toHaveLength(1);
+    target.closed = false;
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "另一个账号窗口" })); });
+    expect(calls).toContain("/api/v1/accounts/2/browser");
+    expect(window.open).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
   it("does not queue an idle task if popups are blocked", async () => {
     vi.spyOn(window, "open").mockReturnValue(null);
