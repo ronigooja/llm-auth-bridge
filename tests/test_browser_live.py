@@ -551,3 +551,187 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts()
             assert (page.evaluate("innerWidth"), page.evaluate("innerHeight")) == (1760, 900)
         assert not second_path.exists()
         assert second_control.saves == 1
+
+
+@pytest.mark.parametrize("scenario", [
+    "matching", "nested_remove", "mismatch", "duplicate", "suffix", "remove", "other_account",
+    "multiple_identities", "external_link", "unsupported_card", "unknown", "absent", "disabled", "ambiguous",
+    "delayed", "delayed_disabled", "workspace", "click_failure",
+    "wrong_result_identity", "invalid_callback",
+])
+def test_codex_existing_session_continuation_is_identity_bound_and_recovers(
+    monkeypatch, tmp_path, scenario,
+):
+    """Full synthetic OAuth flow; no real account, network, or saved device."""
+    import base64
+    from types import SimpleNamespace
+    from urllib.parse import parse_qs, urlencode
+    import playwright.sync_api
+    import app.browser as module
+    from app.browser_identity import generate_profile
+
+    identity = "synthetic@example.com"
+    callback_state = None
+    pages, phases, waits, exchanges, launches = [], [], [], [], []
+    manual_scenarios = {
+        "mismatch", "duplicate", "suffix", "remove", "other_account",
+        "multiple_identities", "external_link", "unsupported_card", "unknown", "absent", "disabled", "ambiguous",
+        "click_failure",
+    }
+    monkeypatch.setattr(module, "TRANSITION_WAIT_SECONDS", 1.5)
+
+    def jwt(claims):
+        return "header." + base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode() + ".signature"
+
+    def exchange(url, *, data):
+        exchanges.append(data)
+        assert data["code"] == "synthetic-code"
+        return SimpleNamespace(status_code=200, json=lambda: {
+            "access_token": "synthetic-access", "refresh_token": "synthetic-refresh",
+            "id_token": jwt({"email": "wrong@example.com" if scenario == "wrong_result_identity" else identity,
+                             "https://api.openai.com/auth": {"chatgpt_account_id": "synthetic-account"}}),
+            "expires_in": 3600,
+        })
+
+    @contextmanager
+    def fake_route(account):
+        yield SimpleNamespace(playwright_proxy=None, session=SimpleNamespace(post=exchange))
+
+    @contextmanager
+    def fake_device(account, control):
+        yield SimpleNamespace(path=tmp_path, mark_ready=lambda: None, abort_snapshot=lambda: None)
+
+    def callback_url():
+        return module.REDIRECT_URI + "?" + urlencode({
+            "state": "incorrect-state" if scenario == "invalid_callback" else callback_state,
+            "code": "synthetic-code",
+        })
+
+    def chooser():
+        shown = {
+            "mismatch": "other@example.com", "suffix": identity + ".invalid",
+        }.get(scenario, identity.upper())
+        action = "window.location.href='/sign-in-with-chatgpt/codex/consent'"
+        card = '<button onclick="' + action + '"><span>' + shown + '</span></button>'
+        if scenario == "external_link":
+            card = '<a href="https://untrusted.example.test/"><span>' + shown + '</span></a>'
+        if scenario == "unsupported_card":
+            card = '<div onclick="' + action + '"><span>' + shown + '</span></div>'
+        if scenario == "nested_remove":
+            card = ('<div role="button" tabindex="0" onclick="' + action + '"><span>' + shown
+                    + '</span><button aria-label="Remove account" onclick="event.stopPropagation(); document.body.dataset.unsafe=1">×</button></div>')
+        if scenario == "duplicate":
+            card += card
+        if scenario == "multiple_identities":
+            card = card.replace('</button>', '<span>other@example.com</span></button>')
+        if scenario in ("remove", "other_account"):
+            label = "Remove account" if scenario == "remove" else "Use another account"
+            card = '<button aria-label="' + label + '" onclick="document.body.dataset.unsafe=1">' + shown + '</button>'
+        if scenario == "unknown":
+            return '<h1>Unknown page</h1><button onclick="document.body.dataset.unsafe=1">Continue</button>'
+        return ('<h1>Welcome back</h1><p>Choose an account to continue to Codex</p>' + card
+                + '<button aria-label="Remove account" onclick="document.body.dataset.unsafe=1">×</button>'
+                  '<button onclick="document.body.dataset.unsafe=1">Use another account</button>'
+                  '<button onclick="document.body.dataset.unsafe=1">Create account</button>')
+
+    def consent():
+        button = '<button type="button" onclick="window.location.href=\'' + callback_url() + '\'">Continue</button>'
+        if scenario == "absent":
+            button = ''
+        elif scenario == "ambiguous":
+            button += button
+        elif scenario in ("disabled", "delayed_disabled"):
+            button = button.replace('type="button"', 'type="button" disabled')
+        if scenario == "delayed":
+            button = '<script>setTimeout(() => {document.body.insertAdjacentHTML("beforeend", ' + json.dumps(button) + ')}, 650)</script>'
+        elif scenario == "delayed_disabled":
+            button += '<script>setTimeout(() => {document.querySelector("button[disabled]").disabled=false},650)</script>'
+        # Consent preserves the selected workspace; automation must never
+        # choose or change a workspace, even when other options are available.
+        return ('<h1>Select a workspace</h1><label><input type="radio" name="workspace" checked>Personal account</label>'
+                '<label><input type="radio" name="workspace" onclick="document.body.dataset.unsafe=1">Other workspace</label>'
+                '<button onclick="document.body.dataset.unsafe=1">Cancel</button>' + button)
+
+    with real_browser() as browser:
+        class Chromium:
+            def launch_persistent_context(self, **kwargs):
+                launches.append(kwargs)
+                for key in ("user_data_dir", "headless", "chromium_sandbox", "proxy", "env", "args"):
+                    kwargs.pop(key)
+                context = browser.new_context(**kwargs)
+
+                def intercept(route):
+                    nonlocal callback_state
+                    parsed = urlsplit(route.request.url)
+                    if parsed.path == "/oauth/authorize":
+                        callback_state = parse_qs(parsed.query)["state"][0]
+                        entry = "/unknown" if scenario == "unknown" else "/choose-an-account"
+                        route.fulfill(status=302, headers={"Location": "https://auth.openai.com" + entry})
+                    else:
+                        route.fulfill(body=consent() if parsed.path.endswith("/consent") else chooser(), content_type="text/html")
+
+                context.route("**/*", intercept)
+                page = context.new_page()
+                pages.append(page)
+                return SimpleNamespace(new_page=lambda: page, route=context.route,
+                                       set_default_timeout=context.set_default_timeout,
+                                       storage_state=context.storage_state, cookies=context.cookies, close=context.close)
+
+        @contextmanager
+        def fake_playwright():
+            yield SimpleNamespace(chromium=Chromium())
+
+        class Control:
+            def checkpoint(self):
+                pass
+
+            def phase(self, phase, reason):
+                phases.append(phase)
+
+            def save_state(self, state):
+                pass
+
+            def wait_human(self, reason, *, phase):
+                assert scenario in manual_scenarios, "Unexpected early manual pause"
+                page = pages[0]
+                waits.append((phase, module.detect_state(page)))
+                assert page.locator('body').get_attribute('data-unsafe') is None
+                assert not exchanges
+                assert len(pages) == 1
+                # A human can finish in the same browser; no relaunch/reset.
+                page.goto(callback_url())
+                return None
+
+        if scenario == "click_failure":
+            original = module._consent_continue
+
+            def failing_action(page):
+                action = original(page)
+                if action is None:
+                    return None
+                def fail(**kwargs):
+                    raise playwright.sync_api.Error("synthetic detached control")
+                return SimpleNamespace(click=fail)
+
+            monkeypatch.setattr(module, "_consent_continue", failing_action)
+        monkeypatch.setattr(module, "device_directory", fake_device)
+        monkeypatch.setattr(module, "account_route", fake_route)
+        monkeypatch.setattr(playwright.sync_api, "sync_playwright", fake_playwright)
+        account = {"_browser_profile": generate_profile(set()), "username": identity,
+                   "password": "must-never-submit", "totp": "must-never-submit"}
+        if scenario in ("wrong_result_identity", "invalid_callback"):
+            with pytest.raises(module.BrowserError, match="identity does not match" if scenario == "wrong_result_identity" else "callback validation failed"):
+                module.run_login(account, {"kind": "cliproxyapi"}, Control())
+        else:
+            result = module.run_login(account, {"kind": "cliproxyapi"}, Control())
+            assert result["identity"] == identity
+    assert len(launches) == 1
+    assert len(exchanges) == (0 if scenario == "invalid_callback" else 1)
+    assert bool(waits) == (scenario in manual_scenarios)
+    assert not {"email", "password", "totp"}.intersection(phases)
+    if scenario in {"absent", "disabled", "ambiguous", "click_failure"}:
+        assert waits == [("waiting_human", "consent")]
+    if scenario in {"mismatch", "duplicate", "suffix", "remove", "other_account", "multiple_identities", "external_link", "unsupported_card"}:
+        assert waits == [("waiting_human", "account_chooser")]
+    if scenario == "unknown":
+        assert waits == [("waiting_human", "unknown")]

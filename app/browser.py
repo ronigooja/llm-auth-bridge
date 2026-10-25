@@ -283,9 +283,75 @@ def detect_state(page) -> str:
         page, 'button[data-testid="login-button"]:enabled'
     ):
         return "login"
+    if parsed.hostname == "auth.openai.com" and parsed.path == "/choose-an-account":
+        return "account_chooser"
     if parsed.hostname == "auth.openai.com" and "consent" in parsed.path:
         return "consent"
     return "unknown"
+
+
+def _account_choice(page, username):
+    """Return only one exact identity target inside a safe account control.
+
+    Click identity text, never the card center (which can overlap a nested
+    remove button). Unknown card markup deliberately requires takeover.
+    """
+    parsed = urlsplit(page.url)
+    if (parsed.scheme, parsed.netloc, parsed.path) != (
+        "https", "auth.openai.com", "/choose-an-account"
+    ):
+        return None
+    identities = page.get_by_text(re.compile(r"^" + re.escape(username) + r"$", re.I))
+    visible = [identities.nth(i) for i in range(identities.count())
+               if identities.nth(i).is_visible()]
+    if len(visible) != 1:
+        return None
+    identity = visible[0]
+    safe = identity.evaluate(r"""(node, username) => {
+        const control = node.closest('button, a, [role="button"]');
+        if (!control || node.querySelector('button, a, [role="button"]')
+            || control.matches(':disabled, [aria-disabled="true"]')) return false;
+        // Ignore nested controls such as the card's remove button. The click
+        // target remains the exact identity node outside those controls.
+        const walker = document.createTreeWalker(control, NodeFilter.SHOW_TEXT);
+        const parts = [];
+        while (walker.nextNode()) {
+            const parent = walker.currentNode.parentElement;
+            if (parent.closest('button, a, [role="button"]') === control
+                && parent.getClientRects().length
+                && getComputedStyle(parent).visibility !== 'hidden')
+                parts.push(walker.currentNode.textContent.trim());
+        }
+        const text = parts.join(' ');
+        const label = [control.getAttribute('aria-label') || '',
+            control.getAttribute('title') || '', text].join(' ');
+        if (/\b(remove|forget|delete|use another account|create account)\b/i.test(label))
+            return false;
+        const emails = text.match(/[^\s<>"(),;:]+@[^\s<>"(),;:]+/g) || [];
+        if (!emails.length || emails.some(email => email.toLowerCase() !== username.toLowerCase()))
+            return false;
+        if (control.tagName === 'A') {
+            const url = new URL(control.href, location.href);
+            if (url.origin !== location.origin) return false;
+        }
+        return true;
+    }""", username)
+    return identity if safe else None
+
+
+def _consent_continue(page):
+    """Readiness is an unambiguous enabled Continue, not the URL alone."""
+    parsed = urlsplit(page.url)
+    if (parsed.scheme != "https" or parsed.netloc != "auth.openai.com"
+            or parsed.path not in {"/consent", "/oauth/consent",
+                                   "/sign-in-with-chatgpt/codex/consent"}):
+        return None
+    controls = page.get_by_role("button", name=re.compile(r"^Continue$", re.I))
+    visible = [controls.nth(i) for i in range(controls.count())
+               if controls.nth(i).is_visible()]
+    if len(visible) != 1 or not visible[0].is_enabled():
+        return None
+    return visible[0]
 
 
 def _submit(page):
@@ -447,6 +513,11 @@ def _native_result(client, session, control):
     return client.result(session)
 
 
+def run_browser_window(account, control, saved_state=None) -> None:
+    """Open this account's persistent browser until its operator closes it."""
+    _run_login(account, {"kind": "browser_window"}, control, saved_state)
+
+
 def run_login(account, target, control, saved_state=None):
     from .cpa_oauth import NativeOAuth, enabled
     if not enabled(target):
@@ -470,8 +541,8 @@ def run_login(account, target, control, saved_state=None):
 def _run_login(
     account: dict, target: dict, control, saved_state: dict | None = None,
     native=None, native_session=None,
-) -> dict:
-    """Run one login while the worker holds its global browser lock.
+) -> dict | None:
+    """Run one login or browser window under the global browser lock.
 
     The worker encrypts device archives, save_state, and results.
     Cancellation and takeover are checked between each bounded browser action.
@@ -481,9 +552,9 @@ def _run_login(
     import httpx
 
     kind = target.get("kind")
-    if kind not in ("cliproxyapi", "chatgpt-web-voice"):
+    if kind not in ("cliproxyapi", "chatgpt-web-voice", "browser_window"):
         raise BrowserError("Unsupported login target")
-    if account.get("_maintenance") and kind != "chatgpt-web-voice":
+    if account.get("_maintenance") and kind == "cliproxyapi":
         raise ReauthenticationRequired()
     control.checkpoint()
     with account_route(account) as route:
@@ -532,6 +603,13 @@ def _run_login(
                         int(os.getenv("BRIDGE_WEBSOCKIFY_PORT", "6080"))
                     )
                 control.phase("browser", "Browser ready")
+                if kind == "browser_window":
+                    page.goto(CHATGPT_ORIGIN, wait_until="domcontentloaded", timeout=30000)
+                    _save(context, control)
+                    _human(control, "Use the account browser, then continue to save and close it",
+                           phase="browser_window")
+                    _save(context, control)
+                    return None
                 captured = []
                 if native:
                     verifier, challenge = None, None
@@ -574,6 +652,7 @@ def _run_login(
                 totp_attempts = 0
                 manual_rounds = 0
                 started = time.monotonic()
+                observed_marker = None
                 while True:
                     control.checkpoint()
                     if captured:
@@ -612,6 +691,23 @@ def _run_login(
                             return result
                     stage = detect_state(page)
                     marker = (stage, urlsplit(page.url).path)
+                    if marker != observed_marker:
+                        # Allow newly arrived continuation markup a full,
+                        # bounded hydration window before human review.
+                        observed_marker = marker
+                        if stage in ("account_chooser", "consent"):
+                            started = time.monotonic()
+                    continuation = None
+                    if marker not in submitted:
+                        try:
+                            if stage == "account_chooser" and kind == "cliproxyapi":
+                                continuation = _account_choice(page, account["username"])
+                            elif stage == "consent":
+                                continuation = _consent_continue(page)
+                        except PlaywrightError:
+                            # DOM replacement during hydration is not a failed
+                            # login. Keep observing until the review deadline.
+                            continuation = None
                     if stage == "login" and marker not in submitted:
                         control.phase("login", "Opening account sign in")
                         _visible(page, 'button[data-testid="login-button"]:enabled').click(
@@ -653,9 +749,16 @@ def _run_login(
                             # window; checkpoint on each half-second iteration.
                             page.wait_for_timeout(500)
                             continue
-                    elif stage == "consent" and marker not in submitted:
-                        control.phase("consent", "Confirming requested authorization")
-                        _submit(page)
+                    elif continuation is not None:
+                        control.phase(stage, "Continuing the matching account session"
+                                      if stage == "account_chooser"
+                                      else "Confirming requested authorization")
+                        try:
+                            continuation.click(timeout=2000)
+                        except PlaywrightError:
+                            # Detached/covered controls and uncertain clicks
+                            # require review in this browser, never blind replay.
+                            pass
                         submitted.add(marker)
                         started = time.monotonic()
                     else:
@@ -667,7 +770,7 @@ def _run_login(
                         # submitted credentials are never repeated automatically.
                         settle_seconds = (
                             TRANSITION_WAIT_SECONDS
-                            if stage in ("unknown", "email", "login", "consent")
+                            if stage in ("unknown", "email", "login", "consent", "account_chooser")
                             else CHALLENGE_SETTLE_SECONDS
                         )
                         if time.monotonic() - started < settle_seconds:
