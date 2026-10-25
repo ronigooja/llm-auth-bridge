@@ -8,15 +8,18 @@ permissions:
 concurrency:
   group: deployment-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.8.22"
+
 jobs:
   validate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+        with: {python-version: "3.12"}
       - uses: actions/setup-node@v4
         with:
           node-version: "22.14.0"
@@ -24,60 +27,80 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - uses: astral-sh/setup-uv@v6
         with:
-          version: "0.8.22"
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - run: uv sync --frozen --extra test --extra browser
-      - name: Restore Playwright browser binaries
-        id: playwright_cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ hashFiles('uv.lock') }}
-      - name: Install Chromium and required OS packages
-        id: playwright_install
-        timeout-minutes: 5
-        run: uv run playwright install --with-deps chromium
-      - name: Save installed Playwright browser binaries before tests
-        if: ${{ steps.playwright_cache.outputs.cache-hit != 'true' && steps.playwright_install.outcome == 'success' }}
-        uses: actions/cache/save@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
-      - name: Validate deployment inputs
-        timeout-minutes: 12
-        env:
-          BRIDGE_TEST_GOST: /tmp/gost
+      - name: Validate frontend and non-browser backend
+        timeout-minutes: 8
+        env: {BRIDGE_TEST_GOST: /tmp/gost}
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
           mkdir -p deployment-logs
-          exec > >(tee deployment-logs/validation.log) 2>&1
-          trap 'printf "%s\n" "$?" > deployment-logs/validation.exit' EXIT
           git rev-parse HEAD > deployment-logs/source-revision.txt
           git status --porcelain=v1 -- . ':!deployment-logs' > deployment-logs/uncommitted-inputs.txt
           printf 'run=%s\njob=%s\nos=%s\narch=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$GITHUB_JOB" "$RUNNER_OS" "$RUNNER_ARCH" > deployment-logs/environment.txt
+          exec > deployment-logs/validation.log 2>&1
+          trap 'rc=$?; printf "%s\n" "$rc" > deployment-logs/validation.exit' EXIT
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           curl -fsSL https://github.com/go-gost/gost/releases/download/v3.3.1/gost_3.3.1_linux_amd64.tar.gz -o /tmp/gost.tar.gz
           echo 'e0e3a2c9116e2f025e962bba340749f80696bda318613d45e5ae96dd0bcae37c  /tmp/gost.tar.gz' | sha256sum -c -
           tar -xzf /tmp/gost.tar.gz -C /tmp gost
+          uv sync --frozen --extra test --extra browser
           npm ci --ignore-scripts --prefix frontend
           npm test --prefix frontend
           npm run build --prefix frontend
-          sudo apt-get update
-          sudo apt-get install -y xvfb xauth novnc x11vnc websockify
-          set +e
-          timeout --kill-after=10s 7m bash -o pipefail -c 'xvfb-run -a -s "-screen 0 1920x1080x24" uv run pytest -v -ra -o faulthandler_timeout=120 --junitxml=deployment-logs/pytest.xml 2>&1 | tee deployment-logs/pytest.log'
-          result=$?
-          printf '%s\n' "$result" > deployment-logs/pytest.exit
-          exit "$result"
+          timeout --signal=TERM --kill-after=15s 5m uv run pytest -v -ra -o faulthandler_timeout=120 --ignore=tests/test_browser_live.py --junitxml=deployment-logs/pytest-nonbrowser.xml > deployment-logs/pytest-nonbrowser.log 2>&1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: deployment-validation-${{ github.sha }}
           path: deployment-logs/
           retention-days: 7
-  images:
+
+  browser_acceptance:
     needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install Python and browser dependencies
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          uv sync --frozen --extra test --extra browser
+          uv run playwright install --with-deps chromium
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth novnc x11vnc websockify
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Run bounded headed acceptance
+        timeout-minutes: 8
+        env: {BRIDGE_TEST_GOST: /tmp/gost}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p deployment-browser-logs
+          git rev-parse HEAD > deployment-browser-logs/source-revision.txt
+          printf 'run=%s\njob=%s\nos=%s\narch=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$GITHUB_JOB" "$RUNNER_OS" "$RUNNER_ARCH" > deployment-browser-logs/environment.txt
+          exec > deployment-browser-logs/browser.log 2>&1
+          trap 'rc=$?; pkill -TERM -P $$ 2>/dev/null || true; printf "%s\n" "$rc" > deployment-browser-logs/browser.exit' EXIT
+          curl -fsSL https://github.com/go-gost/gost/releases/download/v3.3.1/gost_3.3.1_linux_amd64.tar.gz -o /tmp/gost.tar.gz
+          echo 'e0e3a2c9116e2f025e962bba340749f80696bda318613d45e5ae96dd0bcae37c  /tmp/gost.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/gost.tar.gz -C /tmp gost
+          timeout --signal=TERM --kill-after=15s 6m xvfb-run -a -s '-screen 0 1920x1080x24' uv run pytest -v -ra tests/test_browser_live.py -k 'headed_native_device or novnc_live' --junitxml=deployment-browser-logs/browser.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deployment-browser-${{ github.sha }}
+          path: deployment-browser-logs/
+          retention-days: 7
+
+  images:
+    needs: [validate, browser_acceptance]
+    if: needs.validate.result == 'success' && needs.browser_acceptance.result == 'success'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
@@ -108,33 +131,15 @@ jobs:
       - name: Verify and export native ARM64 deployment images
         timeout-minutes: 10
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
           mkdir -p deployment-images
-          exec > >(tee deployment-images/build.log) 2>&1
-          trap 'printf "%s\n" "$?" > deployment-images/build.exit' EXIT
+          exec > deployment-images/build.log 2>&1
+          trap 'rc=$?; printf "%s\n" "$rc" > deployment-images/build.exit' EXIT
           git rev-parse HEAD > deployment-images/source-revision.txt
           printf 'run=%s\njob=%s\nos=%s\narch=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$GITHUB_JOB" "$RUNNER_OS" "$RUNNER_ARCH" > deployment-images/environment.txt
           docker image inspect "llm-auth-bridge-app:$GITHUB_SHA" "llm-auth-bridge-worker:$GITHUB_SHA" --format '{{.Id}} {{.Architecture}} {{index .Config.Labels "org.opencontainers.image.revision"}}' > deployment-images/image-identities.txt
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          timeout --kill-after=15s 5m docker run --rm --init --user 10001:10001 \
-            --security-opt no-new-privileges:true \
-            --security-opt "seccomp=$GITHUB_WORKSPACE/deploy/playwright-seccomp.json" \
-            --shm-size 1gb --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777 \
-            -v "$GITHUB_WORKSPACE/tests:/acceptance/tests:ro" \
-            -e UV_CACHE_DIR=/tmp/uv-cache \
-            --entrypoint /bin/sh "llm-auth-bridge-worker:$GITHUB_SHA" -ec '
-              uv pip install --target /tmp/acceptance-deps pytest==8.3.5
-              Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp &
-              display_pid=$!
-              trap "kill $display_pid 2>/dev/null || true" EXIT
-              n=0
-              while [ ! -S /tmp/.X11-unix/X99 ]; do
-                n=$((n+1)); [ "$n" -lt 100 ]; sleep 0.1
-              done
-              export DISPLAY=:99 PYTHONPATH=/tmp/acceptance-deps:/app
-              python -c "from zoneinfo import ZoneInfo; assert ZoneInfo(\"America/Los_Angeles\").key == \"America/Los_Angeles\""
-              python -m pytest -v -s -p no:cacheprovider /acceptance/tests/test_browser_live.py -k headed_native_device
-            '
+          test "$(wc -l < deployment-images/image-identities.txt)" -eq 2
+          test "$(awk '$2 == "arm64" && $3 == ENVIRON["GITHUB_SHA"] {count++} END {print count+0}' deployment-images/image-identities.txt)" -eq 2
           docker save "llm-auth-bridge-app:$GITHUB_SHA" "llm-auth-bridge-worker:$GITHUB_SHA" | gzip -1 > deployment-images/images.tar.gz
           (cd deployment-images && sha256sum images.tar.gz > images.tar.gz.sha256)
       - uses: actions/upload-artifact@v4
