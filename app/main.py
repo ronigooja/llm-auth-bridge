@@ -303,7 +303,16 @@ def create_app(settings: Settings | None = None):
             raise NotFound("resource not found")
         return row
 
+    def check_native_busy(conn, column, id):
+        if conn.execute(
+            f"SELECT 1 FROM tasks t JOIN native_sessions n ON n.task_id=t.id "
+            f"WHERE t.{column}=? AND t.state IN ('queued','running','waiting_human','sync_pending')",
+            (id,),
+        ).fetchone():
+            raise Conflict("resource has an unresolved native authorization task")
+
     def check_busy(conn, column, id, include_queued=False):
+        check_native_busy(conn, column, id)
         states = (
             "'queued','running','waiting_human','sync_pending'"
             if include_queued
@@ -531,6 +540,12 @@ def create_app(settings: Settings | None = None):
         with database(settings.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
             old = get_row(conn, "targets", target_id)
+            native_tasks = conn.execute(
+                "SELECT t.id,t.state,t.phase,t.execution_id FROM tasks t "
+                "JOIN native_sessions n ON n.task_id=t.id WHERE t.target_id=? "
+                "AND t.state IN ('queued','running','waiting_human','sync_pending')",
+                (target_id,),
+            ).fetchall()
             if conn.execute(
                 "SELECT 1 FROM tasks WHERE target_id=? AND (state IN ('running','waiting_human') OR (state='sync_pending' AND execution_id IS NOT NULL))",
                 (target_id,),
@@ -544,6 +559,23 @@ def create_app(settings: Settings | None = None):
                 name=body.get("name", old["name"]),
                 config={**oldconfig, **body.get("config", {})},
             )
+            if native_tasks and (
+                any(
+                    task["execution_id"] is not None
+                    or task["state"] not in ("queued", "sync_pending")
+                    or (task["state"] == "queued" and task["phase"] not in (
+                        "native_recovery", "native_recovery_failed", "native_cancel_pending"
+                    ))
+                    for task in native_tasks
+                )
+                or merged.kind != old["kind"]
+                or any(
+                    merged.config.get(field) != oldconfig.get(field)
+                    for field in set(merged.config) | set(oldconfig)
+                    if field != "management_key"
+                )
+            ):
+                raise Conflict("native authorization is bound to this target; only idle administrator-key or name repair is allowed")
             pending = conn.execute(
                 "SELECT id FROM tasks WHERE target_id=? AND state='sync_pending'",
                 (target_id,),
@@ -568,12 +600,13 @@ def create_app(settings: Settings | None = None):
                     target_id,
                 ),
             )
-            for task in pending:
+            rebound_ids = {task["id"] for task in pending} | {task["id"] for task in native_tasks}
+            for task_id in rebound_ids:
                 conn.execute(
                     "UPDATE tasks SET target_version=? WHERE id=?",
-                    (old["version"] + 1, task["id"]),
+                    (old["version"] + 1, task_id),
                 )
-                event(conn, task["id"])
+                event(conn, task_id)
             return public_target(get_row(conn, "targets", target_id), app.state.key)
 
     @app.delete("/api/v1/targets/{target_id}")

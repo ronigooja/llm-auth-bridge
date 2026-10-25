@@ -82,6 +82,9 @@ const labels: Record<string, string> = {
   token_exchange: "正在获取认证凭据",
   resuming: "正在检查浏览器",
   sync_failed: "同步失败",
+  native_recovery: "正在恢复原生授权",
+  native_recovery_failed: "原生授权恢复失败",
+  native_cancel_pending: "正在等待原生授权取消确认",
   sync_unknown: "同步结果待确认",
   remote_outcome_unknown: "目标同步结果待确认",
   sync_pending: "等待同步",
@@ -957,10 +960,7 @@ function TargetForm({
                 name,
                 kind,
                 config: {
-                  compatibility:
-                    kind === "cliproxyapi"
-                      ? "cpa-auth-files-v1"
-                      : compatibility,
+                  compatibility,
                   ...(url ? { base_url: url } : {}),
                   allow_http: allow,
                   ...(kind === "cliproxyapi"
@@ -1050,19 +1050,32 @@ function TargetForm({
           允许不加密的 HTTP 连接
         </label>
         <p className="muted">真实账号同步能力尚未验证。</p>
-        {kind === "chatgpt-web-voice" && (
-          <Field title="同步接口兼容性">
-            <select
-              required
-              value={compatibility}
-              onChange={(e) => setCompatibility(e.target.value)}
-            >
-              <option value="">请选择</option>
-              <option value="bridge-v1">服务端已实现 Bridge v1 接口</option>
-            </select>
-            <small>需由目标服务提供兼容接口。</small>
-          </Field>
-        )}
+        <Field title="同步接口兼容性">
+          <select
+            required
+            value={compatibility}
+            onChange={(e) => setCompatibility(e.target.value)}
+          >
+            {kind === "cliproxyapi" ? (
+              <>
+                <option value="cpa-auth-files-v1">Auth-files（默认）</option>
+                <option value="cpa-native-oauth-v1">原生 OAuth（需部署兼容补丁）</option>
+              </>
+            ) : (
+              <>
+                <option value="">请选择</option>
+                <option value="bridge-v1">服务端已实现 Bridge v1 接口</option>
+              </>
+            )}
+          </select>
+          <small>
+            {kind === "cliproxyapi"
+              ? compatibility === "cpa-native-oauth-v1"
+                ? "需先部署 cpa-native-oauth-v1 管理接口补丁；应用仍会自动操作登录浏览器。真实账号授权尚未验证。"
+                : "兼容现有 CLIProxyAPI；应用自动登录并同步 Auth-file。"
+              : "需由目标服务提供兼容接口。"}
+          </small>
+        </Field>
         <ErrorBox error={m.error} />
         <div className="actions footer">
           <button type="button" onClick={close}>
@@ -1364,7 +1377,7 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
               接管浏览器
             </button>
           )}
-          {task.state === "sync_pending" && (
+          {(task.state === "sync_pending" || (task.state === "queued" && ["native_recovery_failed", "native_cancel_pending"].includes(task.phase || ""))) && (
             <button
               className="primary"
               disabled={m.busy}

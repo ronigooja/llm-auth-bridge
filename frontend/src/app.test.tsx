@@ -20,6 +20,77 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("management interactions", () => {
+  it.each(["native_recovery_failed", "native_cancel_pending"])("allows reconciliation retry for queued %s", async (phase) => {
+    window.history.replaceState(null, "", "/#tasks/7");
+    vi.stubGlobal("EventSource", class { addEventListener() {} close() {} });
+    const calls: { path: string; init?: RequestInit }[] = [];
+    const task = { id: 7, account_id: 1, target_id: 2, state: "queued", phase };
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const path = String(input);
+      calls.push({ path, init });
+      if (path.endsWith("/auth/session")) return response({ csrf_token: "synthetic" });
+      if (path.endsWith("/accounts")) return response({ accounts: [] });
+      if (path.endsWith("/targets")) return response({ targets: [] });
+      if (path.endsWith("/tasks")) return response({ tasks: [task] });
+      if (path.endsWith("/history")) return response({ events: [] });
+      return response(task);
+    });
+    render(<App />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "重试同步" }));
+    await waitFor(() => expect(calls.some((call) => call.path.endsWith("/tasks/7/retry-sync") && call.init?.method === "POST")).toBe(true));
+    expect(screen.getByRole("button", { name: "取消任务" })).toBeTruthy();
+  });
+
+  it.each(["cpa-auth-files-v1", "cpa-native-oauth-v1", "bridge-v1"])("preserves saved target compatibility %s when editing", async (compatibility) => {
+    const calls: { path: string; init?: RequestInit }[] = [];
+    const target = { id: 2, name: "Synthetic target", kind: compatibility === "bridge-v1" ? "chatgpt-web-voice" : "cliproxyapi", config: { base_url: "https://target.example.test", compatibility } };
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const path = String(input);
+      calls.push({ path, init });
+      if (path.endsWith("/auth/session")) return response({ csrf_token: "synthetic" });
+      if (path.endsWith("/accounts")) return response({ accounts: [] });
+      if (path.endsWith("/targets")) return response({ targets: [target] });
+      if (path.endsWith("/tasks")) return response({ tasks: [] });
+      return response(target);
+    });
+    render(<App />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /^目标$/ }));
+    await user.click(await screen.findByRole("button", { name: "编辑目标" }));
+    expect(screen.getByLabelText(/^同步接口兼容性/)).toHaveProperty("value", compatibility);
+    await user.click(screen.getByRole("button", { name: "保存目标" }));
+    await waitFor(() => expect(calls.some((call) => call.path.endsWith("/targets/2") && call.init?.method === "PATCH")).toBe(true));
+    const saved = calls.find((call) => call.path.endsWith("/targets/2") && call.init?.method === "PATCH")!;
+    expect(JSON.parse(String(saved.init?.body)).config.compatibility).toBe(compatibility);
+    expect(JSON.parse(String(saved.init?.body)).config.management_key).toBeUndefined();
+  });
+  it("defaults new CPA targets to auth-files and offers native OAuth as an explicit choice", async () => {
+    const calls: { path: string; init?: RequestInit }[] = [];
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const path = String(input);
+      calls.push({ path, init });
+      if (path.endsWith("/auth/session")) return response({ csrf_token: "synthetic" });
+      if (path.endsWith("/accounts")) return response({ accounts: [] });
+      if (path.endsWith("/targets")) return response({ targets: [] });
+      return response({ tasks: [] });
+    });
+    render(<App />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /^目标$/ }));
+    await user.click(await screen.findByRole("button", { name: "添加目标" }));
+    expect(screen.getByLabelText(/^同步接口兼容性/)).toHaveProperty("value", "cpa-auth-files-v1");
+    await user.selectOptions(screen.getByLabelText(/^同步接口兼容性/), "cpa-native-oauth-v1");
+    expect(screen.getByText(/需先部署 cpa-native-oauth-v1 管理接口补丁/)).toBeTruthy();
+    await user.type(screen.getByLabelText("目标名称"), "Synthetic native CPA");
+    await user.type(screen.getByLabelText("服务地址"), "https://cpa.example.test");
+    await user.type(screen.getByLabelText("管理密钥"), "synthetic-secret");
+    await user.click(screen.getByRole("button", { name: "保存目标" }));
+    await waitFor(() => expect(calls.some((call) => call.path.endsWith("/targets") && call.init?.method === "POST")).toBe(true));
+    const saved = calls.find((call) => call.path.endsWith("/targets") && call.init?.method === "POST")!;
+    expect(JSON.parse(String(saved.init?.body)).config.compatibility).toBe("cpa-native-oauth-v1");
+  });
+
   it("starts account login over LAN HTTP without crypto.randomUUID", async () => {
     vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
     vi.stubGlobal("EventSource", class { addEventListener() {} close() {} });
