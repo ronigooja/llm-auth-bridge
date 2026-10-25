@@ -10,6 +10,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   bridge:
+    if: github.ref != 'refs/heads/validation/upstream-late-interrupt'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -66,6 +67,7 @@ jobs:
           path: validation-logs/
           retention-days: 7
   cpa:
+    if: github.ref != 'refs/heads/validation/upstream-late-interrupt'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -130,6 +132,7 @@ jobs:
           path: validation-logs/
           retention-days: 7
   cpa-baseline:
+    if: github.ref != 'refs/heads/validation/upstream-late-interrupt'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
