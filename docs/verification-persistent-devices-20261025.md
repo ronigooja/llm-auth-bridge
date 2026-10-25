@@ -120,3 +120,61 @@ new real-account login was initiated as part of this deployment. Those outcomes
 remain unverified and require serial checks using the account's existing device.
 A hard process/container crash before archiving can lose changes from the current
 task; previously committed device data remains available.
+
+
+## Subsequent serial real-account verification
+
+On 2026-10-25, task 11 used stored account 2, its configured proxy and the
+persistent browser flow at application revision `0b1c48e26c2722514d3b8786234b459cf2ac7a1f`.
+The initial ChatGPT email submission and one same-browser retry displayed
+“We couldn’t sign you in. Please try again”. The operator subsequently reported
+completing human verification. Continuing the same task reached the authenticator
+challenge; the worker submitted its stored TOTP and obtained a ChatGPT Web session.
+This is assisted login acceptance, not proof of unattended challenge completion.
+
+The first downstream synchronization failed because the independently managed
+Voice gateway had no Docker network endpoint. Reconnecting exposed a stale LAN
+binding to `192.168.1.4`, while the host address was `192.168.1.7`. Recreating only
+the gateway using the existing Compose files, pinned image and data mount, with
+`VOICE_LAN_BIND=192.168.1.7`, returned exit status 0 and a healthy container.
+The LAN override now defaults to that current address for subsequent recreations.
+No build, backup or data migration was performed.
+
+The authenticated target connection check then returned `reachable=true`.
+Retrying synchronization of the existing credential completed task 11 with
+`state=succeeded`, `phase=verified`, and “Downstream synchronization verified”.
+Sanitized task history is saved outside Git at
+`/tmp/bridge-real-login-20261025/task-11-final.json`; temporary desktop captures
+were removed. Voice audio operation, fully unattended login, and Web-to-Codex
+session reuse remain unverified. No Codex login was attempted in this check.
+
+
+## Subsequent Web-to-Codex session reuse verification
+
+After task 11, serial Codex tasks 12 and 13 used the same stored account 2 and
+configured proxy at the same deployed application revision. Both opened
+`https://auth.openai.com/choose-an-account`, displaying the existing account and
+“Choose an account to continue to Codex”. Selecting that account proceeded to
+`/sign-in-with-chatgpt/codex/consent`, with the personal workspace selected.
+Neither task required a new email, password, TOTP or human verification challenge.
+This establishes provider session reuse across these separate browser tasks;
+it does not mean the ChatGPT Web access token is itself used as a Codex token.
+
+Task 12 exposed two automation gaps. The account chooser is unrecognized by
+`detect_state` and pauses for manual review. After manual account selection and
+resumption, the consent handler attempted `_submit` but failed with
+“Login form requires manual review”. Its generic submit-button lookup did not
+find a matching visible control at that moment; the exact markup/timing cause
+has not been established. The handler detects consent by URL before verifying
+page readiness and does not recover this error by pausing for manual review.
+
+Task 13 was paused using the normal takeover action. The operator selected the
+matching account and clicked Continue on the personal workspace page, then
+resumed the worker. The normal intercepted OAuth callback, token exchange and
+downstream synchronization completed with `state=succeeded`, `phase=verified`.
+No replacement browser, custom login flow or application code patch was used.
+This is assisted Codex authorization acceptance; unattended Web-to-Codex flow
+remains incomplete due to the two automation gaps above. Codex inference was
+not exercised. Sanitized task histories are saved at
+`/tmp/bridge-real-login-20261025/codex-web-session-reuse.json` outside Git.
+Temporary desktop captures, including the callback page, were deleted.
