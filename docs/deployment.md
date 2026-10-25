@@ -241,3 +241,15 @@ credentials, saved browser devices, and runtime state are excluded. Cache storag
 uses GitHub Actions repository retention and eviction limits; test logs remain
 separate artifacts retained for seven days. New runs cancel older Checks runs
 for the same ref, and check/image jobs have explicit execution timeouts.
+
+## Account-window artifact pipeline
+
+The deployment artifact workflow validates the complete synthetic pytest suite
+under Xvfb with the packaged noVNC, x11vnc and websockify prerequisites. Its full
+pytest pipeline has a seven-minute deadline and records the actual exit status
+alongside JUnit and textual logs; an independent step deadline bounds setup and
+frontend checks. Native ARM64 images are built only after validation succeeds,
+then run the headed synthetic device acceptance before export. The exported
+archive includes a SHA-256 checksum and immutable source/image identities.
+Dependency caches and separate app/worker BuildKit cache scopes stay in GitHub
+Actions. Artifact availability is not deployment acceptance.
