@@ -133,7 +133,7 @@ export function useAccountWindow(enabled: boolean) {
       if (popup.current?.closed) hide();
       const t = current.current;
       if (polling || !t || !active.has(t.state)) return;
-      if (hidden.current && idle(t) && t.state === "waiting_human") { void finish(); return; }
+      if (hidden.current && idle(t) && t.state === "waiting_human" && saving.current !== t.id) { void finish(); return; }
       polling = true;
       try {
         const result = await api<BrowserTask & { task?: BrowserTask }>(`/tasks/${t.id}`);
