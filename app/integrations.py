@@ -151,7 +151,7 @@ class _Adapter:
         else:
             if (
                 config.get("compatibility") or "cpa-auth-files-v1"
-            ) != "cpa-auth-files-v1":
+            ) not in {"cpa-auth-files-v1", "cpa-native-oauth-v1"}:
                 raise IntegrationError(
                     "Select the documented cpa-auth-files-v1 compatibility contract."
                 )
@@ -380,12 +380,31 @@ def sync_credential(
     _transport=None,
     _sleep=time.sleep,
     _on_remote_id=None,
+    _checkpoint=None,
 ) -> dict:
     """Upload and read back a credential; retrying reuses the same remote record.
 
     ``verified`` attests remote storage identity, route, and credential consistency.
     It does not attest real-account usability; deployment verification remains unverified.
     """
+    from .cpa_oauth import NativeOAuth, enabled, PROTOCOL
+    if enabled(target):
+        native = result.get("native_oauth", {})
+        if (result.get("credential_type") != "codex_oauth"
+            or result.get("identity", "").casefold() != account.get("username", "").casefold()
+            or not isinstance(native, dict) or native.get("protocol") != PROTOCOL):
+            raise IntegrationError("Native OAuth session result does not match this target.")
+        client = NativeOAuth(target, account, native.get("session_id"), remote_id=remote_id,
+                             transport=_transport, sleep=_sleep)
+        try:
+            return client.commit(_on_remote_id, _checkpoint)
+        except IntegrationError as exc:
+            exc.write_possible = exc.write_possible or client.write_possible or bool(result.get("_reconcile_only"))
+            raise
+        finally:
+            client.close()
+    if result.get("native_oauth"):
+        raise IntegrationError("Native OAuth sessions require the native target contract.")
     write_started = False
     historical_write_possible = (
         isinstance(result, dict) and result.get("_reconcile_only") is True
@@ -482,9 +501,15 @@ def sync_credential(
 
 def test_connection(target: dict, *, _transport=None, _sleep=time.sleep) -> dict:
     """Check management API access without authenticating a real user account."""
+    from .cpa_oauth import enabled, ROOT, PROTOCOL
     adapter = _Adapter(target, _transport, _sleep)
     try:
-        adapter.check()
+        if enabled(target):
+            data = adapter.data(adapter.request("GET", ROOT + "/capabilities"))
+            if data.get("protocol") != PROTOCOL or "codex" not in data.get("providers", []):
+                raise IntegrationError("Install the cpa-native-oauth-v1 native OAuth API.")
+        else:
+            adapter.check()
         return {"reachable": True, "verification": "unverified"}
     finally:
         adapter.close()

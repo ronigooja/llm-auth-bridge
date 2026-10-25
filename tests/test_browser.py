@@ -109,7 +109,7 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, mode):
         url = "https://chatgpt.com/auth/login"
 
         def goto(self, *a, **k):
-            pass
+            events.append("navigation")
 
         def wait_for_timeout(self, *a):
             pass
@@ -196,7 +196,10 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, mode):
     monkeypatch.setattr(module, "_get_session", lambda *a: result if resumed else None)
     moments = iter([0, 31, 31])
     monkeypatch.setattr(module.time, "monotonic", lambda: next(moments))
+    from app.browser_identity import generate_profile
+    profile = generate_profile(set())
     account = {
+        "_browser_profile": profile,
         "username": "synthetic@example.com",
         "password": "synthetic",
         "_maintenance": mode == "maintenance",
@@ -217,6 +220,10 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, mode):
     assert ("manual" in events) == (mode == "manual")
     assert events[-2:] == ["closed", "control_closed"]
     launch = next(e[1] for e in events if isinstance(e, tuple) and e[0] == "launch")
+    options = next(e[1] for e in events if isinstance(e, tuple) and e[0] == "context")
+    assert all(options[key] == value for key, value in profile["context"].items())
+    assert "identity_seed" not in options
+    assert events.index(next(e for e in events if isinstance(e, tuple) and e[0] == "context")) < events.index("navigation")
     assert "--no-proxy-server" in launch["args"]
     assert launch["chromium_sandbox"] is True
     assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in launch["args"]
@@ -236,3 +243,4 @@ def test_cancellation_is_not_converted_to_login_error():
         run_login(
             {"username": "synthetic@example.com"}, {"kind": "cliproxyapi"}, Control()
         )
+

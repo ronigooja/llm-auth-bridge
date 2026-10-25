@@ -129,6 +129,8 @@ class Queue:
                         "UPDATE tasks SET execution_id=NULL,lease_until=NULL,phase='sync_ready',message='Previous sync interrupted; reconciliation required',takeover_available=0 WHERE id=?",
                         (row["id"],),
                     )
+                elif row["state"] in ("running", "waiting_human") and conn.execute("SELECT 1 FROM native_sessions WHERE task_id=?", (row["id"],)).fetchone():
+                    conn.execute("UPDATE tasks SET state='queued',phase='native_recovery',message='Native OAuth interrupted; reconciliation queued',execution_id=NULL,lease_until=NULL,takeover_available=0,command_cipher=NULL WHERE id=?", (row["id"],))
                 elif row["state"] in ("running", "waiting_human"):
                     conn.execute(
                         "UPDATE tasks SET state='interrupted',phase='interrupted',message='Worker interrupted; start a new authorization',execution_id=NULL,lease_until=NULL,takeover_available=0,command_cipher=NULL WHERE id=?",
@@ -151,7 +153,7 @@ class Queue:
             ).fetchone()
             if not row:
                 row = conn.execute(
-                    "SELECT * FROM tasks WHERE state='queued' ORDER BY CASE kind WHEN 'login' THEN 0 ELSE 1 END,id LIMIT 1"
+                    "SELECT * FROM tasks WHERE state='queued' AND phase NOT IN ('native_recovery_failed','native_cancel_pending') ORDER BY CASE kind WHEN 'login' THEN 0 ELSE 1 END,id LIMIT 1"
                 ).fetchone()
             if not row:
                 return None
@@ -167,6 +169,10 @@ class Queue:
                 or a["version"] != row["account_version"]
                 or t["version"] != row["target_version"]
             ):
+                if conn.execute("SELECT 1 FROM native_sessions WHERE task_id=?", (row["id"],)).fetchone():
+                    conn.execute("UPDATE tasks SET state='queued',phase='native_recovery_failed',message='Configuration changed; native outcome still requires reconciliation' WHERE id=?", (row["id"],))
+                    event(conn, row["id"])
+                    return None
                 conn.execute(
                     "UPDATE tasks SET state='interrupted',phase='configuration_changed',message='Configuration changed; create a new task' WHERE id=?",
                     (row["id"],),
@@ -302,7 +308,9 @@ class Queue:
                     raise Conflict(
                         "synchronization has started; reconcile the remote outcome before discarding credentials"
                     )
-                if row["execution_id"]:
+                if conn.execute("SELECT 1 FROM native_sessions WHERE task_id=?", (task_id,)).fetchone() and not row["execution_id"]:
+                    conn.execute("UPDATE tasks SET state='queued',phase='native_recovery',cancel_requested=1,message='Native cancellation queued',takeover_available=0 WHERE id=?", (task_id,))
+                elif row["execution_id"]:
                     conn.execute(
                         "UPDATE tasks SET cancel_requested=1,message='Cancellation requested',takeover_available=0 WHERE id=?",
                         (task_id,),
@@ -343,6 +351,10 @@ class Queue:
                     (row["account_id"], row["target_id"]),
                 )
             elif action == "retry-sync":
+                if row["state"] == "queued" and row["phase"] in {"native_recovery_failed", "native_cancel_pending"}:
+                    conn.execute("UPDATE tasks SET phase='native_recovery',message='Native reconciliation queued' WHERE id=?", (task_id,))
+                    event(conn, task_id)
+                    return public_task(conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone())
                 if row["state"] != "sync_pending":
                     raise Conflict("no pending synchronization")
                 if row["phase"] == "sync_ready" or row["execution_id"]:
