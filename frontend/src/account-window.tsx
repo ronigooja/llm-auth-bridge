@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { api } from "./api";
 import { requestId } from "./id";
 
-type BrowserTask = { id: number; state: string; kind?: string; phase?: string; takeover_available?: boolean };
+type BrowserTask = { id: number; account_id?: number; depends_on_task_id?: number | null; state: string; kind?: string; phase?: string; takeover_available?: boolean };
 const active = new Set(["queued", "running", "waiting_human"]);
 export function accountViewerUrl(id: number, interactive: boolean) {
   return `/novnc/vnc.html?autoconnect=true&resize=scale&view_only=${!interactive}&shared=true&path=api/v1/tasks/${id}/${interactive ? "takeover" : "monitor"}`;
@@ -18,6 +18,7 @@ export function useAccountWindow(enabled: boolean) {
   const busyRef = useRef(false);
   const opening = useRef(false);
   const saving = useRef<number | null>(null);
+  const followed = useRef(new Set<number>());
   const [closing, setClosing] = useState(false);
   const account = useRef<number | null>(null);
   const [host, setHost] = useState<HTMLElement | null>(null);
@@ -57,8 +58,13 @@ export function useAccountWindow(enabled: boolean) {
   async function open(accountId: number) {
     if (popup.current && !popup.current.closed) {
       popup.current.focus();
-      if (account.current !== accountId) setError("另一个账号窗口已打开，请先保存或隐藏该窗口，再打开此账号。");
-      return;
+      if (account.current !== accountId) {
+        setError("另一个账号窗口已打开，请先保存或隐藏该窗口，再打开此账号。");
+        return;
+      }
+      if (!current.current || active.has(current.current.state)) return;
+      // An explicit click can rebind an ended viewer to current account work,
+      // or create an idle browser if the account has no active task.
     }
     if (opening.current) return;
     const previous = current.current;
@@ -70,7 +76,7 @@ export function useAccountWindow(enabled: boolean) {
     }
     const width = Math.max(1, Math.min(1600, window.screen.availWidth || window.innerWidth));
     const height = Math.max(1, Math.min(1000, window.screen.availHeight || window.innerHeight));
-    const target = window.open("about:blank", "_blank", `popup=yes,width=${width},height=${height},resizable=yes,scrollbars=yes`);
+    const target = popup.current && !popup.current.closed ? popup.current : window.open("about:blank", "_blank", `popup=yes,width=${width},height=${height},resizable=yes,scrollbars=yes`);
     if (!target) { setError("账号窗口被浏览器拦截，请允许弹窗后再次点击“账号窗口”。"); return; }
     target.opener = null;
     target.document.title = "账号窗口";
@@ -132,7 +138,25 @@ export function useAccountWindow(enabled: boolean) {
     const timer = window.setInterval(async () => {
       if (popup.current?.closed) hide();
       const t = current.current;
-      if (polling || !t || !active.has(t.state)) return;
+      if (polling || !t) return;
+      if (t.state === "succeeded" && !idle(t) && !hidden.current && !followed.current.has(t.id)) {
+        polling = true;
+        try {
+          const result = await api<{ tasks: BrowserTask[] }>("/tasks");
+          if (!disposed && current.current?.id === t.id) {
+            const child = result.tasks.find((item) => item.depends_on_task_id === t.id && item.account_id === account.current && active.has(item.state));
+            followed.current.add(t.id);
+            if (child) {
+              setInteractive(false);
+              setTakeoverRequested(false);
+              update(child);
+            }
+          }
+        } catch (e) { if (!disposed) setError(e instanceof Error ? e.message : "无法读取后续任务"); }
+        finally { polling = false; }
+        return;
+      }
+      if (!active.has(t.state)) return;
       if (hidden.current && idle(t) && t.state === "waiting_human" && saving.current !== t.id) { void finish(); return; }
       polling = true;
       try {

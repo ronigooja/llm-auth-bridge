@@ -117,6 +117,47 @@ describe("unified account window", () => {
     expect(window.open).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("alert")).toBeNull();
   });
+  it("follows dependent Codex work and explicitly rebinds an ended popup without creating extra windows", async () => {
+    vi.useFakeTimers();
+    const target = popup();
+    const voice = { id: 7, account_id: 1, state: "running", takeover_available: true };
+    const codex = { id: 8, account_id: 1, depends_on_task_id: 7, state: "queued", takeover_available: true };
+    const calls: string[] = [];
+    let opened = false;
+    vi.stubGlobal("fetch", vi.fn((input) => {
+      const path = String(input); calls.push(path);
+      if (path.endsWith("/browser")) {
+        if (opened) return json({ task: { id: 9, account_id: 1, kind: "browser_window", state: "waiting_human", takeover_available: true } });
+        opened = true; return json({ task: voice });
+      }
+      if (path.endsWith("/takeover")) return json({});
+      if (path === "/api/v1/tasks") return json({ tasks: [
+        { ...codex, id: 90, account_id: 2 }, codex,
+      ] });
+      return json(path.endsWith("/7") ? voice : codex);
+    }));
+    render(<Harness />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "账号窗口" })); });
+    await act(async () => { fireEvent.click(within(target.document.body).getByRole("button", { name: "接管" })); });
+    voice.state = "waiting_human";
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(target.document.querySelector("iframe")?.src).toContain("tasks/7/takeover");
+    voice.state = "succeeded";
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(target.document.querySelector("iframe")).toBeNull();
+    codex.state = "waiting_human";
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(target.document.querySelector("iframe")?.src).toContain("tasks/8/monitor");
+    expect(calls.filter((path) => path.endsWith("/browser"))).toHaveLength(1);
+    expect(window.open).toHaveBeenCalledOnce();
+    codex.state = "succeeded";
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(calls.filter((path) => path.endsWith("/browser"))).toHaveLength(1);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "账号窗口" })); });
+    expect(calls.filter((path) => path.endsWith("/browser"))).toHaveLength(2);
+    expect(window.open).toHaveBeenCalledOnce();
+    expect(target.document.querySelector("iframe")?.src).toContain("tasks/9/takeover");
+  });
   it("does not queue an idle task if popups are blocked", async () => {
     vi.spyOn(window, "open").mockReturnValue(null);
     vi.stubGlobal("fetch", vi.fn());
@@ -143,11 +184,48 @@ it("requires an explicit bound target choice when a kind has multiple targets", 
     return json({ tasks: [] });
   }));
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "开始登录" }));
+  fireEvent.click(await screen.findByRole("button", { name: "登录 Codex" }));
   const dialog = within(screen.getByRole("dialog"));
   expect(dialog.getByLabelText("第一步：ChatGPT Web Voice")).toHaveProperty("value", "0");
   expect(dialog.getByLabelText("第二步：CLIProxyAPI")).toHaveProperty("value", "3");
-  expect(dialog.getByRole("button", { name: "开始登录" })).toHaveProperty("disabled", true);
+  expect(dialog.getByRole("button", { name: "登录 Codex" })).toHaveProperty("disabled", true);
   expect(dialog.queryByRole("option", { name: "Unbound voice" })).toBeNull();
   expect(calls.some((call) => call.init?.method === "POST")).toBe(false);
+});
+
+
+it.each(["ChatGPT", "Codex"])("validates 登录 %s with only a bound Voice target", async (mode) => {
+  window.history.replaceState(null, "", "/#accounts");
+  vi.stubGlobal("EventSource", class { addEventListener() {} close() {} });
+  const calls: { path: string; init?: RequestInit }[] = [];
+  const task = { id: 7, account_id: 1, state: "running", target_id: 1 };
+  vi.stubGlobal("fetch", vi.fn((input, init) => {
+    const path = String(input); calls.push({ path, init });
+    if (path.endsWith("/auth/session")) return json({ csrf_token: "synthetic" });
+    if (path.endsWith("/accounts")) return json({ accounts: [{ id: 1, username: "synthetic@example.test", route_type: "direct", status: "new", target_ids: [1] }] });
+    if (path.endsWith("/targets")) return json({ targets: [{ id: 1, name: "Voice", kind: "chatgpt-web-voice" }] });
+    if (path.endsWith("/history")) return json({ events: [] });
+    if (path.endsWith("/tasks") || path.endsWith("/login-flow")) return json({ tasks: [task] });
+    return json(task);
+  }));
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: `登录 ${mode}` }));
+  const dialog = within(screen.getByRole("dialog"));
+  expect(dialog.getByLabelText("第一步：ChatGPT Web Voice")).toHaveProperty("value", "1");
+  const submit = dialog.getByRole("button", { name: `登录 ${mode}` });
+  if (mode === "ChatGPT") {
+    expect(dialog.queryByLabelText("第二步：CLIProxyAPI")).toBeNull();
+    expect(submit).toHaveProperty("disabled", false);
+    fireEvent.click(submit);
+    await waitFor(() => expect(calls.some((call) => call.path.endsWith("/login-flow"))).toBe(true));
+    const call = calls.find((item) => item.path.endsWith("/login-flow"))!;
+    const body = JSON.parse(String(call.init?.body));
+    expect(body).toMatchObject({ voice_target_id: 1, idempotency_key: expect.any(String) });
+    expect(body).not.toHaveProperty("cli_target_id");
+  } else {
+    expect(dialog.getByText(/检查 ChatGPT 会话/)).toBeTruthy();
+    expect(dialog.getByText(/请先在“编辑与绑定”中绑定 CLIProxyAPI/)).toBeTruthy();
+    expect(submit).toHaveProperty("disabled", true);
+    expect(calls.some((call) => call.init?.method === "POST")).toBe(false);
+  }
 });

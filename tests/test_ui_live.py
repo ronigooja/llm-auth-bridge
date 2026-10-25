@@ -118,11 +118,11 @@ def test_built_ui_completes_import_login_human_code_and_sync(settings):
         page.get_by_label("Synthetic CPA", exact=True).check()
         page.get_by_label("Synthetic Voice", exact=True).check()
         page.get_by_role("button", name="保存账号").click()
-        page.get_by_role("button", name="开始登录", exact=True).click()
+        page.get_by_role("button", name="登录 Codex", exact=True).click()
         expect(page.get_by_label("第一步：ChatGPT Web Voice")).to_have_value("2")
         expect(page.get_by_label("第二步：CLIProxyAPI")).to_have_value("1")
         page.get_by_role("dialog").get_by_role(
-            "button", name="开始登录", exact=True
+            "button", name="登录 Codex", exact=True
         ).click()
         expect(page.get_by_role("heading", name="任务 #1")).to_be_visible()
         thread = threading.Thread(target=worker.run, daemon=True)
