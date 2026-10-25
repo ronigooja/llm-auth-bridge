@@ -1,0 +1,62 @@
+name: Upstream late interrupt diagnostics
+on:
+  push:
+    branches: ["validation/upstream-late-interrupt"]
+permissions:
+  contents: read
+concurrency:
+  group: upstream-late-interrupt-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  repeat:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        source: [baseline, patched]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch exact source inputs
+        env:
+          SOURCE_MODE: ${{ matrix.source }}
+        run: |
+          set -euxo pipefail
+          mkdir -p validation-logs
+          exec > >(tee validation-logs/source.log) 2>&1
+          trap 'printf "%s\n" "$?" > validation-logs/source.exit' EXIT
+          git rev-parse HEAD > validation-logs/source-revision.txt
+          git status --porcelain=v1 -- . ':!validation-logs' > validation-logs/uncommitted-inputs.txt
+          printf 'run=%s\njob=%s\nmode=%s\nos=%s\narch=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$GITHUB_JOB" "$SOURCE_MODE" "$RUNNER_OS" "$RUNNER_ARCH" > validation-logs/environment.txt
+          revision=$(cat deploy/cpa/UPSTREAM_REVISION)
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          git init /tmp/cpa-source
+          git -C /tmp/cpa-source remote add origin https://github.com/router-for-me/CLIProxyAPI.git
+          git -C /tmp/cpa-source fetch --depth=1 origin "$revision"
+          git -C /tmp/cpa-source checkout --detach FETCH_HEAD
+          git -C /tmp/cpa-source rev-parse HEAD > validation-logs/upstream-revision.txt
+          if [[ "$SOURCE_MODE" == patched ]]; then
+            (cd deploy/cpa && sha256sum -c upstream.patch.sha256)
+            sha256sum deploy/cpa/upstream.patch > validation-logs/upstream-patch.sha256
+            git -C /tmp/cpa-source apply --check "$GITHUB_WORKSPACE/deploy/cpa/upstream.patch"
+            git -C /tmp/cpa-source apply "$GITHUB_WORKSPACE/deploy/cpa/upstream.patch"
+          fi
+          git -C /tmp/cpa-source status --porcelain=v1 > validation-logs/upstream-input-changes.txt
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: /tmp/cpa-source/go.mod
+          cache-dependency-path: /tmp/cpa-source/go.sum
+      - name: Repeat unchanged upstream test twenty times
+        working-directory: /tmp/cpa-source
+        run: |
+          set -euxo pipefail
+          exec > >(tee "$GITHUB_WORKSPACE/validation-logs/go.log") 2>&1
+          trap 'printf "%s\n" "$?" > "$GITHUB_WORKSPACE/validation-logs/go.exit"' EXIT
+          go version
+          go test -count=20 -run '^TestResponsesLateInterruptDoesNotPoisonNextCreate$' ./sdk/api/handlers/openai
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cpa-interrupt-${{ matrix.source }}-${{ github.sha }}
+          path: validation-logs/
+          retention-days: 7
