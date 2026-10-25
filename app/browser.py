@@ -2,7 +2,8 @@
 
 Provider markup and downstream credentials remain unverified until serial real
 account acceptance. Unknown pages pause the same browser for human takeover.
-No traces, HAR, videos, screenshots, or browser state files are created.
+No traces, HAR, videos, or screenshots are created. Temporary native device
+files are archived through the encrypted worker control after Chromium closes.
 """
 
 import base64
@@ -15,7 +16,9 @@ import secrets
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
+from .browser_device import device_directory
 from .routing import account_route
+from .route_timezone import resolve_timezone
 from .totp import generate_code, seconds_remaining
 
 AUTH_ORIGIN = "https://auth.openai.com"
@@ -291,9 +294,63 @@ def _submit(page):
     button.click(timeout=10000)
 
 
+def _restore_legacy_state(context, state):
+    """Migrate a bounded cookie/localStorage export into a new native device.
+
+    The init script is inert outside the exact saved origin and fills missing
+    keys only. It is installed only for the first run without a device archive.
+    IndexedDB remains owned by native persistence, not this legacy migration.
+    """
+    try:
+        if not isinstance(state, dict) or set(state) - {"cookies", "origins"}:
+            raise ValueError
+        if len(json.dumps(state).encode()) > 2 * 1024 * 1024:
+            raise ValueError
+        cookies, origins = state.get("cookies", []), state.get("origins", [])
+        if not isinstance(cookies, list) or len(cookies) > 1000:
+            raise ValueError
+        if not isinstance(origins, list) or len(origins) > 100:
+            raise ValueError
+        for cookie in cookies:
+            if not isinstance(cookie, dict) or not all(
+                isinstance(cookie.get(key), str) for key in ("name", "value", "domain", "path")
+            ):
+                raise ValueError
+        entries = {}
+        for item in origins:
+            if not isinstance(item, dict) or not isinstance(item.get("origin"), str):
+                raise ValueError
+            origin = item["origin"]
+            parsed = urlsplit(origin)
+            if (parsed.scheme not in {"https", "http"} or not parsed.hostname
+                    or parsed.username or parsed.password or parsed.query or parsed.fragment
+                    or parsed.path or origin != f"{parsed.scheme}://{parsed.netloc}"):
+                raise ValueError
+            values = item.get("localStorage", [])
+            if not isinstance(values, list) or len(values) > 1000 or origin in entries:
+                raise ValueError
+            entries[origin] = []
+            for value in values:
+                if (not isinstance(value, dict) or set(value) != {"name", "value"}
+                        or not all(isinstance(value[k], str) for k in ("name", "value"))):
+                    raise ValueError
+                entries[origin].append([value["name"], value["value"]])
+    except (ValueError, TypeError, OverflowError, RecursionError):
+        raise BrowserError("Saved browser session is invalid") from None
+    if cookies:
+        context.add_cookies(cookies)
+    if entries:
+        context.add_init_script(
+            "(() => { const entries = " + json.dumps(entries, ensure_ascii=True)
+            + "; if (!Object.prototype.hasOwnProperty.call(entries, location.origin)) return;"
+            " for (const [name, value] of entries[location.origin]) {"
+            " if (localStorage.getItem(name) === null) localStorage.setItem(name, value); } })();"
+        )
+
+
 def _save(context, control):
     control.checkpoint()
-    control.save_state(context.storage_state())
+    control.save_state(context.storage_state(indexed_db=True))
 
 
 def _human(control, reason: str, phase: str = "waiting_human") -> str | None:
@@ -350,7 +407,7 @@ def _run_login(
 ) -> dict:
     """Run one login while the worker holds its global browser lock.
 
-    All provider data is kept in memory. The worker encrypts save_state/result.
+    The worker encrypts device archives, save_state, and results.
     Cancellation and takeover are checked between each bounded browser action.
     """
     from playwright.sync_api import sync_playwright
@@ -364,10 +421,18 @@ def _run_login(
         raise ReauthenticationRequired()
     control.checkpoint()
     with account_route(account) as route:
-        with sync_playwright() as playwright:
-            browser = None
+        if account.get("route_type") == "proxy":
+            control.phase("route_timezone", "Resolving account route timezone")
+            zone = resolve_timezone(route.session)
+            control.update_timezone(zone)
+            account["_browser_profile"]["context"]["timezone_id"] = zone
+        # Snapshot only after context.close(), including exception paths.
+        with device_directory(account, control) as device, sync_playwright() as playwright:
+            context = None
             try:
-                browser = playwright.chromium.launch(
+                from .browser_identity import context_options
+                context = playwright.chromium.launch_persistent_context(
+                    user_data_dir=str(device.path),
                     headless=False,
                     chromium_sandbox=True,
                     proxy=route.playwright_proxy,
@@ -378,14 +443,12 @@ def _run_login(
                         if route.playwright_proxy is None
                         else ["--proxy-bypass-list=<-loopback>"]
                     ),
-                )
-                from .browser_identity import context_options
-                context = browser.new_context(
                     **context_options(account["_browser_profile"]),
-                    storage_state=saved_state,
                     accept_downloads=False,
                     service_workers="block",
                 )
+                if not device.restored and saved_state is not None:
+                    _restore_legacy_state(context, saved_state)
                 context.set_default_timeout(10000)
                 page = context.new_page()
                 if hasattr(control, "browser_ready"):
@@ -597,9 +660,9 @@ def _run_login(
                     "Browser authentication failed; review the account and route"
                 ) from None
             finally:
-                if browser is not None:
+                if context is not None:
                     try:
-                        browser.close()
+                        context.close()
                     except PlaywrightError:
                         pass
                 if hasattr(control, "browser_closed"):

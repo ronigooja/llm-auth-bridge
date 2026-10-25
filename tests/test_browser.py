@@ -97,7 +97,9 @@ def test_browser_session_identity_and_expiry():
 
 
 @pytest.mark.parametrize("mode", ["manual", "maintenance", "cancel"])
-def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, mode):
+@pytest.mark.parametrize("route_type", ["direct", "proxy"])
+@pytest.mark.parametrize("restored", [False, True])
+def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, mode, route_type, restored):
     from contextlib import contextmanager
     from types import SimpleNamespace
     import app.browser as module
@@ -126,25 +128,27 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, mode):
         def set_default_timeout(self, *a):
             pass
 
-        def storage_state(self):
+        def storage_state(self, *, indexed_db):
+            assert indexed_db is True
             return {"cookies": [], "origins": []}
-
-    context = Context()
-
-    class Browser:
-        def new_context(self, **kwargs):
-            events.append(("context", kwargs))
-            return context
 
         def close(self):
             events.append("closed")
 
-    browser = Browser()
+    context = Context()
 
     class Chromium:
-        def launch(self, **kwargs):
+        def launch_persistent_context(self, **kwargs):
             events.append(("launch", kwargs))
-            return browser
+            return context
+
+    @contextmanager
+    def fake_device(account, control):
+        from pathlib import Path
+        try:
+            yield SimpleNamespace(path=Path("/synthetic-device"), restored=restored)
+        finally:
+            events.append("device_snapshot")
 
     @contextmanager
     def fake_playwright():
@@ -152,7 +156,7 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, mode):
 
     @contextmanager
     def fake_route(account):
-        yield SimpleNamespace(playwright_proxy=None, session=None)
+        yield SimpleNamespace(playwright_proxy=None if route_type == "direct" else {"server": "http://127.0.0.1:1234"}, session="synthetic-route-session")
 
     result = {
         "credential_type": "chatgpt_web",
@@ -175,6 +179,9 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, mode):
         def phase(self, *args):
             pass
 
+        def update_timezone(self, value):
+            events.append(("timezone", value))
+
         def save_state(self, state):
             events.append(("saved", state))
 
@@ -192,6 +199,16 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, mode):
 
     monkeypatch.setattr(playwright.sync_api, "sync_playwright", fake_playwright)
     monkeypatch.setattr(module, "account_route", fake_route)
+    monkeypatch.setattr(module, "device_directory", fake_device)
+    def timezone(session):
+        assert route_type == "proxy", "Direct routing must retain stored timezone"
+        assert session == "synthetic-route-session"
+        events.append("timezone_lookup")
+        return "Europe/Paris"
+
+    monkeypatch.setattr(module, "resolve_timezone", timezone)
+    migrations = []
+    monkeypatch.setattr(module, "_restore_legacy_state", lambda context, state: migrations.append(state))
     monkeypatch.setattr(module, "detect_state", lambda p: "unknown")
     monkeypatch.setattr(module, "_get_session", lambda *a: result if resumed else None)
     moments = iter([0, 31, 31])
@@ -200,31 +217,41 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, mode):
     profile = generate_profile(set())
     account = {
         "_browser_profile": profile,
+        "route_type": route_type,
         "username": "synthetic@example.com",
         "password": "synthetic",
         "_maintenance": mode == "maintenance",
     }
     if mode == "maintenance":
         with pytest.raises(module.ReauthenticationRequired, match="^reauth_required$"):
-            module.run_login(account, {"kind": "chatgpt-web-voice"}, Control())
+            module.run_login(account, {"kind": "chatgpt-web-voice"}, Control(), {"cookies": [], "origins": []})
     elif mode == "cancel":
         with pytest.raises(Cancelled):
-            module.run_login(account, {"kind": "chatgpt-web-voice"}, Control())
+            module.run_login(account, {"kind": "chatgpt-web-voice"}, Control(), {"cookies": [], "origins": []})
     else:
         assert (
-            module.run_login(account, {"kind": "chatgpt-web-voice"}, Control())
+            module.run_login(account, {"kind": "chatgpt-web-voice"}, Control(), {"cookies": [], "origins": []})
             == result
         )
     assert sum(isinstance(e, tuple) and e[0] == "launch" for e in events) == 1
-    assert sum(isinstance(e, tuple) and e[0] == "context" for e in events) == 1
     assert ("manual" in events) == (mode == "manual")
-    assert events[-2:] == ["closed", "control_closed"]
+    assert events[-3:] == ["closed", "control_closed", "device_snapshot"]
     launch = next(e[1] for e in events if isinstance(e, tuple) and e[0] == "launch")
-    options = next(e[1] for e in events if isinstance(e, tuple) and e[0] == "context")
+    options = launch
+    assert launch["user_data_dir"] == "/synthetic-device"
+    assert "storage_state" not in launch
     assert all(options[key] == value for key, value in profile["context"].items())
     assert "identity_seed" not in options
-    assert events.index(next(e for e in events if isinstance(e, tuple) and e[0] == "context")) < events.index("navigation")
-    assert "--no-proxy-server" in launch["args"]
+    assert events.index(next(e for e in events if isinstance(e, tuple) and e[0] == "launch")) < events.index("navigation")
+    assert migrations == ([] if restored else [{"cookies": [], "origins": []}])
+    assert ("--no-proxy-server" in launch["args"]) == (route_type == "direct")
+    if route_type == "proxy":
+        assert events.index("timezone_lookup") < events.index("navigation")
+        assert ("timezone", "Europe/Paris") in events
+        assert options["timezone_id"] == "Europe/Paris"
+    else:
+        assert "timezone_lookup" not in events
+        assert options["timezone_id"] == "UTC"
     assert launch["chromium_sandbox"] is True
     assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in launch["args"]
 
@@ -243,3 +270,21 @@ def test_cancellation_is_not_converted_to_login_error():
         run_login(
             {"username": "synthetic@example.com"}, {"kind": "cliproxyapi"}, Control()
         )
+
+
+@pytest.mark.parametrize("state", [
+    [], {"cookies": "invalid"}, {"cookies": [{}]},
+    {"origins": [{"origin": "https://example.test/path", "localStorage": []}]},
+    {"origins": [{"origin": "https://user@example.test", "localStorage": []}]},
+    {"origins": [{"origin": "https://example.test", "localStorage": [{"name": "x", "value": 1}]}]},
+    {"origins": [{"origin": "https://example.test", "localStorage": []}] * 101},
+])
+def test_legacy_state_rejects_invalid_shape_before_browser_mutation(state):
+    from types import SimpleNamespace
+    from app.browser import _restore_legacy_state
+    context = SimpleNamespace(
+        add_cookies=lambda value: pytest.fail("invalid state mutated cookies"),
+        add_init_script=lambda value: pytest.fail("invalid state installed script"),
+    )
+    with pytest.raises(BrowserError, match="^Saved browser session is invalid$"):
+        _restore_legacy_state(context, state)

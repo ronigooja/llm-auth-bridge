@@ -312,7 +312,10 @@ def test_native_browser_uses_saved_account_context_and_fences_callback(monkeypat
         def route(self, pattern, handler): self.handler = handler
         def set_default_timeout(self, value): pass
         def new_page(self): return Page(self)
-        def storage_state(self): return saved
+        def storage_state(self, *, indexed_db):
+            assert indexed_db is True
+            return saved
+        def close(self): events.append("browser_closed")
 
     context = Context()
 
@@ -325,14 +328,14 @@ def test_native_browser_uses_saved_account_context_and_fences_callback(monkeypat
             request_route = SimpleNamespace(request=SimpleNamespace(url=callback), fulfill=lambda **kw: None)
             self.context.handler(request_route)
 
-    class Browser:
-        def new_context(self, **kwargs):
-            assert kwargs["storage_state"] is saved
+    class Chromium:
+        def launch_persistent_context(self, **kwargs):
+            assert "storage_state" not in kwargs
+            assert kwargs["user_data_dir"] == "/synthetic-device"
             assert all(kwargs[k] == v for k, v in profile["context"].items())
             assert "identity_seed" not in kwargs
             events.append("context")
             return context
-        def close(self): events.append("browser_closed")
 
     class Native:
         def __init__(self, *a, **kw): pass
@@ -355,12 +358,21 @@ def test_native_browser_uses_saved_account_context_and_fences_callback(monkeypat
 
     @contextmanager
     def fake_playwright():
-        yield SimpleNamespace(chromium=SimpleNamespace(launch=lambda **kw: Browser()))
+        yield SimpleNamespace(chromium=Chromium())
 
     @contextmanager
     def fake_route(account):
         yield SimpleNamespace(playwright_proxy=None, session=None)
 
+    @contextmanager
+    def fake_device(account, control):
+        from pathlib import Path
+        try:
+            yield SimpleNamespace(path=Path("/synthetic-device"), restored=True)
+        finally:
+            assert events[-1] == "browser_closed"
+
+    monkeypatch.setattr(browser_module, "device_directory", fake_device)
     monkeypatch.setattr(native_module, "NativeOAuth", Native)
     monkeypatch.setattr(playwright.sync_api, "sync_playwright", fake_playwright)
     monkeypatch.setattr(browser_module, "account_route", fake_route)
