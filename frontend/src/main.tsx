@@ -11,7 +11,7 @@ import { api, setCsrf, ApiError } from "./api";
 import "./style.css";
 import { parseProxyUrl } from "./proxy";
 import { requestId } from "./id";
-import { TakeoverPanel, useTakeoverWindow } from "./takeover";
+import { useAccountWindow } from "./account-window";
 
 type Account = {
   id: number;
@@ -34,7 +34,9 @@ type Task = {
   id: number;
   account_id: number;
   account_username?: string;
-  target_id: number;
+  target_id: number | null;
+  kind?: string;
+  depends_on_task_id?: number | null;
   state: string;
   phase?: string;
   message?: string;
@@ -74,6 +76,8 @@ const labels: Record<string, string> = {
   verification_code_required: "等待验证码",
   password_required: "需要检查密码页面",
   browser: "浏览器已就绪",
+  browser_window: "账号窗口已就绪",
+  waiting_dependency: "等待前序任务同步",
   login: "正在打开登录页面",
   username: "正在提交账号",
   password: "正在提交密码",
@@ -254,6 +258,7 @@ export function App() {
   const [session, setSession] = useState<"loading" | "yes" | "no" | "error">(
     "loading",
   );
+  const accountWindow = useAccountWindow(session === "yes");
   const [sessionError, setSessionError] = useState("");
   const [page, setPage] = useState<Page>(() => restoredNavigation().page);
   const [accounts, setAccounts] = useState<Account[] | null>(null);
@@ -477,6 +482,7 @@ export function App() {
                         >
                           开始登录
                         </button>
+                        <button onClick={() => void accountWindow.open(a.id)}>账号窗口</button>
                         <button
                           onClick={() =>
                             setModal(
@@ -638,6 +644,7 @@ export function App() {
               <TaskDetail
                 key={selectedTask}
                 id={selectedTask}
+                openAccountWindow={(accountId) => void accountWindow.open(accountId)}
                 updated={() => void refresh()}
               />
             ) : (
@@ -648,6 +655,7 @@ export function App() {
         {page === "settings" && <Settings />}
       </main>
       {modal}
+      {accountWindow.panel}
     </div>
   );
 }
@@ -672,7 +680,7 @@ function AccountForm({
   const [server, setServer] = useState("");
   const [ids, setIds] = useState<number[]>(
     unconfigured && !account?.target_ids.length
-      ? targets.filter((t) => t.kind === "cliproxyapi").map((t) => t.id)
+      ? targets.filter((t) => ["cliproxyapi", "chatgpt-web-voice"].includes(t.kind)).map((t) => t.id)
       : account?.target_ids || [],
   );
   const [clearTotp, setClearTotp] = useState(false);
@@ -1100,60 +1108,49 @@ function StartTask({
   close: () => void;
   started: (id: number) => Promise<void>;
 }) {
-  const available = targets.filter((t) => account.target_ids.includes(t.id));
-  const [targetId, setTargetId] = useState(available[0]?.id || 0);
+  const bound = targets.filter((t) => account.target_ids.includes(t.id));
+  const voice = bound.filter((t) => t.kind === "chatgpt-web-voice");
+  const cli = bound.filter((t) => t.kind === "cliproxyapi");
+  const [voiceId, setVoiceId] = useState(voice.length === 1 ? voice[0].id : 0);
+  const [cliId, setCliId] = useState(cli.length === 1 ? cli[0].id : 0);
   const [key] = useState(requestId);
   const m = useMutation();
   return (
     <Modal title="开始登录" close={close}>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          void m.run(async () => {
-            const task = await api<Task & { task?: Task }>(
-              `/accounts/${account.id}/tasks`,
-              "POST",
-              { target_id: targetId, idempotency_key: key },
-            );
-            await started(task.task?.id || task.id);
+      <form onSubmit={(e) => {
+        e.preventDefault();
+        if (!voiceId || !cliId) return;
+        void m.run(async () => {
+          const result = await api<{ tasks: Task[] }>(`/accounts/${account.id}/login-flow`, "POST", {
+            voice_target_id: voiceId, cli_target_id: cliId, idempotency_key: key,
           });
-        }}
-      >
+          await started(result.tasks[0].id);
+        });
+      }}>
         <p>{account.username}</p>
-        <Field title="同步目标">
-          <select
-            required
-            value={targetId}
-            onChange={(e) => setTargetId(Number(e.target.value))}
-          >
-            <option value="0" disabled>
-              请选择目标
-            </option>
-            {available.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-        {!available.length && (
-          <p className="muted">请先在账号编辑中绑定目标。</p>
-        )}
-        {account.route_type === "unset" && (
-          <p className="error">请先设置账号网络路由。</p>
-        )}
+        <p>固定顺序：先登录并同步 ChatGPT Web Voice，成功后再登录 CLIProxyAPI。</p>
+        {([
+          { title: "第一步：ChatGPT Web Voice", options: voice, value: voiceId, select: setVoiceId },
+          { title: "第二步：CLIProxyAPI", options: cli, value: cliId, select: setCliId },
+        ]).map(({ title, options, value, select }) => (
+          <Field key={title} title={title}>
+            <select required value={value} onChange={(e) => select(Number(e.target.value))}>
+              <option value="0" disabled>请选择已绑定目标</option>
+              {options.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            {!options.length && <small>请先在“编辑与绑定”中绑定 {title.split("：")[1]} 目标。</small>}
+          </Field>
+        ))}
+        {account.route_type === "unset" && <p className="error">请先设置账号网络路由。</p>}
         <ErrorBox error={m.error} />
-        <button
-          className="primary"
-          disabled={m.busy || !targetId || account.route_type === "unset"}
-        >
+        <button className="primary" disabled={m.busy || !voiceId || !cliId || account.route_type === "unset"}>
           {m.busy ? "提交中…" : "开始登录"}
         </button>
       </form>
     </Modal>
   );
 }
-function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
+function TaskDetail({ id, updated, openAccountWindow }: { id: number; updated: () => void; openAccountWindow: (accountId: number) => void }) {
   const [task, setTask] = useState<Task | null>(null);
   const [error, setError] = useState("");
   const [streamError, setStreamError] = useState("");
@@ -1162,11 +1159,6 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [code, setCode] = useState("");
   const [submission, setSubmission] = useState(requestId);
-  const takeoverReady = task?.state === "waiting_human" && !!task.takeover_available;
-  const takeover = useTakeoverWindow(
-    takeoverReady,
-    !!task && terminalStates.has(task.state),
-  );
   const m = useMutation();
   async function load() {
     try {
@@ -1267,30 +1259,13 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
     return () => events.close();
   }, [id]);
   async function action(name: string, body?: unknown) {
-    if (name === "takeover") takeover.open();
     await m.run(async () => {
       try {
-        const result = await api<Record<string, unknown>>(
+        await api<Record<string, unknown>>(
           `/tasks/${id}/${name}`,
           "POST",
           body,
         );
-        if (name === "takeover") {
-          const url = result.url || result.takeover_url;
-          if (typeof url === "string") {
-            const parsed = new URL(url, window.location.origin);
-            if (
-              parsed.origin !== window.location.origin ||
-              parsed.username ||
-              parsed.password
-            )
-              throw new Error("接管地址必须与当前站点同源");
-            takeover.setUrl(parsed.href);
-          } else
-            takeover.setUrl(
-              `/novnc/vnc.html?autoconnect=true&resize=scale&path=api/v1/tasks/${id}/takeover`,
-            );
-        }
         if (name === "code") {
           setCode("");
           setSubmission(requestId());
@@ -1298,7 +1273,6 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
         await load();
         updated();
       } catch (error) {
-        if (name === "takeover") takeover.close();
         throw error;
       }
     });
@@ -1326,7 +1300,7 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
               {task.phase === "password_required" && (
                 <p className="muted">密码页面仍未通过。请接管浏览器检查密码或页面提示，完成后点击“继续任务”。</p>
               )}
-              {!["email_code_required", "authenticator_code_required", "verification_code_required", "password_required"].includes(task.phase || "") && (
+              {!["email_code_required", "authenticator_code_required", "verification_code_required", "password_required", "browser_window"].includes(task.phase || "") && (
                 <p className="muted">请接管浏览器检查当前步骤，再点击“继续任务”重新识别页面；识别到验证码页面后会显示验证码输入框。</p>
               )}
               {task.phase === "verification_code_required" && (
@@ -1355,28 +1329,16 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
               )}
               <div className="actions">
                 <button
-                  disabled={m.busy || !task.takeover_available}
-                  onClick={() => void action("takeover")}
-                >
-                  接管浏览器
-                </button>
-                <button
                   disabled={m.busy}
                   onClick={() => void action("continue")}
                 >
-                  继续任务
+                  {task.phase === "browser_window" ? "保存账号窗口" : "继续任务"}
                 </button>
               </div>
             </>
           )}
-          {task.state === "running" && task.takeover_available && (
-            <button
-              disabled={m.busy}
-              onClick={() => void action("takeover")}
-            >
-              接管浏览器
-            </button>
-          )}
+          <button onClick={() => openAccountWindow(task.account_id)}>账号窗口</button>
+          {task.depends_on_task_id && <p className="muted">等待前序任务 #{task.depends_on_task_id} 成功同步后执行。</p>}
           {(task.state === "sync_pending" || (task.state === "queued" && ["native_recovery_failed", "native_cancel_pending"].includes(task.phase || ""))) && (
             <button
               className="primary"
@@ -1418,9 +1380,6 @@ function TaskDetail({ id, updated }: { id: number; updated: () => void }) {
             >
               取消任务
             </button>
-          )}
-          {takeover.url && (
-            <TakeoverPanel viewer={takeover} ready={takeoverReady} />
           )}
           <ErrorBox error={m.error} />
           <section className="event-history" aria-label="执行记录">
