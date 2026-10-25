@@ -59,7 +59,7 @@ jobs:
       - if: ${{ !cancelled() && steps.frontend_deps.outcome == 'success' }}
         run: npm run build
         working-directory: frontend
-      - name: Full pytest suite including headed browser acceptance
+      - name: Codex continuation preflight
         if: ${{ !cancelled() && steps.frontend_deps.outcome == 'success' }}
         env:
           BRIDGE_TEST_GOST: /tmp/gost
@@ -72,11 +72,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb xauth novnc x11vnc websockify
           set +e
-          timeout 180 uv run pytest -v -ra tests/test_browser_live.py -k codex_existing --junitxml=check-logs/codex.xml 2>&1 | tee check-logs/codex.log
+          timeout --kill-after=10s 180s uv run pytest -v -ra tests/test_browser_live.py -k codex_existing --junitxml=check-logs/codex.xml 2>&1 | tee check-logs/codex.log
           targeted_result=${PIPESTATUS[0]}
           printf '%s\n' "$targeted_result" > check-logs/codex.exit
-          if [ "$targeted_result" -ne 0 ]; then exit "$targeted_result"; fi
-          xvfb-run -a -s "-screen 0 1920x1080x24" uv run pytest -v -ra -o faulthandler_timeout=120 --junitxml=check-logs/pytest.xml 2>&1 | tee check-logs/pytest.log
+          exit "$targeted_result"
+      - name: Save Codex continuation result before full suite
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-preflight-${{ github.sha }}
+          path: check-logs/
+          retention-days: 7
+      - name: Full pytest acceptance after Codex preflight
+        env:
+          BRIDGE_TEST_GOST: /tmp/gost
+        run: |
+          set -euo pipefail
+          set +e
+          timeout --kill-after=10s 12m xvfb-run -a -s "-screen 0 1920x1080x24" uv run pytest -v -ra -o faulthandler_timeout=120 --junitxml=check-logs/pytest.xml 2>&1 | tee check-logs/pytest.log
           result=${PIPESTATUS[0]}
           printf '%s\n' "$result" > check-logs/pytest.exit
           exit "$result"
