@@ -98,7 +98,7 @@ docker compose run --rm --no-deps -v "$PWD/backups:/backups:ro" app python -m ap
 docker compose up -d
 ```
 
-Restore the matching encryption key separately. Treat backups as sensitive even though credential fields are encrypted. Test backup and restore with synthetic data before relying on the procedure.
+Restore the matching encryption key separately. Offline restore accepts initialized schema v1 and current-version archives, verifies the key before creating the destination, and explicitly migrates only the restored copy to the current schema. The archive remains unchanged; unsupported versions are rejected. A failed restore removes its incomplete destination, so keep the preserved database until restoration succeeds. Treat backups as sensitive even though credential fields are encrypted. Test backup and restore with synthetic data before relying on the procedure.
 
 ## Target compatibility
 

@@ -1,6 +1,6 @@
 """Explicit transactional schema migrations. Connections never mutate the schema."""
 
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 import json
 import sqlite3
@@ -218,14 +218,14 @@ def migrate(path: Path, key: bytes):
         conn.close()
 
 
-def validate_database(path: Path, key: bytes):
+def validate_database(path: Path, key: bytes, *, supported_versions=(SCHEMA_VERSION,)):
     if not path.is_file():
         raise RuntimeError("database is missing; run initialization first")
-    with database(path) as conn:
-        if conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+    with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+        if conn.execute("PRAGMA user_version").fetchone()[0] not in supported_versions:
             raise RuntimeError(
                 "run the explicit migrate command before starting services"
             )
         admin = conn.execute("SELECT key_check FROM admin WHERE id=1").fetchone()
-        if not admin or decrypt(admin["key_check"], key) != "llm-auth-bridge":
+        if not admin or decrypt(admin[0], key) != "llm-auth-bridge":
             raise RuntimeError("database is not initialized or key is incorrect")
