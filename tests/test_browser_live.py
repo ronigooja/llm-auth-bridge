@@ -226,7 +226,11 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
     with real_browser() as browser:
 
         class WrappedBrowser:
-            def new_context(self, **kwargs):
+            def launch_persistent_context(self, **kwargs):
+                # This scenario suite checks form behavior. The separate headed
+                # device acceptance below exercises native profile persistence.
+                for key in ("user_data_dir", "headless", "chromium_sandbox", "proxy", "env", "args"):
+                    kwargs.pop(key)
                 context = browser.new_context(**kwargs)
 
                 def intercept(route):
@@ -245,6 +249,7 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
                     route=context.route,
                     set_default_timeout=context.set_default_timeout,
                     storage_state=context.storage_state,
+                    close=context.close,
                 )
 
             def close(self):
@@ -253,7 +258,7 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
         @contextmanager
         def fake_playwright():
             yield SimpleNamespace(
-                chromium=SimpleNamespace(launch=lambda **k: WrappedBrowser())
+                chromium=WrappedBrowser()
             )
 
         @contextmanager
@@ -292,6 +297,12 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, scenario):
                     return None
                 return "123456"
 
+        @contextmanager
+        def fake_device(account, control):
+            from pathlib import Path
+            yield SimpleNamespace(path=Path("/synthetic-device"), restored=True)
+
+        monkeypatch.setattr(module, "device_directory", fake_device)
         monkeypatch.setattr(playwright.sync_api, "sync_playwright", fake_playwright)
         monkeypatch.setattr(module, "account_route", fake_route)
         def fake_session(*args):
@@ -382,3 +393,109 @@ def test_submit_waits_for_only_pending_button():
                          '<script>setTimeout(() => document.querySelector("button").disabled=false, 1500)</script>')
         _submit(page)
         assert page.locator("body").get_attribute("data-submitted") == "1"
+
+
+def test_legacy_localstorage_migration_is_origin_bound_and_does_not_reset_values():
+    from app.browser import _restore_legacy_state
+    with real_browser() as browser:
+        context = browser.new_context()
+        context.route("**/*", lambda route: route.fulfill(body="<p>Synthetic</p>", content_type="text/html"))
+        _restore_legacy_state(context, {"cookies": [], "origins": [{
+            "origin": "https://legacy.example.test", "localStorage": [
+                {"name": "synthetic-session", "value": "legacy-value"},
+                {"name": "__proto__", "value": "ordinary-storage-key"},
+            ],
+        }]})
+        page = context.new_page()
+        page.goto("https://other.example.test/")
+        assert page.evaluate("localStorage.length") == 0
+        page.goto("https://legacy.example.test/")
+        assert page.evaluate("localStorage.getItem('synthetic-session')") == "legacy-value"
+        assert page.evaluate("localStorage.getItem('__proto__')") == "ordinary-storage-key"
+        page.evaluate("localStorage.setItem('synthetic-session', 'updated-value')")
+        page.reload()
+        assert page.evaluate("localStorage.getItem('synthetic-session')") == "updated-value"
+        context.close()
+
+
+def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts(tmp_path):
+    """Synthetic native Chromium acceptance; requires CI Xvfb, never a provider.
+
+    A persistent device preserves durable storage, while sessionStorage belongs
+    to the original tab and is deliberately not resurrected by the adapter.
+    """
+    if not os.getenv("DISPLAY"):
+        pytest.skip("Headed native device acceptance requires DISPLAY / Xvfb")
+    from app.browser_identity import generate_profile, context_options
+    first = generate_profile(set())
+    dimensions = first["context"]["viewport"]
+    second = generate_profile({(dimensions["width"], dimensions["height"])})
+    executable = os.getenv("BRIDGE_TEST_CHROMIUM") or shutil.which("chromium")
+    with sync_playwright() as playwright:
+        if not executable and not os.path.exists(playwright.chromium.executable_path):
+            pytest.skip("Chromium is not installed")
+
+        def launch(directory, profile):
+            context = playwright.chromium.launch_persistent_context(
+                user_data_dir=str(directory), executable_path=executable,
+                headless=False, chromium_sandbox=os.geteuid() != 0,
+                args=BROWSER_ARGS + ["--no-proxy-server"],
+                **context_options(profile),
+            )
+            context.route("**/*", lambda route: route.fulfill(body="<p>Synthetic</p>", content_type="text/html"))
+            page = context.new_page()
+            page.goto("https://device.example.test/")
+            return context, page
+
+        context, page = launch(tmp_path / "first", first)
+        try:
+            context.add_cookies([{"name": "synthetic-session", "value": "first-account",
+                "domain": "device.example.test", "path": "/", "secure": True,
+                "expires": __import__('time').time() + 3600}])
+            page.evaluate("""async () => {
+                localStorage.setItem('device', 'first-account');
+                sessionStorage.setItem('tab', 'first-tab');
+                const db = await new Promise((resolve, reject) => {
+                    const request = indexedDB.open('synthetic-device', 1);
+                    request.onupgradeneeded = () => request.result.createObjectStore('tokens');
+                    request.onsuccess = () => resolve(request.result);
+                    request.onerror = () => reject(request.error);
+                });
+                await new Promise((resolve, reject) => {
+                    const tx = db.transaction('tokens', 'readwrite');
+                    tx.objectStore('tokens').put('synthetic-token', 'session');
+                    tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
+                }); db.close();
+            }""")
+            identity = page.evaluate("({width: innerWidth, height: innerHeight, locale: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})")
+            page.reload()
+            assert page.evaluate("sessionStorage.getItem('tab')") == "first-tab"
+        finally:
+            context.close()
+        context, page = launch(tmp_path / "first", first)
+        try:
+            assert page.evaluate("localStorage.getItem('device')") == "first-account"
+            assert any(c["name"] == "synthetic-session" and c["value"] == "first-account" for c in context.cookies())
+            assert page.evaluate("""async () => {
+                const db = await new Promise(resolve => {
+                    const request = indexedDB.open('synthetic-device', 1);
+                    request.onsuccess = () => resolve(request.result);
+                });
+                const value = await new Promise(resolve => {
+                    const request = db.transaction('tokens').objectStore('tokens').get('session');
+                    request.onsuccess = () => resolve(request.result);
+                }); db.close(); return value;
+            }""") == "synthetic-token"
+            assert page.evaluate("sessionStorage.getItem('tab')") is None
+            assert page.evaluate("({width: innerWidth, height: innerHeight, locale: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})") == identity
+        finally:
+            context.close()
+        context, page = launch(tmp_path / "second", second)
+        try:
+            assert page.evaluate("localStorage.length") == 0
+            assert context.cookies() == []
+            assert page.evaluate("indexedDB.databases().then(dbs => dbs.length)") == 0
+            assert page.evaluate("sessionStorage.length") == 0
+            assert page.evaluate("innerWidth") != identity["width"] or page.evaluate("innerHeight") != identity["height"]
+        finally:
+            context.close()
