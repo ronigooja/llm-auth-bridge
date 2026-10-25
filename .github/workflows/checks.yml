@@ -34,9 +34,28 @@ jobs:
         working-directory: frontend
       - run: npm run build
         working-directory: frontend
-      - run: uv run pytest
+      - name: Full pytest suite including headed browser acceptance
         env:
           BRIDGE_TEST_GOST: /tmp/gost
+        run: |
+          set -euo pipefail
+          mkdir -p check-logs
+          git rev-parse HEAD > check-logs/source-revision.txt
+          git status --porcelain=v1 -- . ':!check-logs' > check-logs/uncommitted-inputs.txt
+          printf 'run=%s\njob=%s\nos=%s\narch=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$GITHUB_JOB" "$RUNNER_OS" "$RUNNER_ARCH" > check-logs/environment.txt
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth
+          set +e
+          xvfb-run -a -s "-screen 0 1920x1080x24" uv run pytest -ra --junitxml=check-logs/pytest.xml 2>&1 | tee check-logs/pytest.log
+          result=${PIPESTATUS[0]}
+          printf '%s\n' "$result" > check-logs/pytest.exit
+          exit "$result"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: checks-${{ github.sha }}
+          path: check-logs/
+          retention-days: 7
   images:
     runs-on: ubuntu-24.04
     strategy:
