@@ -1,0 +1,192 @@
+"""Synthetic-only checks for encrypted account-scoped native browser identity."""
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+import json
+import os
+import time
+import pytest
+from app.browser_identity import context_options, generate_profile, load_or_create_profile
+from app.cli import backup, restore
+from app.crypto import decrypt, encrypt, load_key
+from app.db import SCHEMA_VERSION, database, migrate, validate_database
+from app.queue import Cancelled, LeaseLost, Queue
+from app.worker import Worker
+
+
+def claimed(settings, account_id, target_id):
+    key = load_key(settings.key_file)
+    queue = Queue(settings, key)
+    queue.create(account_id, target_id)
+    return key, queue, queue.claim()
+
+
+def profile_for(settings, key, queue, task):
+    return load_or_create_profile(settings.db_path, key, queue, task)
+
+
+def test_native_options_distinct_coherent_private(monkeypatch):
+    monkeypatch.setattr('app.browser_identity.secrets.randbelow', lambda n: 0)
+    first = generate_profile(set())
+    options = context_options(first)
+    second = generate_profile({(options['viewport']['width'], options['viewport']['height'])})
+    assert first['identity_seed'] != second['identity_seed']
+    assert options['viewport'] != context_options(second)['viewport']
+    assert options['screen']['width'] == options['viewport']['width']
+    assert options['screen']['height'] > options['viewport']['height']
+    assert options['device_scale_factor'] == 1
+    assert options['is_mobile'] is False and options['has_touch'] is False
+    assert options['locale'] == 'en-US' and options['timezone_id'] == 'UTC'
+    assert 'identity_seed' not in options and 'user_agent' not in options
+    options['viewport']['width'] = 1
+    assert context_options(first)['viewport']['width'] >= 1200
+
+
+def test_first_use_atomic_and_encrypted(settings, resources):
+    key, queue, task = claimed(settings, *resources)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: profile_for(settings, key, queue, task), range(2)))
+    assert results[0] == results[1]
+    with database(settings.db_path) as conn:
+        rows = conn.execute('SELECT * FROM browser_profiles').fetchall()
+    assert len(rows) == 1 and rows[0]['account_id'] == resources[0]
+    assert json.loads(decrypt(rows[0]['profile_cipher'], key)) == results[0]
+    assert results[0]['identity_seed'] not in rows[0]['profile_cipher']
+    assert results[0]['identity_seed'].encode() not in settings.db_path.read_bytes()
+
+
+def test_stale_cancelled_owner_cannot_allocate(settings, resources):
+    key, queue, task = claimed(settings, *resources)
+    with database(settings.db_path) as conn:
+        conn.execute('UPDATE tasks SET lease_until=? WHERE id=?', (time.time() - 1, task['id']))
+    with pytest.raises(LeaseLost):
+        profile_for(settings, key, queue, task)
+    with database(settings.db_path) as conn:
+        assert conn.execute('SELECT count(*) FROM browser_profiles').fetchone()[0] == 0
+        conn.execute('UPDATE tasks SET lease_until=?,cancel_requested=1 WHERE id=?', (time.time() + 60, task['id']))
+    with pytest.raises(Cancelled):
+        profile_for(settings, key, queue, task)
+    with database(settings.db_path) as conn:
+        assert conn.execute('SELECT count(*) FROM browser_profiles').fetchone()[0] == 0
+
+
+def test_lease_expiring_during_generation_rolls_back(settings, resources, monkeypatch):
+    key, queue, task = claimed(settings, *resources)
+    original = queue.owned
+    checks = []
+    def fenced(*args):
+        checks.append(True)
+        if len(checks) > 1:
+            raise LeaseLost()
+        return original(*args)
+    monkeypatch.setattr(queue, 'owned', fenced)
+    with pytest.raises(LeaseLost):
+        profile_for(settings, key, queue, task)
+    with database(settings.db_path) as conn:
+        assert conn.execute('SELECT count(*) FROM browser_profiles').fetchone()[0] == 0
+
+
+def test_failed_login_restart_edits_and_voice_share_identity(settings, resources, admin):
+    account_id, target_id = resources
+    profiles = []
+    def fail_login(account, target, control, saved):
+        profiles.append(account['_browser_profile'])
+        raise RuntimeError('synthetic login failure')
+    key = load_key(settings.key_file)
+    queue = Queue(settings, key)
+    queue.create(account_id, target_id)
+    assert Worker(settings, runner=fail_login).run_once()
+    assert len(profiles) == 1
+    response = admin.patch(f'/api/v1/accounts/{account_id}', json={
+        'username': 'changed@example.com', 'password': 'replacement-synthetic',
+        'route_type': 'proxy', 'proxy': {'server': 'http://proxy.example:8080'},
+    })
+    assert response.status_code == 200, response.text
+    voice = admin.post('/api/v1/targets', json={
+        'kind': 'chatgpt-web-voice', 'name': 'Synthetic voice',
+        'config': {'base_url': 'https://voice.example', 'admin_username': 'synthetic-admin', 'admin_password': 'synthetic-password'},
+    })
+    assert voice.status_code == 200, voice.text
+    response = admin.patch(f'/api/v1/accounts/{account_id}', json={'target_ids': [target_id, voice.json()['id']]})
+    assert response.status_code == 200, response.text
+    for destination in (target_id, voice.json()['id']):
+        queue.create(account_id, destination)
+        assert Worker(settings, runner=fail_login).run_once()
+    assert profiles == [profiles[0]] * 3
+    public = admin.get('/api/v1/accounts').text
+    assert 'identity_seed' not in public and profiles[0]['identity_seed'] not in public
+
+
+def test_accounts_distinct_delete_cascades_recreate_has_new_seed(settings, resources, admin):
+    account_id, target_id = resources
+    key, queue, task = claimed(settings, account_id, target_id)
+    first = profile_for(settings, key, queue, task)
+    queue.finish(task['id'], task['execution_id'], 'failed', 'failed', 'Synthetic failure')
+    payload = {'username': 'second@example.com', 'password': 'synthetic-password',
+               'route_type': 'direct', 'target_ids': [target_id]}
+    response = admin.post('/api/v1/accounts', json=payload)
+    assert response.status_code == 200, response.text
+    second_id = response.json()['id']
+    _, _, task = claimed(settings, second_id, target_id)
+    second = profile_for(settings, key, queue, task)
+    assert first['identity_seed'] != second['identity_seed']
+    assert context_options(first)['viewport'] != context_options(second)['viewport']
+    queue.finish(task['id'], task['execution_id'], 'failed', 'failed', 'Synthetic failure')
+    assert admin.delete(f'/api/v1/accounts/{second_id}').status_code == 200
+    with database(settings.db_path) as conn:
+        assert conn.execute('SELECT 1 FROM browser_profiles WHERE account_id=?', (second_id,)).fetchone() is None
+    recreated = admin.post('/api/v1/accounts', json=payload)
+    assert recreated.status_code == 200, recreated.text
+    _, _, task = claimed(settings, recreated.json()['id'], target_id)
+    assert profile_for(settings, key, queue, task)['identity_seed'] != second['identity_seed']
+
+
+def test_backup_restore_preserves_encrypted_profile_and_state(settings, resources, tmp_path):
+    key, queue, task = claimed(settings, *resources)
+    original = profile_for(settings, key, queue, task)
+    state = {'cookies': [{'name': 'synthetic', 'value': 'synthetic-state'}], 'origins': []}
+    with database(settings.db_path) as conn:
+        conn.execute('INSERT INTO browser_sessions VALUES(?,?,?)', (resources[0], encrypt(json.dumps(state), key), time.time()))
+    archive = tmp_path / 'identity-backup.db'
+    backup(settings, archive)
+    restored = replace(settings, db_path=tmp_path / 'restored' / 'bridge.db')
+    restore(restored, archive)
+    assert profile_for(restored, key, Queue(restored, key), task) == original
+    with database(restored.db_path) as conn:
+        assert json.loads(decrypt(conn.execute('SELECT state_cipher FROM browser_sessions').fetchone()[0], key)) == state
+
+
+def version_one(settings, account_id, key):
+    cipher = encrypt(json.dumps({'cookies': [], 'origins': []}), key)
+    with database(settings.db_path) as conn:
+        conn.execute('DROP TABLE browser_profiles')
+        conn.execute('DROP TABLE native_sessions')
+        conn.execute('PRAGMA user_version=1')
+        conn.execute('INSERT INTO browser_sessions VALUES(?,?,?)', (account_id, cipher, 123))
+    return cipher
+
+
+def test_v1_explicit_migration_preserves_accounts_and_sessions(settings, resources):
+    key = load_key(settings.key_file)
+    cipher = version_one(settings, resources[0], key)
+    with pytest.raises(RuntimeError, match='explicit migrate'):
+        validate_database(settings.db_path, key)
+    migrate(settings.db_path, key)
+    validate_database(settings.db_path, key)
+    with database(settings.db_path) as conn:
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION
+        assert conn.execute('SELECT state_cipher FROM browser_sessions').fetchone()[0] == cipher
+        assert decrypt(conn.execute('SELECT password_cipher FROM accounts').fetchone()[0], key) == 'synthetic-password'
+        assert conn.execute('SELECT count(*) FROM browser_profiles').fetchone()[0] == 0
+        assert conn.execute('SELECT count(*) FROM native_sessions').fetchone()[0] == 0
+    migrate(settings.db_path, key)
+
+
+def test_v1_wrong_key_rolls_back_schema_and_sessions(settings, resources):
+    key = load_key(settings.key_file)
+    cipher = version_one(settings, resources[0], key)
+    with pytest.raises(ValueError):
+        migrate(settings.db_path, os.urandom(32))
+    with database(settings.db_path) as conn:
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 1
+        assert conn.execute("SELECT name FROM sqlite_master WHERE name='browser_profiles'").fetchone() is None
+        assert conn.execute('SELECT state_cipher FROM browser_sessions').fetchone()[0] == cipher
