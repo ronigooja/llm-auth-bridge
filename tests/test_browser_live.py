@@ -301,7 +301,7 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, tmp_path, scenario
         @contextmanager
         def fake_device(account, control):
             from pathlib import Path
-            yield SimpleNamespace(path=tmp_path, restored=True)
+            yield SimpleNamespace(path=tmp_path, restored=True, mark_ready=lambda: None, abort_snapshot=lambda: None)
 
         monkeypatch.setattr(module, "device_directory", fake_device)
         monkeypatch.setattr(playwright.sync_api, "sync_playwright", fake_playwright)
