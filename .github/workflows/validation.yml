@@ -37,6 +37,8 @@ jobs:
           pip install uv==0.8.22
           uv sync --frozen --extra test --extra browser
           uv run playwright install --with-deps chromium
+          # GitHub Ubuntu 24.04 AppArmor otherwise blocks Chromium user namespaces.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           curl -fsSL https://github.com/go-gost/gost/releases/download/v3.3.1/gost_3.3.1_linux_amd64.tar.gz -o /tmp/gost.tar.gz
           echo 'e0e3a2c9116e2f025e962bba340749f80696bda318613d45e5ae96dd0bcae37c  /tmp/gost.tar.gz' | sha256sum -c -
           tar -xzf /tmp/gost.tar.gz -C /tmp gost
@@ -75,6 +77,7 @@ jobs:
           git status --porcelain=v1 > validation-logs/uncommitted-inputs.txt
           printf 'run=%s\njob=%s\nos=%s\narch=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$GITHUB_JOB" "$RUNNER_OS" "$RUNNER_ARCH" > validation-logs/environment.txt
       - name: Fetch pinned upstream and apply extension
+        id: source
         run: |
           set -euxo pipefail
           exec > >(tee validation-logs/source.log) 2>&1
@@ -92,21 +95,77 @@ jobs:
           git -C /tmp/cpa-source apply "$GITHUB_WORKSPACE/deploy/cpa/upstream.patch"
           git -C /tmp/cpa-source diff --stat > validation-logs/upstream-input-changes.txt
       - uses: actions/setup-go@v5
+        id: go_setup
         with:
           go-version-file: /tmp/cpa-source/go.mod
           cache-dependency-path: /tmp/cpa-source/go.sum
-      - name: Upstream Go tests and compile
+      - name: Native management synthetic tests
+        working-directory: /tmp/cpa-source
+        run: |
+          set -euxo pipefail
+          exec > >(tee "$GITHUB_WORKSPACE/validation-logs/go-management.log") 2>&1
+          trap 'printf "%s\n" "$?" > "$GITHUB_WORKSPACE/validation-logs/go-management.exit"' EXIT
+          go version
+          go test -count=1 ./internal/api/handlers/management ./internal/api
+      - name: Full upstream Go suite with extension
+        if: ${{ !cancelled() && steps.source.outcome == 'success' && steps.go_setup.outcome == 'success' }}
         working-directory: /tmp/cpa-source
         run: |
           set -euxo pipefail
           exec > >(tee "$GITHUB_WORKSPACE/validation-logs/go.log") 2>&1
           trap 'printf "%s\n" "$?" > "$GITHUB_WORKSPACE/validation-logs/go.exit"' EXIT
-          go version
-          go test ./...
+          go test -count=1 ./...
+      - name: Compile native executable even after test failure
+        if: ${{ !cancelled() && steps.source.outcome == 'success' && steps.go_setup.outcome == 'success' }}
+        working-directory: /tmp/cpa-source
+        run: |
+          set -euxo pipefail
+          exec > >(tee "$GITHUB_WORKSPACE/validation-logs/go-build.log") 2>&1
+          trap 'printf "%s\n" "$?" > "$GITHUB_WORKSPACE/validation-logs/go-build.exit"' EXIT
           go build ./cmd/server
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: cpa-validation-${{ github.sha }}
+          path: validation-logs/
+          retention-days: 7
+  cpa-baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch untouched pinned upstream baseline
+        run: |
+          set -euxo pipefail
+          mkdir -p validation-logs
+          exec > >(tee validation-logs/source.log) 2>&1
+          trap 'printf "%s\n" "$?" > validation-logs/source.exit' EXIT
+          git rev-parse HEAD > validation-logs/source-revision.txt
+          git status --porcelain=v1 > validation-logs/uncommitted-inputs.txt
+          printf 'run=%s\njob=%s\nos=%s\narch=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$GITHUB_JOB" "$RUNNER_OS" "$RUNNER_ARCH" > validation-logs/environment.txt
+          revision=$(cat deploy/cpa/UPSTREAM_REVISION)
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          git init /tmp/cpa-baseline
+          git -C /tmp/cpa-baseline remote add origin https://github.com/router-for-me/CLIProxyAPI.git
+          git -C /tmp/cpa-baseline fetch --depth=1 origin "$revision"
+          git -C /tmp/cpa-baseline checkout --detach FETCH_HEAD
+          git -C /tmp/cpa-baseline rev-parse HEAD > validation-logs/upstream-revision.txt
+          git -C /tmp/cpa-baseline status --porcelain=v1 > validation-logs/upstream-uncommitted-inputs.txt
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: /tmp/cpa-baseline/go.mod
+          cache-dependency-path: /tmp/cpa-baseline/go.sum
+      - name: Full untouched upstream Go suite
+        working-directory: /tmp/cpa-baseline
+        run: |
+          set -euxo pipefail
+          exec > >(tee "$GITHUB_WORKSPACE/validation-logs/go.log") 2>&1
+          trap 'printf "%s\n" "$?" > "$GITHUB_WORKSPACE/validation-logs/go.exit"' EXIT
+          go version
+          go test -count=1 ./...
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cpa-baseline-${{ github.sha }}
           path: validation-logs/
           retention-days: 7
