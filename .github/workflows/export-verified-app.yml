@@ -1,7 +1,7 @@
-name: Export verified app image
+name: Export verified service image
 on:
   push:
-    branches: ["artifacts/novnc-app"]
+    branches: ["artifacts/novnc-app", "artifacts/novnc-worker"]
 permissions:
   contents: read
   actions: read
@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
+      SERVICE: ${{ github.ref_name == 'artifacts/novnc-worker' && 'worker' || 'app' }}
       SOURCE_REVISION: 0c8fa8c35b0f768ca4c4395b4e35930f4d9cfc92
     steps:
       - name: Retrieve successful deployment images
@@ -19,24 +20,30 @@ jobs:
           run-id: 40288386352
           github-token: ${{ github.token }}
           path: source-images
-      - name: Verify and export only the existing app image
+      - name: Verify and export only the existing service image
         run: |
           set -Eeuo pipefail
-          mkdir -p app-image
-          exec > >(tee app-image/export.log) 2>&1
-          trap 'rc=$?; printf "%s\n" "$rc" > app-image/export.exit' EXIT
+          mkdir -p service-image
+          exec > >(tee service-image/export.log) 2>&1
+          trap 'rc=$?; printf "%s\n" "$rc" > service-image/export.exit' EXIT
           (cd source-images && sha256sum -c images.tar.gz.sha256)
           test "$(cat source-images/source-revision.txt)" = "$SOURCE_REVISION"
           docker load -i source-images/images.tar.gz
-          docker image inspect "llm-auth-bridge-app:$SOURCE_REVISION" --format '{{.Id}} {{.Architecture}} {{index .Config.Labels "org.opencontainers.image.revision"}}' > app-image/image-identity.txt
-          test "$(awk '$2 == "arm64" && $3 == ENVIRON["SOURCE_REVISION"] {count++} END {print count+0}' app-image/image-identity.txt)" -eq 1
-          docker save "llm-auth-bridge-app:$SOURCE_REVISION" | gzip -1 > app-image/app.tar.gz
-          printf '%s\n' "$SOURCE_REVISION" > app-image/source-revision.txt
-          (cd app-image && sha256sum app.tar.gz > app.tar.gz.sha256)
+          docker image inspect "llm-auth-bridge-$SERVICE:$SOURCE_REVISION" --format '{{.Id}} {{.Architecture}} {{index .Config.Labels "org.opencontainers.image.revision"}}' > service-image/image-identity.txt
+          test "$(awk '$2 == "arm64" && $3 == ENVIRON["SOURCE_REVISION"] {count++} END {print count+0}' service-image/image-identity.txt)" -eq 1
+          if [ "$SERVICE" = worker ]; then
+            docker create --name inspect-worker "llm-auth-bridge-$SERVICE:$SOURCE_REVISION"
+            docker cp inspect-worker:/usr/local/bin/bridge-worker service-image/bridge-worker
+            docker rm inspect-worker
+            grep -Fx 'Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp &' service-image/bridge-worker
+          fi
+          docker save "llm-auth-bridge-$SERVICE:$SOURCE_REVISION" | gzip -1 > service-image/$SERVICE.tar.gz
+          printf '%s\n' "$SOURCE_REVISION" > service-image/source-revision.txt
+          (cd service-image && sha256sum "$SERVICE.tar.gz" > "$SERVICE.tar.gz.sha256")
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: verified-app-0c8fa8c35b0f768ca4c4395b4e35930f4d9cfc92
-          path: app-image/
+          name: verified-${{ env.SERVICE }}-0c8fa8c35b0f768ca4c4395b4e35930f4d9cfc92
+          path: service-image/
           compression-level: 0
           retention-days: 2

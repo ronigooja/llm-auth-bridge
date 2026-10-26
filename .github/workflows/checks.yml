@@ -1,7 +1,7 @@
 name: Checks
 on:
   push:
-    branches-ignore: ["validation/**", "deployment/**"]
+    branches-ignore: ["validation/**", "deployment/**", "artifacts/**"]
   pull_request:
 permissions:
   contents: read
