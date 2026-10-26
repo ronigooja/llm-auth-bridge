@@ -42,7 +42,7 @@ describe("management interactions", () => {
     expect(screen.getByRole("button", { name: "取消任务" })).toBeTruthy();
   });
 
-  it.each(["cpa-auth-files-v1", "cpa-native-oauth-v1", "bridge-v1"])("preserves saved target compatibility %s when editing", async (compatibility) => {
+  it.each(["cpa-auth-files-v1", "cpa-native-oauth-v1", "bridge-v1", null])("preserves saved target compatibility %s when editing", async (compatibility) => {
     const calls: { path: string; init?: RequestInit }[] = [];
     const target = { id: 2, name: "Synthetic target", kind: compatibility === "bridge-v1" ? "chatgpt-web-voice" : "cliproxyapi", config: { base_url: "https://target.example.test", compatibility } };
     vi.mocked(fetch).mockImplementation((input, init) => {
@@ -58,14 +58,14 @@ describe("management interactions", () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /^目标$/ }));
     await user.click(await screen.findByRole("button", { name: "编辑目标" }));
-    expect(screen.getByLabelText(/^同步接口兼容性/)).toHaveProperty("value", compatibility);
+    expect(screen.getByLabelText(/^同步接口兼容性/)).toHaveProperty("value", compatibility || "cpa-auth-files-v1");
     await user.click(screen.getByRole("button", { name: "保存目标" }));
     await waitFor(() => expect(calls.some((call) => call.path.endsWith("/targets/2") && call.init?.method === "PATCH")).toBe(true));
     const saved = calls.find((call) => call.path.endsWith("/targets/2") && call.init?.method === "PATCH")!;
-    expect(JSON.parse(String(saved.init?.body)).config.compatibility).toBe(compatibility);
+    expect(JSON.parse(String(saved.init?.body)).config.compatibility).toBe(compatibility || "cpa-auth-files-v1");
     expect(JSON.parse(String(saved.init?.body)).config.management_key).toBeUndefined();
   });
-  it("defaults new CPA targets to auth-files and offers native OAuth as an explicit choice", async () => {
+  it("defaults new CPA targets to native OAuth and retains that default after switching target kinds", async () => {
     const calls: { path: string; init?: RequestInit }[] = [];
     vi.mocked(fetch).mockImplementation((input, init) => {
       const path = String(input);
@@ -79,9 +79,10 @@ describe("management interactions", () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /^目标$/ }));
     await user.click(await screen.findByRole("button", { name: "添加目标" }));
-    expect(screen.getByLabelText(/^同步接口兼容性/)).toHaveProperty("value", "cpa-auth-files-v1");
-    await user.selectOptions(screen.getByLabelText(/^同步接口兼容性/), "cpa-native-oauth-v1");
-    expect(screen.getByText(/需先部署 cpa-native-oauth-v1 管理接口补丁/)).toBeTruthy();
+    expect(screen.getByLabelText(/^同步接口兼容性/)).toHaveProperty("value", "cpa-native-oauth-v1");
+    await user.selectOptions(screen.getByLabelText("类型"), "chatgpt-web-voice");
+    await user.selectOptions(screen.getByLabelText("类型"), "cliproxyapi");
+    expect(screen.getByLabelText(/^同步接口兼容性/)).toHaveProperty("value", "cpa-native-oauth-v1");
     await user.type(screen.getByLabelText("目标名称"), "Synthetic native CPA");
     await user.type(screen.getByLabelText("服务地址"), "https://cpa.example.test");
     await user.type(screen.getByLabelText("管理密钥"), "synthetic-secret");

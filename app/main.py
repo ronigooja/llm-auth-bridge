@@ -554,6 +554,8 @@ def create_app(settings: Settings | None = None):
             ).fetchone():
                 raise Conflict("target has an executing task")
             oldconfig = json.loads(decrypt(old["config_cipher"], app.state.key))
+            if old["kind"] == "cliproxyapi":
+                oldconfig.setdefault("compatibility", None)
             if "config" in body and not isinstance(body["config"], dict):
                 raise HTTPException(422, "invalid target config")
             merged = TargetBody(

@@ -149,6 +149,7 @@ class TargetConfig(Model):
 
 
 class CPAConfig(TargetConfig):
+    compatibility: Literal["cpa-auth-files-v1", "cpa-native-oauth-v1", "bridge-v1"] | None = "cpa-native-oauth-v1"
     management_key: str = Field(min_length=1, max_length=4096)
 
     @field_validator("management_key")

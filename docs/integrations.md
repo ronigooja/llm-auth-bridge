@@ -2,7 +2,7 @@
 
 Both adapters are **unverified with real accounts**. Mock contract tests verify serialization, stable remote IDs, transport failure reconciliation, identity and explicit route readback, credential type separation, and safe errors. A successful management connection test does not verify account usability.
 
-`sync_credential(target, result, account, remote_id=None)` returns `{remote_id, verified: true}` only after remote readback confirms identity, credential contents (or a digest), and the account's explicit route. Here `verified` describes synchronization consistency, not deployment acceptance or a real upstream account probe. The worker owns encrypted pending results and refresh-token deletion after success. `IntegrationError.write_possible` defaults to false and becomes true before a write starts. On fresh-attempt preflight errors it remains false, allowing the worker to reset its durable attempt counter safely. When the incoming result has `_reconcile_only: true`, all integration errors retain `write_possible: true`, including configuration or connection failures, because a previous attempt may have committed. Unknown exception types must retain durable write uncertainty. The default auth-files and Voice adapters never perform login, OAuth code exchange, token refresh, or a live account probe. The opt-in native CPA path delegates code exchange to the patched target extension described below.
+`sync_credential(target, result, account, remote_id=None)` returns `{remote_id, verified: true}` only after remote readback confirms identity, credential contents (or a digest), and the account's explicit route. Here `verified` describes synchronization consistency, not deployment acceptance or a real upstream account probe. The worker owns encrypted pending results and refresh-token deletion after success. `IntegrationError.write_possible` defaults to false and becomes true before a write starts. On fresh-attempt preflight errors it remains false, allowing the worker to reset its durable attempt counter safely. When the incoming result has `_reconcile_only: true`, all integration errors retain `write_possible: true`, including configuration or connection failures, because a previous attempt may have committed. Unknown exception types must retain durable write uncertainty. The auth-files and Voice adapters never perform login, OAuth code exchange, token refresh, or a live account probe. The default native CPA path delegates code exchange to the patched target extension described below.
 
 ## Target configuration and HTTP
 
@@ -24,7 +24,7 @@ Configuration:
 }
 ```
 
-`compatibility` defaults to `cpa-auth-files-v1` when absent or null. Management requests use `Authorization: Bearer <management_key>`:
+New CPA targets created through the UI or API default to `cpa-native-oauth-v1` when the protocol is omitted. This auth-files contract is available by explicitly selecting `cpa-auth-files-v1`; legacy saved targets with absent or null protocols retain auth-files behavior. Explicit null in the API also retains that legacy behavior. Management requests use `Authorization: Bearer <management_key>`:
 
 - Connection test: `GET /v0/management/auth-files`, requiring an object with a `files` array.
 - Read/reconciliation: `GET /v0/management/auth-files/download?name=<remote_id>`; HTTP 404 means the named record does not exist.
@@ -38,7 +38,7 @@ Public source reviewed on 2026-10-23: [router-for-me/CLIProxyAPI at d946c4f](htt
 
 ## CLIProxyAPI native OAuth extension
 
-`cpa-native-oauth-v1` is an opt-in extension requiring a patched CLIProxyAPI server; stock auth-files remains the default. Browser login automation and human takeover remain in the bridge. The target owns PKCE, token exchange and downstream credential storage, using the account's explicit route for provider requests. The bridge never receives native OAuth tokens or silently switches to the auth-files protocol. This path remains **unverified with real accounts** and requires deployment acceptance.
+`cpa-native-oauth-v1` is the default for new targets and requires a CLIProxyAPI server exposing this extension. Existing targets retain their saved protocol; stock servers can use explicit `cpa-auth-files-v1`. Browser login automation and human takeover remain in the bridge. The target owns PKCE, token exchange and downstream credential storage, using the account's explicit route for provider requests. The bridge never receives native OAuth tokens or silently switches to the auth-files protocol. This path remains **unverified with real accounts** and requires deployment acceptance.
 
 Configure the same `base_url` and `management_key` as an auth-files target, but explicitly set `compatibility: "cpa-native-oauth-v1"`. All extension endpoints require management Bearer authentication under `/v8/management/bridge/oauth`:
 

@@ -523,3 +523,19 @@ def test_non_native_idle_sync_preserves_target_secret_correction(admin, settings
     with database(settings.db_path) as conn:
         versions = conn.execute("SELECT t.target_version,r.version FROM tasks t JOIN targets r ON r.id=t.target_id WHERE t.id=?", (task["id"],)).fetchone()
     assert versions[0] == versions[1]
+
+
+@pytest.mark.parametrize("protocol", ["omitted", None, "cpa-auth-files-v1", "cpa-native-oauth-v1"])
+def test_cpa_creation_defaults_to_native_and_preserves_saved_protocol(admin, protocol):
+    config = {"base_url": "https://cpa.example", "management_key": "synthetic-key"}
+    if protocol != "omitted":
+        config["compatibility"] = protocol
+    created = admin.post("/api/v1/targets", json={
+        "kind": "cliproxyapi", "name": "Synthetic CPA", "config": config,
+    })
+    assert created.status_code == 200, created.text
+    expected = "cpa-native-oauth-v1" if protocol == "omitted" else protocol
+    assert created.json()["config"]["compatibility"] == expected
+    updated = admin.patch(f"/api/v1/targets/{created.json()['id']}", json={"name": "Renamed CPA"})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["config"]["compatibility"] == expected

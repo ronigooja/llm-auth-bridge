@@ -47,6 +47,7 @@ def resources(admin):
             "config": {
                 "base_url": "https://cpa.example",
                 "management_key": "synthetic-secret",
+                "compatibility": "cpa-auth-files-v1",
             },
         },
     )

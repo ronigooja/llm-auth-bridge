@@ -936,7 +936,7 @@ function TargetForm({
   const [url, setUrl] = useState(target?.config?.base_url || "");
   const [compatibility, setCompatibility] = useState(
     target?.config?.compatibility ||
-      (target?.kind === "chatgpt-web-voice" ? "" : "cpa-auth-files-v1"),
+      (target?.kind === "chatgpt-web-voice" ? "" : target ? "cpa-auth-files-v1" : "cpa-native-oauth-v1"),
   );
   const [key, setKey] = useState("");
   const [user, setUser] = useState("");
@@ -990,7 +990,7 @@ function TargetForm({
             onChange={(e) => {
               setKind(e.target.value);
               setCompatibility(
-                e.target.value === "cliproxyapi" ? "cpa-auth-files-v1" : "",
+                e.target.value === "cliproxyapi" ? "cpa-native-oauth-v1" : "",
               );
             }}
           >
@@ -1056,8 +1056,8 @@ function TargetForm({
           >
             {kind === "cliproxyapi" ? (
               <>
-                <option value="cpa-auth-files-v1">Auth-files（默认）</option>
-                <option value="cpa-native-oauth-v1">原生 OAuth（需部署兼容补丁）</option>
+                <option value="cpa-auth-files-v1">Auth-files</option>
+                <option value="cpa-native-oauth-v1">原生 OAuth（默认）</option>
               </>
             ) : (
               <>
@@ -1069,7 +1069,7 @@ function TargetForm({
           <small>
             {kind === "cliproxyapi"
               ? compatibility === "cpa-native-oauth-v1"
-                ? "需先部署 cpa-native-oauth-v1 管理接口补丁；应用仍会自动操作登录浏览器。真实账号授权尚未验证。"
+                ? "由 CLIProxyAPI 完成授权交换和凭据保存，应用自动操作登录浏览器。目标需支持 cpa-native-oauth-v1 接口；真实账号授权尚未验证。"
                 : "兼容现有 CLIProxyAPI；应用自动登录并同步 Auth-file。"
               : "需由目标服务提供兼容接口。"}
           </small>
