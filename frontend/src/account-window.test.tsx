@@ -17,7 +17,10 @@ function popup() {
   document.body.appendChild(frame);
   const doc = frame.contentDocument!;
   const target = { document: doc, location: { pathname: "/account-window" }, closed: false, opener: window, focus: vi.fn(), close: vi.fn() };
-  vi.spyOn(window, "open").mockReturnValue(target as unknown as Window);
+  vi.spyOn(window, "open").mockImplementation(() => {
+    target.closed = false;
+    return target as unknown as Window;
+  });
   return target;
 }
 afterEach(() => {

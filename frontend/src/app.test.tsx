@@ -494,7 +494,7 @@ it("keeps account editor busy until new route and bindings finish refreshing", a
   await user.click(await screen.findByRole("button", { name: "编辑与绑定" }));
   expect(screen.getByLabelText("网络路由")).toHaveProperty("value", "proxy");
   expect(screen.getByLabelText("Synthetic CPA")).toHaveProperty("checked", true);
-  expect(screen.getByLabelText("新代理 URL（留空保留）")).toHaveProperty("required", true);
+  expect(screen.getByLabelText("代理 URL")).toHaveProperty("required", true);
   await user.selectOptions(screen.getByLabelText("网络路由"), "direct");
   await user.click(screen.getByRole("button", { name: "保存账号" }));
   await waitFor(() => expect(release).toBeTypeOf("function"));
