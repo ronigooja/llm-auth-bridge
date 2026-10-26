@@ -8,7 +8,6 @@ permissions:
 defaults:
   run:
     shell: bash
-    working-directory: ${{ github.workspace }}
 concurrency:
   group: deployment-${{ github.ref }}
   cancel-in-progress: true
@@ -19,7 +18,9 @@ env:
 jobs:
   validate:
     runs-on: ubuntu-24.04
-    container: debian:12
+    container:
+      image: debian:12
+      options: --workdir /__w/llm-auth-bridge/llm-auth-bridge
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +68,9 @@ jobs:
   browser_acceptance:
     needs: validate
     runs-on: ubuntu-24.04
-    container: debian:12
+    container:
+      image: debian:12
+      options: --workdir /__w/llm-auth-bridge/llm-auth-bridge
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
