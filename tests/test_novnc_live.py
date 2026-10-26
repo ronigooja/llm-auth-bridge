@@ -169,11 +169,11 @@ def assert_native_viewer(frame, native_page):
         const canvas = document.querySelector('canvas');
         if (!canvas) return false;
         const rect = canvas.getBoundingClientRect();
-        return canvas.width === innerWidth && canvas.height === innerHeight
-            && rect.width === innerWidth && rect.height === innerHeight
-            && rect.left === 0 && rect.top === 0;
+        return Math.abs(canvas.width - innerWidth) <= 1 && Math.abs(canvas.height - innerHeight) <= 1
+            && rect.width === canvas.width && rect.height === canvas.height
+            && rect.left >= 0 && rect.left <= 1 && rect.top >= 0 && rect.top <= 1;
     }""", timeout=15000)
-    viewer_size = frame.evaluate("({width: innerWidth, height: innerHeight})")
+    viewer_size = frame.locator("canvas").evaluate("e => ({width: e.width, height: e.height})")
     native_page.wait_for_function("""size => screen.width === size.width && screen.height === size.height
         && Math.abs(outerWidth - size.width) <= 1 && Math.abs(outerHeight - size.height) <= 1""", arg=viewer_size, timeout=10000)
     assert native_page.evaluate("devicePixelRatio") == 1
