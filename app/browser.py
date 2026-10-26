@@ -408,7 +408,7 @@ def _restore_legacy_state(context, state):
                 entries[origin].append([value["name"], value["value"]])
         # storage_state(indexed_db=True) also exports IndexedDB payloads. They
         # are not migrated here, so bound only the data we actually restore.
-        if len(json.dumps({"cookies": cookies, "origins": entries}).encode()) > 2 * 1024 * 1024:
+        if len(json.dumps({"cookies": cookies, "origins": entries}).encode()) > 8 * 1024 * 1024:
             raise ValueError
     except (ValueError, TypeError, OverflowError, RecursionError):
         raise BrowserError("Saved browser session is invalid") from None
