@@ -145,9 +145,13 @@ def test_packaged_novnc_connects_read_only_without_pausing_task(settings, resour
                 url = url.replace("127.0.0.1", os.environ["BRIDGE_TEST_LAN_HOST"])
             context = browser.new_context(service_workers="block")
             failed_assets = []
+            # Debian omits optional version metadata; noVNC catches that 404.
+            # Authentication errors, including on this URL, must still fail.
             context.on("response", lambda response: failed_assets.append(
                 (response.url, response.status)
-            ) if "/novnc/" in response.url and response.status >= 400 else None)
+            ) if "/novnc/" in response.url and response.status >= 400 and not (
+                response.url.endswith("/novnc/package.json") and response.status == 404
+            ) else None)
             try:
                 response = context.request.post(
                     url + "/api/v1/auth/login",
