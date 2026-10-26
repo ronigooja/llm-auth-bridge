@@ -73,14 +73,8 @@ jobs:
           BRIDGE_TEST_GOST: /tmp/gost
         run: |
           set -euo pipefail
-          workspace="$GITHUB_WORKSPACE"
-          if ! git -C "$workspace" rev-parse --show-toplevel >/dev/null 2>&1; then
-            workspace=$(dirname "$(find /__w -type d -name .git -print -quit)")
-          fi
-          cd "$workspace"
+          cd "$GITHUB_WORKSPACE"
           mkdir -p check-logs
-          git rev-parse HEAD > check-logs/source-revision.txt
-          git status --porcelain=v1 -- . ':!check-logs' > check-logs/uncommitted-inputs.txt
           printf 'run=%s\njob=%s\nos=%s\narch=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$GITHUB_JOB" "$RUNNER_OS" "$RUNNER_ARCH" > check-logs/environment.txt
           apt-get update
           apt-get install -y xvfb xauth novnc x11vnc websockify tigervnc-standalone-server openbox x11-utils
@@ -102,11 +96,7 @@ jobs:
           BRIDGE_TEST_GOST: /tmp/gost
         run: |
           set -euo pipefail
-          workspace="$GITHUB_WORKSPACE"
-          if ! git -C "$workspace" rev-parse --show-toplevel >/dev/null 2>&1; then
-            workspace=$(dirname "$(find /__w -type d -name .git -print -quit)")
-          fi
-          cd "$workspace"
+          cd "$GITHUB_WORKSPACE"
           set +e
           timeout --kill-after=10s 7m bash -o pipefail -c 'xvfb-run -a -s "-screen 0 1920x1080x24" uv run pytest -v -ra -o faulthandler_timeout=120 --junitxml=check-logs/pytest.xml 2>&1 | tee check-logs/pytest.log'
           result=$?
