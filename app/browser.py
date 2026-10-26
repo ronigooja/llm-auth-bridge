@@ -19,6 +19,7 @@ import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from .browser_device import device_directory
+from .browser_identity import configure_page_identity
 from .routing import account_route
 from .route_timezone import resolve_timezone
 from .totp import generate_code, seconds_remaining
@@ -621,6 +622,7 @@ def _run_login(
                 device.mark_ready()
                 context.set_default_timeout(10000)
                 page = context.new_page()
+                configure_page_identity(context, page, account["_browser_profile"])
                 fit_browser_window(context, page)
                 if hasattr(control, "browser_ready"):
                     control.browser_ready(

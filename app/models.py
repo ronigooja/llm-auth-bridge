@@ -81,6 +81,10 @@ class Proxy(Model):
         return v
 
 
+class BrowserIdentityBody(Model):
+    platform: Literal["windows", "macos"]
+
+
 class AccountPatch(Model):
     username: str | None = Field(default=None, min_length=1, max_length=320)
     password: str | None = Field(default=None, min_length=1, max_length=4096)

@@ -374,6 +374,7 @@ def test_native_browser_uses_saved_account_context_and_fences_callback(monkeypat
             assert events[-1] == "browser_closed"
 
     monkeypatch.setattr(browser_module, "fit_browser_window", lambda *a: None)
+    monkeypatch.setattr(browser_module, "configure_page_identity", lambda *a: None)
     monkeypatch.setattr(browser_module, "device_directory", fake_device)
     monkeypatch.setattr(native_module, "NativeOAuth", Native)
     monkeypatch.setattr(playwright.sync_api, "sync_playwright", fake_playwright)

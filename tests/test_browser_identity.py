@@ -214,7 +214,8 @@ def test_profile_v1_upgrade_preserves_seed_preferences_and_cipher_once(settings,
     key, queue, task = claimed(settings, *resources)
     legacy, old_cipher = legacy_profile(settings, resources[0], key)
     upgraded = profile_for(settings, key, queue, task)
-    assert upgraded['version'] == 2
+    assert upgraded['version'] == 3
+    assert upgraded['browser'] == {'platform': 'windows'}
     assert upgraded['identity_seed'] == legacy['identity_seed']
     expected = dict(legacy['context'])
     expected.update(viewport={'width': 1760, 'height': 900}, screen={'width': 1920, 'height': 1080})
@@ -248,3 +249,50 @@ def test_profile_upgrade_fenced_before_write(settings, resources, monkeypatch, f
         profile_for(settings, key, queue, task)
     with database(settings.db_path) as conn:
         assert conn.execute('SELECT profile_cipher FROM browser_profiles').fetchone()[0] == cipher
+
+
+def test_platform_api_preserves_existing_device_and_seed(settings, resources, admin):
+    account_id, target_id = resources
+    key, queue, task = claimed(settings, account_id, target_id)
+    original = profile_for(settings, key, queue, task)
+    endpoint = f'/api/v1/accounts/{account_id}/browser-identity'
+    assert admin.get(endpoint).json() == {'platform': 'windows'}
+    assert admin.put(endpoint, json={'platform': 'macos'}).status_code == 409
+    queue.finish(task['id'], task['execution_id'], 'failed', 'failed', 'Synthetic failure')
+    # The device archive and saved sessions are deliberately not edited here.
+    with database(settings.db_path) as conn:
+        conn.execute('INSERT INTO browser_devices(account_id,archive_cipher,updated_at) VALUES(?,?,?)',
+                     (account_id, b'synthetic-encrypted-device', time.time()))
+    response = admin.put(endpoint, json={'platform': 'macos'})
+    assert response.status_code == 200, response.text
+    assert response.json() == admin.get(endpoint).json() == {'platform': 'macos'}
+    with database(settings.db_path) as conn:
+        updated = json.loads(decrypt(conn.execute('SELECT profile_cipher FROM browser_profiles WHERE account_id=?', (account_id,)).fetchone()[0], key))
+        assert updated['identity_seed'] == original['identity_seed']
+        assert updated['context'] == original['context']
+        assert conn.execute('SELECT archive_cipher FROM browser_devices WHERE account_id=?', (account_id,)).fetchone()[0] == b'synthetic-encrypted-device'
+    assert admin.put(endpoint, json={'platform': 'linux'}).status_code == 422
+    assert admin.put(endpoint, json={'platform': 'windows', 'user_agent': 'arbitrary'}).status_code == 422
+    assert 'identity_seed' not in response.text
+
+
+def test_version_two_upgrade_preserves_device_preferences(settings, resources):
+    key, queue, task = claimed(settings, *resources)
+    old = generate_profile()
+    old['version'] = 2
+    old.pop('browser')
+    with database(settings.db_path) as conn:
+        conn.execute('INSERT INTO browser_profiles(account_id,profile_cipher) VALUES(?,?)',
+                     (resources[0], encrypt(json.dumps(old), key)))
+    upgraded = profile_for(settings, key, queue, task)
+    assert upgraded['version'] == 3
+    assert upgraded['browser'] == {'platform': 'windows'}
+    assert upgraded['identity_seed'] == old['identity_seed']
+    assert upgraded['context'] == old['context']
+
+
+@pytest.mark.parametrize('version', ['148', 'Chrome/148.0.0.0', '', '148.0.0.0\r\nInjected: yes'])
+def test_identity_rejects_invalid_engine_version(version):
+    from app.browser_identity import user_agent_override
+    with pytest.raises(ValueError, match='Unsupported Chromium version'):
+        user_agent_override(generate_profile(), version)

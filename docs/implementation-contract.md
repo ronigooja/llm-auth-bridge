@@ -69,3 +69,12 @@ stored timezone. No automatic language or user-agent fabrication is performed.
 The fixed public lookup endpoint is `https://ipwho.is/`; response bodies are
 bounded, redirects refused and IP/timezone fields validated. Login credentials
 are never sent to the lookup service.
+
+### Account platform identity (profile v3)
+
+Authenticated administrator GET/PUT `/accounts/{id}/browser-identity` reads or
+sets `{"platform":"windows"|"macos"}`. Writes reject any active/queued task.
+Preferences are encrypted in `browser_profiles`; seeds and device archives are
+preserved. Managed pages receive matching UA, navigator platform and UA-CH via
+native CDP before navigation, using the running engine's version. See
+[browser identity](browser-identity.md) for migration and coverage limits.

@@ -28,6 +28,7 @@ from .models import (
     TaskBody,
     LoginFlowBody,
     BrowserBody,
+    BrowserIdentityBody,
     CodeBody,
     SettingsBody,
     DiscardBody,
@@ -356,6 +357,37 @@ def create_app(settings: Settings | None = None):
                 "mailbox_url": decrypt(row["mailbox_url_cipher"], key) if row["mailbox_url_cipher"] else None,
                 "proxy": json.loads(decrypt(row["proxy_cipher"], key)) if row["proxy_cipher"] else None,
             }
+
+    @app.get("/api/v1/accounts/{account_id}/browser-identity")
+    def account_browser_identity(account_id: int):
+        from .browser_identity import _upgrade_profile, browser_preferences
+        with database(settings.db_path) as conn:
+            get_row(conn, "accounts", account_id)
+            row = conn.execute("SELECT profile_cipher FROM browser_profiles WHERE account_id=?",
+                               (account_id,)).fetchone()
+            if row is None:
+                return {"platform": "windows"}
+            profile = _upgrade_profile(json.loads(decrypt(row[0], app.state.key)))
+            return browser_preferences(profile)
+
+    @app.put("/api/v1/accounts/{account_id}/browser-identity")
+    def update_account_browser_identity(account_id: int, body: BrowserIdentityBody):
+        from .browser_identity import _upgrade_profile, generate_profile
+        with database(settings.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            get_row(conn, "accounts", account_id)
+            check_busy(conn, "account_id", account_id, include_queued=True)
+            row = conn.execute("SELECT profile_cipher FROM browser_profiles WHERE account_id=?",
+                               (account_id,)).fetchone()
+            profile = (_upgrade_profile(json.loads(decrypt(row[0], app.state.key)))
+                       if row else generate_profile())
+            profile["browser"] = body.model_dump()
+            conn.execute(
+                "INSERT INTO browser_profiles(account_id,profile_cipher) VALUES(?,?) "
+                "ON CONFLICT(account_id) DO UPDATE SET profile_cipher=excluded.profile_cipher",
+                (account_id, encrypt(json.dumps(profile), app.state.key)),
+            )
+            return profile["browser"]
 
     def save_account(body, account_id=None):
         key = app.state.key

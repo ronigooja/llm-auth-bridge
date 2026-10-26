@@ -19,3 +19,9 @@ The native-close cleanup depends on the management page remaining open. Refreshi
 The worker uses a resizable TigerVNC desktop and Openbox. The headed browser uses its native viewport and is maximized so its content follows desktop resize events while retaining browser chrome. Startup resets restored window bounds without changing account identity or storage. A fixed-size Xvfb/x11vnc worker cannot provide this behavior; deploy the complete worker runtime together with the viewer and monitor filter changes. Copying Python files into a legacy worker image is insufficient.
 
 Real-account provider login, persistence, live noVNC interaction, and popup behavior across production browser policies remain unverified until serial real-account acceptance. Synthetic frontend tests cover endpoint contracts, target selection, monitor-to-takeover gating, native popup closure, delayed readiness, close-response loss and recovery, and blocked popups.
+
+The managed Chromium page now applies its account's Windows/macOS identity before
+navigation. This applies equally to idle account windows and login tasks; the
+popup/noVNC transport is unchanged. Platform selection is currently available
+through the administrator API only. See [browser identity](browser-identity.md)
+for the first-phase scope and unverified fingerprint surfaces.

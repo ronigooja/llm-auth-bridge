@@ -1,17 +1,14 @@
-"""Encrypted account-scoped native browser options, independent of credentials.
-
-This is a stable context profile, not a replacement browser fingerprint engine.
-No JavaScript patches, user-agent fabrication, or provider device IDs are used.
-"""
+"""Encrypted account identity preferences; not a complete fingerprint engine."""
 
 import json
 import secrets
+import re
 
 from .crypto import decrypt, encrypt
 from .db import database
 from .queue import Cancelled
 
-PROFILE_VERSION = 2
+PROFILE_VERSION = 3
 VIEWPORT = {"width": 1760, "height": 900}
 SCREEN = {"width": 1920, "height": 1080}
 
@@ -26,6 +23,7 @@ def generate_profile(used_dimensions: set[tuple[int, int]] | None = None) -> dic
     return {
         "version": PROFILE_VERSION,
         "identity_seed": secrets.token_hex(32),
+        "browser": {"platform": "windows"},
         "context": {
             "viewport": dict(VIEWPORT),
             "screen": dict(SCREEN),
@@ -43,12 +41,71 @@ def generate_profile(used_dimensions: set[tuple[int, int]] | None = None) -> dic
 
 def _upgrade_profile(profile: dict) -> dict:
     """Normalize legacy geometry without changing the account seed or prefs."""
-    if profile.get("version") == 1:
+    if profile.get("version") in (1, 2):
         profile = json.loads(json.dumps(profile))
+        if profile["version"] == 1:
+            profile["context"].update(viewport=dict(VIEWPORT), screen=dict(SCREEN))
         profile["version"] = PROFILE_VERSION
-        profile["context"].update(viewport=dict(VIEWPORT), screen=dict(SCREEN))
+        profile["browser"] = {"platform": "windows"}
     context_options(profile)
+    browser_preferences(profile)
     return profile
+
+
+def browser_preferences(profile: dict) -> dict:
+    browser = profile.get("browser")
+    if (profile.get("version") != PROFILE_VERSION or not isinstance(browser, dict)
+            or set(browser) != {"platform"} or browser["platform"] not in ("windows", "macos")):
+        raise ValueError("Invalid browser identity preferences")
+    return dict(browser)
+
+
+def user_agent_override(profile: dict, version: str) -> dict:
+    """Build matching UA / UA-CH / navigator.platform for the running engine.
+
+    OS preferences are stable per account. Browser version follows the actual
+    executable; it is never randomized or pinned to a fictitious Chrome build.
+    This deliberately makes no claim about fonts, graphics, workers or TLS.
+    """
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){3}", version):
+        raise ValueError("Unsupported Chromium version")
+    platform = browser_preferences(profile)["platform"]
+    major = version.split(".")[0]
+    if platform == "windows":
+        os_token, navigator_platform, ch_platform, os_version = (
+            "Windows NT 10.0; Win64; x64", "Win32", "Windows", "10.0.0")
+    else:
+        os_token, navigator_platform, ch_platform, os_version = (
+            "Macintosh; Intel Mac OS X 10_15_7", "MacIntel", "macOS", "10.15.7")
+    return {
+        "userAgent": (f"Mozilla/5.0 ({os_token}) AppleWebKit/537.36 "
+                      f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36"),
+        "acceptLanguage": profile["context"]["locale"],
+        "platform": navigator_platform,
+        "userAgentMetadata": {
+            "brands": [{"brand": "Chromium", "version": major},
+                       {"brand": "Not_A Brand", "version": "99"}],
+            "fullVersionList": [{"brand": "Chromium", "version": version},
+                                {"brand": "Not_A Brand", "version": "99.0.0.0"}],
+            "fullVersion": version,
+            "platform": ch_platform, "platformVersion": os_version,
+            "architecture": "x86", "bitness": "64", "model": "",
+            "mobile": False, "wow64": False,
+        },
+    }
+
+
+def configure_page_identity(context, page, profile: dict):
+    """Apply native CDP emulation to the managed page before navigation.
+
+    Keep the session attached for the page lifetime; the browser context owns
+    its cleanup. Exceptions must stop navigation rather than silently exposing
+    a partial identity. No JavaScript property replacement is installed.
+    """
+    session = context.new_cdp_session(page)
+    product = session.send("Browser.getVersion")["product"]
+    version = product.split("/", 1)[-1]
+    session.send("Emulation.setUserAgentOverride", user_agent_override(profile, version))
 
 
 def context_options(profile: dict, *, native_window: bool = False) -> dict:
