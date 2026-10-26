@@ -70,6 +70,7 @@ def test_headed_identity_first_request_headers_js_iframe_and_restart(tmp_path, p
                 assert observed['platform'] == nav
                 assert observed['language'] == 'en-US'
                 assert observed['ch']['platform'] == expected
+                assert observed['ch']['platformVersion'] == ('15.0.0' if platform == 'macos' else '10.0.0')
                 assert observed['ch']['architecture'] == 'x86'
                 assert observed['ch']['bitness'] == '64'
                 major = context.browser.version.split('.')[0]
