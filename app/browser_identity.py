@@ -105,7 +105,16 @@ def configure_page_identity(context, page, profile: dict):
     session = context.new_cdp_session(page)
     product = session.send("Browser.getVersion")["product"]
     version = product.split("/", 1)[-1]
-    session.send("Emulation.setUserAgentOverride", user_agent_override(profile, version))
+    override = user_agent_override(profile, version)
+    session.send("Emulation.setUserAgentOverride", override)
+    # CDP UA emulation does not change legacy navigator.platform. Keep that
+    # property coherent for documents and ordinary frames. Dedicated Worker
+    # globals are intentionally not rewritten by this page-scoped hook.
+    platform = override["platform"]
+    context.add_init_script(
+        "Object.defineProperty(Navigator.prototype, 'platform', "
+        + "{get: () => " + json.dumps(platform) + ", configurable: true});"
+    )
 
 
 def context_options(profile: dict, *, native_window: bool = False) -> dict:

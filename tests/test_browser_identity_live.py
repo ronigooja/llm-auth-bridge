@@ -45,6 +45,15 @@ PROBE = """async () => ({
     language: navigator.language, webdriver: navigator.webdriver,
     ch: await navigator.userAgentData.getHighEntropyValues([
         'platformVersion', 'architecture', 'bitness', 'fullVersionList'])
+    worker: await new Promise(resolve => {
+        const url = URL.createObjectURL(new Blob([
+            "postMessage({platform: navigator.platform, webdriver: navigator.webdriver})"
+        ], {type: 'text/javascript'}));
+        const worker = new Worker(url);
+        const timer = setTimeout(() => { worker.terminate(); URL.revokeObjectURL(url); resolve(null); }, 3000);
+        worker.onmessage = event => { clearTimeout(timer); worker.terminate(); URL.revokeObjectURL(url); resolve(event.data); };
+        worker.onerror = () => { clearTimeout(timer); worker.terminate(); URL.revokeObjectURL(url); resolve(null); };
+    })
 })"""
 
 
@@ -68,6 +77,8 @@ def test_headed_identity_first_request_headers_js_iframe_and_restart(tmp_path, p
                 observed = page.evaluate(PROBE)
                 assert 'Linux' not in observed['ua'] and 'HeadlessChrome' not in observed['ua']
                 assert observed['platform'] == nav
+                assert observed['webdriver'] is False
+                assert observed['worker'] and observed['worker']['platform'] == 'Linux x86_64'
                 assert observed['language'] == 'en-US'
                 assert observed['ch']['platform'] == expected
                 assert observed['ch']['platformVersion'] == ('15.0.0' if platform == 'macos' else '10.0.0')

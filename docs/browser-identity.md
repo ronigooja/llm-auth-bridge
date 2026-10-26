@@ -20,6 +20,10 @@ No arbitrary UA string or random version is accepted. Browser updates naturally
 change the browser version, while the account's OS preference stays unchanged.
 Locale follows the saved account preference; proxy timezone resolution, fixed
 account routing, sandboxing, private VNC and encrypted device storage are retained.
+The page and ordinary frames also receive a read-only `navigator.platform`
+override (`Win32` or `MacIntel`). Blink's automation-controlled feature is
+disabled for the managed browser and measured in synthetic CI; this does not
+change the host OS or provide a general stealth browser.
 
 ## Configuration API
 
@@ -42,13 +46,17 @@ schema migration. The management UI does not yet expose a platform selector.
 ## Scope and limits
 
 This phase emulates the identity of the bridge-managed page and its ordinary
-same-process frames. It does not change the host OS, TLS implementation, fonts,
-Canvas, Audio or GPU/WebGL renderer. Dedicated/shared workers, out-of-process
+same-process frames. Dedicated Worker globals are intentionally not rewritten:
+generic Worker rewriting changes script URL/base semantics and can break provider
+code. Worker `navigator.platform` and platform-specific runtime values therefore
+remain unverified and may expose Linux. It does not change the host OS, TLS
+implementation, fonts, Canvas, Audio or GPU/WebGL renderer. Out-of-process
 frames and manually opened additional tabs/popups are not covered by this
 page-scoped override and remain unverified. APIRequestContext and downstream HTTP
 clients are separate transports; their headers are not covered by this override.
-This is not a complete anti-detect browser or AdsPower equivalent. Playwright's
-normal automation behavior, including `navigator.webdriver`, is retained.
+This is not a complete anti-detect browser or AdsPower equivalent. The
+`AutomationControlled` Blink feature is disabled, but other automation and
+runtime signals remain unverified.
 
 Synthetic headed CI checks cover the first navigation's UA and low-entropy
 UA-CH headers, high-entropy negotiated headers, JavaScript properties, an iframe
