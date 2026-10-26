@@ -76,7 +76,7 @@ def user_agent_override(profile: dict, version: str) -> dict:
             "Windows NT 10.0; Win64; x64", "Win32", "Windows", "10.0.0")
     else:
         os_token, navigator_platform, ch_platform, os_version = (
-            "Macintosh; Intel Mac OS X 10_15_7", "MacIntel", "macOS", "10.15.7")
+            "Macintosh; Intel Mac OS X 10_15_7", "MacIntel", "macOS", "15.0.0")
     return {
         "userAgent": (f"Mozilla/5.0 ({os_token}) AppleWebKit/537.36 "
                       f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36"),

@@ -12,7 +12,10 @@ Before the managed page navigates, the worker uses Chromium's native CDP
 `navigator.platform`, UA Client Hints platform/version/architecture/bitness and
 browser brand versions. Chrome's full version comes from `Browser.getVersion`
 on the running executable, while the reduced UA uses its actual major version.
-Windows uses a Windows 10 x64 identity; macOS uses an Intel macOS 10.15.7 identity.
+Windows uses a Windows 10 x64 identity; macOS uses an Intel macOS 15 identity.
+The macOS reduced UA retains Chromium's compatibility token `10_15_7`, while
+UA-CH reports `15.0.0`; these fields intentionally follow different version
+formats.
 No arbitrary UA string or random version is accepted. Browser updates naturally
 change the browser version, while the account's OS preference stays unchanged.
 Locale follows the saved account preference; proxy timezone resolution, fixed
