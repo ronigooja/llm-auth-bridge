@@ -721,8 +721,8 @@ function AccountForm({
         account ? "PATCH" : "POST",
         body,
       );
-      await saved();
       close();
+      await saved();
     });
   }
   return (
