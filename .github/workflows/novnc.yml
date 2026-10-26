@@ -57,7 +57,6 @@ jobs:
           BRIDGE_TEST_WEBKIT: "1"
           BRIDGE_TEST_LAN_HOST: bridge.test
           NO_PROXY: bridge.test,127.0.0.1,localhost
-          no_proxy: bridge.test,127.0.0.1,localhost
         run: |
           set -Eeuo pipefail
           exec > >(tee viewer-logs/browser.log) 2>&1
