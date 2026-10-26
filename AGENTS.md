@@ -9,16 +9,10 @@ Never read or copy real `auth.txt` in an agent task. Use synthetic fixtures. Cre
 Run `pytest` before handoff. Do not run account logins concurrently. The main agent performs real credential verification serially.
 
 
-## Build and test environments
-
-- Environment files and tooling are under `$HOME/environment`.
-- Run Linux builds and tests using `ssh root@136.0.11.159`.
-- If a required environment or tool is missing, install it under `$HOME/environment` and continue.
-
 ## Git baseline and branch lifecycle
 
 The GitHub default branch and integration target are `main`. Before development, fetch `origin`, preserve local changes, and create a new task branch from the freshly fetched `origin/main`. Do not resume a completed task branch as the next task's baseline. Record the base commit in the handoff.
 
-Before merging, fetch again. If `origin/main` has advanced, integrate it and validate the resulting revision in the required remote build and test environment. Merge only the validated revision; never force-push or reset main to synchronize it. Run pytest before handoff.
+Before merging, fetch again. If `origin/main` has advanced, integrate it and validate the resulting revision on GitHub-hosted Actions runners. Merge only the validated revision; never force-push or reset main to synchronize it. Run pytest on CI before handoff.
 
 After integration, check all associated worktrees for tracked and untracked changes. Remove only clean, completed worktrees. Delete completed branches only after verifying ancestry, patch equivalence, or reviewing combined changes against main. Preserve deployment and acceptance references as tags. Preserve uncommitted work in place and report it explicitly. See `docs/branch-audit-20261026.md` for the initial cleanup and recovery references.
