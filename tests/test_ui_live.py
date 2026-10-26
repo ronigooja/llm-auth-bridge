@@ -129,6 +129,7 @@ def test_built_ui_completes_import_login_human_code_and_sync(settings):
         page.get_by_label("网络路由").select_option("direct")
         page.get_by_label("Synthetic CPA", exact=True).check()
         page.get_by_label("Synthetic Voice", exact=True).check()
+        page.once("dialog", lambda dialog: dialog.accept())
         page.get_by_role("button", name="保存账号").click()
         page.get_by_role("button", name="登录 Codex", exact=True).click()
         login_dialog = page.get_by_role("dialog", name="登录 Codex")
