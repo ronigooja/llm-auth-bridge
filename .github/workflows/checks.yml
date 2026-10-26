@@ -45,7 +45,6 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
-      - name: Enable Chromium sandbox namespaces on ephemeral runner
       - name: Install checksum-verified synthetic proxy test executable
         run: |
           curl -fsSL https://github.com/go-gost/gost/releases/download/v3.3.1/gost_3.3.1_linux_amd64.tar.gz -o /tmp/gost.tar.gz
