@@ -29,6 +29,16 @@ jobs:
           git rev-parse HEAD > viewer-logs/source-revision.txt
           git status --porcelain=v1 -- . ':!viewer-logs' > viewer-logs/uncommitted-inputs.txt
           printf 'run=%s\njob=%s\nos=%s\narch=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$GITHUB_JOB" "$RUNNER_OS" "$RUNNER_ARCH" > viewer-logs/environment.txt
+      - name: Use bounded package downloads on the hosted runner
+        run: |
+          sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/apt-mirrors.txt
+          printf 'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "2";\n' | sudo tee /etc/apt/apt.conf.d/99bridge-downloads
+      - name: Restore viewer browser binaries
+        id: viewer_cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-${{ runner.arch }}-viewer-playwright-${{ hashFiles('uv.lock') }}
       - name: Install browsers and production Debian noVNC
         timeout-minutes: 6
         run: |
@@ -42,6 +52,12 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           echo '127.0.0.1 bridge.test' | sudo tee -a /etc/hosts
           npm ci --ignore-scripts --prefix frontend
+      - name: Save installed viewer browsers
+        if: ${{ steps.viewer_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.viewer_cache.outputs.cache-primary-key }}
       - name: Frontend and backend regression
         timeout-minutes: 5
         run: |

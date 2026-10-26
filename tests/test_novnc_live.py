@@ -244,7 +244,7 @@ def test_packaged_novnc_connects_read_only_without_pausing_task(settings, resour
             # A non-loopback HTTP hostname exercises LAN cookie/site behavior.
             if os.getenv("BRIDGE_TEST_LAN_HOST"):
                 url = url.replace("127.0.0.1", os.environ["BRIDGE_TEST_LAN_HOST"])
-            context = browser.new_context(service_workers="block")
+            context = browser.new_context(service_workers="block", device_scale_factor=2 if engine == "webkit" else 1)
             failed_assets = []
             # Debian omits optional version metadata; noVNC catches that 404.
             # Authentication errors, including on this URL, must still fail.
