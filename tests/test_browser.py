@@ -328,6 +328,32 @@ def test_legacy_state_rejects_invalid_shape_before_browser_mutation(state):
         _restore_legacy_state(context, state)
 
 
+def test_legacy_migration_ignores_large_indexeddb_export_but_limits_restored_values():
+    from types import SimpleNamespace
+    from app.browser import _restore_legacy_state
+    cookies, scripts = [], []
+    context = SimpleNamespace(add_cookies=cookies.extend, add_init_script=scripts.append)
+    state = {"cookies": [], "origins": [{
+        "origin": "https://example.test",
+        "localStorage": [{"name": "synthetic-key", "value": "synthetic-value"}],
+        "indexedDB": [{"name": "synthetic-db", "version": 1, "stores": [{
+            "name": "synthetic-store", "records": [{"value": "x" * (3 * 1024 * 1024)}],
+        }]}],
+    }]}
+    _restore_legacy_state(context, state)
+    assert cookies == []
+    assert len(scripts) == 1
+    assert 'synthetic-key' in scripts[0]
+    assert 'synthetic-db' not in scripts[0]
+    # Oversized values that would actually be restored still fail before writes.
+    scripts.clear()
+    state["origins"][0]["localStorage"][0]["value"] = "x" * (3 * 1024 * 1024)
+    with pytest.raises(BrowserError, match="^Saved browser session is invalid$"):
+        _restore_legacy_state(context, state)
+    assert cookies == []
+    assert scripts == []
+
+
 def session_cookie(**changes):
     return {"name": "synthetic-session", "value": "synthetic-secret", "domain": "example.test",
             "path": "/", "expires": -1, "httpOnly": True, "secure": True, "sameSite": "Lax", **changes}

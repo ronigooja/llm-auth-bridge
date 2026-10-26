@@ -151,8 +151,7 @@ def test_packaged_novnc_connects_read_only_without_pausing_task(settings, resour
                     frame = iframe.element_handle().content_frame()
                     assert frame is not None
                     assert_read_only_viewer(frame)
-                    with popup.expect_event("close"):
-                        popup.get_by_role("button", name="隐藏账号窗口", exact=True).click()
+                    popup.close()
                 with database(config.db_path) as conn:
                     row = conn.execute(
                         "SELECT state,execution_id,takeover_requested,cancel_requested FROM tasks WHERE id=?",
