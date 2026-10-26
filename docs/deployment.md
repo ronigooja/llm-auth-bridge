@@ -2,45 +2,14 @@
 
 The Compose stack has a web app and one serial browser worker sharing SQLite and a browser lock. Keep one worker replica. Authentication and downstream synchronization remain **unverified with real accounts**. Image builds and supported CPU architectures must pass CI and deployment acceptance; the presence of a Dockerfile is not verification.
 
-## Current deployment location and management
+## Current deployment location
 
-The current Linux deployment is an amd64 installation on `root@154.19.187.117`. The
-runtime project is `/opt/llm-auth-bridge`; its Compose file is
-`/opt/llm-auth-bridge/compose.yaml`, and its environment file is the private
-`/opt/llm-auth-bridge/.env`. The app is bound to `127.0.0.1:32378`, the patched
-Voice gateway is bound to `127.0.0.1:21387`, and the browser worker has no
-published port. The CLIProxyAPI installation is a separate project at
-`/opt/cliproxyapi` and is intentionally outside this deployment.
+The current Linux deployment is hosted on `root@154.19.187.117`.
 
-Builds and Linux checks use `root@136.0.11.159`. Source, toolchains, caches, and
-build artifacts are kept under `/root/environment`; this host is a build host,
-not the runtime host. The deployed images are tagged `llm-auth-bridge-app:7ae7000`,
-`llm-auth-bridge-worker:7ae7000`, and
-`llm-auth-bridge-voice:bridge-v1-32d696a`.
+Public domains:
 
-Manage the runtime serially over SSH:
-
-```sh
-ssh root@154.19.187.117
-cd /opt/llm-auth-bridge
-docker compose --env-file .env -f compose.yaml ps
-docker compose --env-file .env -f compose.yaml logs --tail=200 app worker voice
-docker compose --env-file .env -f compose.yaml up -d --wait
-docker compose --env-file .env -f compose.yaml restart app worker voice
-```
-
-The public sites are managed by Nginx:
-
-- `llm-auth-bridge.nodemgr.uk` proxies HTTPS to `127.0.0.1:32378`.
-- `chatgpt-web-voice.nodemgr.uk` proxies HTTPS to `127.0.0.1:21387`.
-- HTTP redirects to HTTPS; WebSocket upgrade headers are enabled.
-
-Validate and reload Nginx with `nginx -t && systemctl reload nginx`. Certbot
-renewal is provided by the enabled `certbot.timer`. Generated credentials remain
-on the deployment host under `/opt/llm-auth-bridge/.secrets/`; never copy their
-contents into Git or documentation. The administrator bootstrap password is in
-`.secrets/admin_password`; Voice Basic-auth values are in
-`.secrets/voice_username` and `.secrets/voice_password`.
+- `llm-auth-bridge.nodemgr.uk`
+- `chatgpt-web-voice.nodemgr.uk`
 
 ## Initialize
 
