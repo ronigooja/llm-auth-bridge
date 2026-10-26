@@ -299,7 +299,7 @@ def test_native_browser_uses_saved_account_context_and_fences_callback(monkeypat
     import app.browser as browser_module
     import app.cpa_oauth as native_module
     import playwright.sync_api
-    from app.browser_identity import generate_profile
+    from app.browser_identity import generate_profile, context_options
 
     events = []
     saved = {"cookies": [], "origins": []}
@@ -333,7 +333,7 @@ def test_native_browser_uses_saved_account_context_and_fences_callback(monkeypat
         def launch_persistent_context(self, **kwargs):
             assert "storage_state" not in kwargs
             assert kwargs["user_data_dir"] == str(tmp_path)
-            assert all(kwargs[k] == v for k, v in profile["context"].items())
+            assert all(kwargs[k] == v for k, v in context_options(profile, native_window=True).items())
             assert "identity_seed" not in kwargs
             events.append("context")
             return context
@@ -373,6 +373,7 @@ def test_native_browser_uses_saved_account_context_and_fences_callback(monkeypat
         finally:
             assert events[-1] == "browser_closed"
 
+    monkeypatch.setattr(browser_module, "fit_browser_window", lambda *a: None)
     monkeypatch.setattr(browser_module, "device_directory", fake_device)
     monkeypatch.setattr(native_module, "NativeOAuth", Native)
     monkeypatch.setattr(playwright.sync_api, "sync_playwright", fake_playwright)
