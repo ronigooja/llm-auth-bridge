@@ -5,6 +5,9 @@ on:
     branches: ["validation/**"]
 permissions:
   contents: read
+defaults:
+  run:
+    shell: bash
 concurrency:
   group: native-validation-${{ github.ref }}
   cancel-in-progress: true

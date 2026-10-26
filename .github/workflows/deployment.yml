@@ -5,6 +5,9 @@ on:
     branches: ["deployment/**"]
 permissions:
   contents: read
+defaults:
+  run:
+    shell: bash
 concurrency:
   group: deployment-${{ github.ref }}
   cancel-in-progress: true
