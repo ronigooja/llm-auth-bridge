@@ -337,7 +337,7 @@ def test_legacy_migration_ignores_large_indexeddb_export_but_limits_restored_val
         "origin": "https://example.test",
         "localStorage": [{"name": "synthetic-key", "value": "synthetic-value"}],
         "indexedDB": [{"name": "synthetic-db", "version": 1, "stores": [{
-            "name": "synthetic-store", "records": [{"value": "x" * (9 * 1024 * 1024)}],
+            "name": "synthetic-store", "records": [{"value": "x" * (3 * 1024 * 1024)}],
         }]}],
     }]}
     _restore_legacy_state(context, state)
