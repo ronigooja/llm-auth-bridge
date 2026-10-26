@@ -61,6 +61,7 @@ jobs:
   browser_acceptance:
     needs: validate
     runs-on: ubuntu-24.04
+    container: debian:12
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
