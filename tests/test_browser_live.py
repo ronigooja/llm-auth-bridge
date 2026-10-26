@@ -140,6 +140,7 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, tmp_path, scenario
     import app.browser as module
     import playwright.sync_api
     monkeypatch.setattr(module, "configure_page_identity", lambda *args: None)
+    monkeypatch.setattr(module, "fit_browser_window", lambda *args: None)
 
     phases, inputs, waits = [], [], []
     page_holder = []
@@ -600,6 +601,7 @@ def test_codex_existing_session_continuation_is_identity_bound_and_recovers(
     import app.browser as module
     from app.browser_identity import generate_profile
     monkeypatch.setattr(module, "configure_page_identity", lambda *args: None)
+    monkeypatch.setattr(module, "fit_browser_window", lambda *args: None)
 
     identity = "synthetic@example.com"
     callback_state = None
