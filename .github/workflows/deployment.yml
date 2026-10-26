@@ -42,7 +42,6 @@ jobs:
           printf 'run=%s\njob=%s\nos=%s\narch=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$GITHUB_JOB" "$RUNNER_OS" "$RUNNER_ARCH" > deployment-logs/environment.txt
           exec > deployment-logs/validation.log 2>&1
           trap 'rc=$?; printf "%s\n" "$rc" > deployment-logs/validation.exit' EXIT
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           curl -fsSL https://github.com/go-gost/gost/releases/download/v3.3.1/gost_3.3.1_linux_amd64.tar.gz -o /tmp/gost.tar.gz
           echo 'e0e3a2c9116e2f025e962bba340749f80696bda318613d45e5ae96dd0bcae37c  /tmp/gost.tar.gz' | sha256sum -c -
           tar -xzf /tmp/gost.tar.gz -C /tmp gost
@@ -87,9 +86,8 @@ jobs:
           set -Eeuo pipefail
           uv sync --frozen --extra test --extra browser
           uv run playwright install --with-deps chromium
-          sudo apt-get update
-          sudo apt-get install -y xvfb xauth novnc x11vnc websockify tigervnc-standalone-server openbox x11-utils
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          apt-get update
+          apt-get install -y xvfb xauth novnc x11vnc websockify tigervnc-standalone-server openbox x11-utils
       - name: Run bounded headed acceptance
         timeout-minutes: 8
         env: {BRIDGE_TEST_GOST: /tmp/gost}
