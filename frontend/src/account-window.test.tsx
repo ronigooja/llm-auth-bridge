@@ -40,7 +40,7 @@ describe("unified account window", () => {
     fireEvent.click(screen.getByRole("button", { name: "账号窗口" }));
     expect(window.open).toHaveBeenCalledOnce();
     expect(target.focus).toHaveBeenCalledOnce();
-    fireEvent.click(within(target.document.body).getByRole("button", { name: "隐藏账号窗口" }));
+    expect(within(target.document.body).queryByRole("button", { name: /保存|隐藏/ })).toBeNull();
     expect(fetch).toHaveBeenCalledTimes(1);
   });
   it("keeps monitoring until the worker confirms paused automation", async () => {
@@ -60,20 +60,24 @@ describe("unified account window", () => {
     task.state = "waiting_human";
     await waitFor(() => expect(target.document.querySelector("iframe")?.src).toContain("view_only=false&shared=true&path=api/v1/tasks/7/takeover"), { timeout: 2500 });
   });
-  it("saves idle sessions on the explicit close control", async () => {
+  it("waits for idle readiness after native closure without offering extra close controls", async () => {
+    vi.useFakeTimers();
     const target = popup();
-    const task = { id: 8, kind: "browser_window", state: "waiting_human", phase: "browser_window", takeover_available: true };
+    const task = { id: 8, kind: "browser_window", state: "queued", phase: "browser_window", takeover_available: false };
     const calls: string[] = [];
     vi.stubGlobal("fetch", vi.fn((input) => { calls.push(String(input)); return json({ task }); }));
     render(<Harness />);
-    fireEvent.click(screen.getByRole("button", { name: "账号窗口" }));
-    await waitFor(() => expect(target.document.querySelector("iframe")?.src).toContain("/takeover"));
-    fireEvent.click(within(target.document.body).getByRole("button", { name: "保存并关闭账号窗口" }));
-    await waitFor(() => expect(calls).toContain("/api/v1/tasks/8/continue"));
-    expect(target.close).not.toHaveBeenCalled();
-    expect(within(target.document.body).getByRole("status").textContent).toContain("正在保存");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "账号窗口" })); });
+    expect(within(target.document.body).queryAllByRole("button")).toHaveLength(0);
+    target.closed = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(calls.filter((path) => path.endsWith("/continue"))).toHaveLength(0);
+    task.state = "waiting_human";
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(calls.filter((path) => path.endsWith("/continue"))).toHaveLength(1);
     task.state = "succeeded";
-    await waitFor(() => expect(target.close).toHaveBeenCalled(), { timeout: 2500 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(screen.queryByRole("alert")).toBeNull();
   });
   it.each(["browser_window", "login"])("handles native closure for %s without cancelling login", async (kind) => {
     const target = popup();
@@ -107,23 +111,95 @@ describe("unified account window", () => {
     expect(calls.filter((path) => path.endsWith("/continue"))).toHaveLength(1);
     expect(target.close).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole("button", { name: "另一个账号窗口" }));
-    expect(screen.getByRole("alert").textContent).toContain("等待保存完成");
+    expect(screen.getByRole("alert").textContent).toContain("正在关闭或等待就绪");
     expect(window.open).toHaveBeenCalledOnce();
 
     // The server can still report waiting_human after accepting Continue.
     // Saving must not repeatedly re-enter finish() and starve this GET.
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
-    expect(polledStates).toEqual(["waiting_human"]);
+    expect(polledStates).toEqual(["waiting_human", "waiting_human"]);
     task.state = "running";
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     task.state = "succeeded";
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
-    expect(polledStates).toEqual(["waiting_human", "running", "succeeded"]);
+    expect(polledStates).toEqual(["waiting_human", "waiting_human", "running", "succeeded"]);
     expect(calls.filter((path) => path.endsWith("/continue"))).toHaveLength(1);
     target.closed = false;
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "另一个账号窗口" })); });
     expect(calls).toContain("/api/v1/accounts/2/browser");
     expect(window.open).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+  it.each([
+    ["succeeded", false], ["failed", false],
+    ["succeeded", true], ["failed", true],
+  ] as const)("reconciles a lost close response before %s (conflict: %s)", async (terminal, conflict) => {
+    vi.useFakeTimers();
+    const target = popup();
+    const task = { id: 8, kind: "browser_window", state: "waiting_human", phase: "browser_window", takeover_available: true };
+    const calls: string[] = [];
+    let attempts = 0;
+    vi.stubGlobal("fetch", vi.fn((input) => {
+      const path = String(input); calls.push(path);
+      if (path.endsWith("/continue")) {
+        attempts++;
+        if (attempts === 1) return Promise.reject(new Error("synthetic lost close response"));
+        return Promise.resolve(new Response(JSON.stringify({ detail: "synthetic already closing" }), { status: 409 }));
+      }
+      return json({ task });
+    }));
+    render(<Harness />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "账号窗口" })); });
+    target.closed = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(screen.getByRole("alert").textContent).toContain("synthetic lost close response");
+    if (conflict) {
+      // An accepted close may temporarily still appear waiting_human.
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(screen.getByRole("alert").textContent).toContain("synthetic already closing");
+    }
+    task.state = terminal;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(calls.slice(1)).toEqual([
+      "/api/v1/tasks/8", "/api/v1/tasks/8/continue",
+      ...(conflict ? ["/api/v1/tasks/8", "/api/v1/tasks/8/continue"] : []),
+      "/api/v1/tasks/8",
+    ]);
+    if (terminal === "succeeded") expect(screen.queryByRole("alert")).toBeNull();
+    else expect(screen.getByRole("alert").textContent).toContain("浏览器状态尚未确认保存");
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(attempts).toBe(conflict ? 2 : 1);
+    // Either terminal result releases the account switch; a failure stays visible
+    // until the operator explicitly opens a different account.
+    target.closed = false;
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "另一个账号窗口" })); });
+    expect(calls).toContain("/api/v1/accounts/2/browser");
+    expect(window.open).toHaveBeenCalledTimes(2);
+  });
+  it.each([false, true])("finishes closing after reopening the same idle viewer (lost response: %s)", async (lost) => {
+    vi.useFakeTimers();
+    const target = popup();
+    const task = { id: 8, kind: "browser_window", state: "waiting_human", takeover_available: true };
+    let attempts = 0;
+    vi.stubGlobal("fetch", vi.fn((input) => {
+      if (String(input).endsWith("/continue")) {
+        attempts++;
+        if (lost && attempts === 1) return Promise.reject(new Error("synthetic lost response"));
+      }
+      return json({ task });
+    }));
+    render(<Harness />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "账号窗口" })); });
+    target.closed = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "账号窗口" })); });
+    target.closed = false;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(attempts).toBe(lost ? 2 : 1);
+    expect(within(target.document.body).getByRole("status").textContent).toContain("正在关闭");
+    task.state = "succeeded";
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(target.close).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("alert")).toBeNull();
   });
   it("keeps polling through Voice synchronization, follows Codex, and explicitly rebinds an ended popup", async () => {
@@ -182,6 +258,33 @@ describe("unified account window", () => {
     expect(screen.getByRole("alert").textContent).toContain("拦截");
     expect(fetch).not.toHaveBeenCalled();
   });
+});
+
+it.each([
+  ["browser_window", "opening", false],
+  ["login", "browser_window", false],
+  ["login", "manual_required", true],
+] as const)("only offers task-page Continue for login work (%s, %s)", async (kind, phase, canContinue) => {
+  window.history.replaceState(null, "", "/#tasks/7");
+  vi.stubGlobal("EventSource", class { addEventListener() {} close() {} });
+  const task = { id: 7, account_id: 1, kind, phase, state: "waiting_human" };
+  const calls: { path: string; method?: string }[] = [];
+  vi.stubGlobal("fetch", vi.fn((input, init) => {
+    const path = String(input); calls.push({ path, method: init?.method });
+    if (path.endsWith("/auth/session")) return json({ csrf_token: "synthetic" });
+    if (path.endsWith("/accounts")) return json({ accounts: [] });
+    if (path.endsWith("/targets")) return json({ targets: [] });
+    if (path.endsWith("/tasks")) return json({ tasks: [task] });
+    if (path.endsWith("/history")) return json({ events: [] });
+    return json(task);
+  }));
+  render(<App />);
+  await screen.findByRole("button", { name: "账号窗口" });
+  expect(screen.queryByRole("button", { name: /保存账号窗口|隐藏账号窗口|保存并关闭账号窗口/ })).toBeNull();
+  if (canContinue) {
+    fireEvent.click(screen.getByRole("button", { name: "继续任务" }));
+    await waitFor(() => expect(calls.some((call) => call.path.endsWith("/tasks/7/continue") && call.method === "POST")).toBe(true));
+  } else expect(screen.queryByRole("button", { name: "继续任务" })).toBeNull();
 });
 
 it("requires an explicit bound target choice when a kind has multiple targets", async () => {

@@ -1287,7 +1287,7 @@ function TaskDetail({ id, updated, openAccountWindow }: { id: number; updated: (
         <>
           <p className="phase">{label(task.phase || task.state)}</p>
           {task.message && <p>{task.message}</p>}
-          {task.state === "waiting_human" && (
+          {task.state === "waiting_human" && task.kind !== "browser_window" && task.phase !== "browser_window" && (
             <>
               {task.phase === "password_required" && (
                 <p className="muted">密码页面仍未通过。请接管浏览器检查密码或页面提示，完成后点击“继续任务”。</p>
@@ -1324,7 +1324,7 @@ function TaskDetail({ id, updated, openAccountWindow }: { id: number; updated: (
                   disabled={m.busy}
                   onClick={() => void action("continue")}
                 >
-                  {task.phase === "browser_window" ? "保存账号窗口" : "继续任务"}
+                  继续任务
                 </button>
               </div>
             </>

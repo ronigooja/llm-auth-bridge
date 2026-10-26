@@ -18,6 +18,7 @@ export function useAccountWindow(enabled: boolean) {
   const busyRef = useRef(false);
   const opening = useRef(false);
   const saving = useRef<number | null>(null);
+  const closeRequested = useRef<number | null>(null);
   const followed = useRef(new Set<number>());
   const [closing, setClosing] = useState(false);
   const account = useRef<number | null>(null);
@@ -40,17 +41,18 @@ export function useAccountWindow(enabled: boolean) {
     if (!t || !idle(t) || t.state !== "waiting_human" || busyRef.current || saving.current === t.id) return;
     busyRef.current = true;
     saving.current = t.id;
+    closeRequested.current = t.id;
     setClosing(true);
     setBusy(true);
     try {
       await api(`/tasks/${t.id}/continue`, "POST");
       // Continue only accepts the close command. Poll until archive persistence
       // and worker cleanup actually reach a terminal state.
-      if (current.current?.id === t.id) setError("");
+      if (current.current?.id === t.id && active.has(current.current.state)) setError("");
     } catch (e) {
-      if (current.current?.id === t.id) {
+      if (current.current?.id === t.id && active.has(current.current.state)) {
         saving.current = null; setClosing(false);
-        setError(e instanceof Error ? e.message : "保存失败，请重新打开账号窗口后重试。");
+        setError(e instanceof Error ? e.message : "关闭账号窗口失败，正在重新确认任务状态。");
       }
     }
     finally { busyRef.current = false; setBusy(false); }
@@ -59,7 +61,7 @@ export function useAccountWindow(enabled: boolean) {
     if (popup.current && !popup.current.closed) {
       popup.current.focus();
       if (account.current !== accountId) {
-        setError("另一个账号窗口已打开，请先保存或隐藏该窗口，再打开此账号。");
+        setError("另一个账号窗口已打开，请先关闭该窗口，再打开此账号。");
         return;
       }
       if (!current.current || active.has(current.current.state)) return;
@@ -71,7 +73,7 @@ export function useAccountWindow(enabled: boolean) {
     const resumeIdle = !!previous && idle(previous) && active.has(previous.state);
     if (resumeIdle && account.current !== accountId) {
       if (popup.current?.closed) hide();
-      setError("上一个账号窗口正在保存或等待就绪，请等待保存完成后再打开其他账号。");
+      setError("上一个账号窗口正在关闭或等待就绪，请稍候再打开其他账号。");
       return;
     }
     const width = Math.max(1, Math.min(1600, window.screen.availWidth || window.innerWidth));
@@ -90,6 +92,7 @@ export function useAccountWindow(enabled: boolean) {
     setHost(root);
     if (resumeIdle) return;
     saving.current = null;
+    closeRequested.current = null;
     setClosing(false);
     update(null);
     setInteractive(false);
@@ -121,10 +124,11 @@ export function useAccountWindow(enabled: boolean) {
     if (!enabled) { hide(); update(null); }
   }, [enabled]);
   useEffect(() => {
-    if (task && current.current?.id === task.id && saving.current === task.id && !active.has(task.state)) {
+    if (task && current.current?.id === task.id && idle(task) && (hidden.current || closeRequested.current === task.id) && !active.has(task.state)) {
       saving.current = null;
+      closeRequested.current = null;
       setClosing(false);
-      if (task.state === "succeeded") hide();
+      if (task.state === "succeeded") { setError(""); hide(); }
       else setError("账号窗口保存未成功，请检查任务记录并重试；浏览器状态尚未确认保存。");
     }
   }, [task]);
@@ -157,11 +161,16 @@ export function useAccountWindow(enabled: boolean) {
         return;
       }
       if (!active.has(t.state)) return;
-      if (hidden.current && idle(t) && t.state === "waiting_human" && saving.current !== t.id) { void finish(); return; }
       polling = true;
       try {
         const result = await api<BrowserTask & { task?: BrowserTask }>(`/tasks/${t.id}`);
-        if (!disposed && current.current?.id === t.id) update(result.task || result);
+        if (!disposed && current.current?.id === t.id) {
+          const refreshed = result.task || result;
+          update(refreshed);
+          // Reconcile before every close attempt: a failed response can still
+          // mean Continue was accepted. Never let retries starve status polling.
+          if ((hidden.current || closeRequested.current === refreshed.id) && idle(refreshed) && refreshed.state === "waiting_human") void finish();
+        }
       } catch (e) { if (!disposed) setError(e instanceof Error ? e.message : "账号窗口连接中断"); }
       finally { polling = false; }
     }, 1000);
@@ -173,13 +182,10 @@ export function useAccountWindow(enabled: boolean) {
     {host && createPortal(<>
       <header style={{ padding: 12, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12 }}>
         <strong>账号窗口 · 账号 #{account.current}</strong>
-        <span role="status">{!task ? "正在准备账号浏览器…" : closing ? "正在保存浏览器状态，请稍候…" : task.state === "sync_pending" ? "正在同步账号，请稍候…" : !active.has(task.state) ? task.state === "succeeded" ? "任务已完成。" : "任务已结束，请检查任务记录。" : interactive ? "可操作浏览器" : "正在观察自动操作（只读）"}</span>
+        <span role="status">{!task ? "正在准备账号浏览器…" : closing ? "正在关闭账号窗口，请稍候…" : task.state === "sync_pending" ? "正在同步账号，请稍候…" : !active.has(task.state) ? task.state === "succeeded" ? "任务已完成。" : "任务已结束，请检查任务记录。" : interactive ? "可操作浏览器" : "正在观察自动操作（只读）"}</span>
         {task && active.has(task.state) && task.state !== "sync_pending" && !idle(task) && !interactive && <button disabled={busy || !available || takeoverRequested} onClick={() => void takeControl()}>{takeoverRequested ? "正在等待接管…" : "接管"}</button>}
-        {task && idle(task) && active.has(task.state)
-          ? <button disabled={busy || closing || task.state !== "waiting_human"} onClick={() => void finish()}>保存并关闭账号窗口</button>
-          : <button onClick={hide}>隐藏账号窗口</button>}
       </header>
-      <p style={{ margin: "0 12px 12px" }}>{task && idle(task) ? "关闭窗口会保存浏览器状态并结束本次手动会话。" : "隐藏窗口仅关闭查看器，登录任务会继续。接管后请返回任务页点击“继续任务”。"}</p>
+      <p style={{ margin: "0 12px 12px" }}>{task && idle(task) ? "完成后直接关闭窗口；后台会自动结束本次会话，请稍候。" : "关闭窗口仅关闭查看器，登录任务会继续。接管后请返回任务页点击“继续任务”。"}</p>
       {error && <p role="alert">{error}</p>}
       {available && <iframe title="账号浏览器" src={accountViewerUrl(task.id, interactive)} style={{ border: 0, width: "100%", flex: 1, minHeight: 0 }} />}
     </>, host)}
