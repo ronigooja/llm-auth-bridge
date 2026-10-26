@@ -489,7 +489,9 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts()
                     context.route("**/*", lambda route: route.fulfill(body="<p>Synthetic</p>", content_type="text/html"))
                     page = context.new_page()
                     fit_browser_window(context, page)
-                    page.wait_for_function("outerWidth === 1920 && outerHeight === 1080 && screenX === 0 && screenY === 0")
+                    page.wait_for_timeout(200)
+                    print("Fitted native geometry: " + json.dumps(page.evaluate("({width:innerWidth,height:innerHeight,outerWidth,outerHeight,screenX,screenY,screenWidth:screen.width,screenHeight:screen.height})")), flush=True)
+                    page.wait_for_function("outerWidth === 1920 && outerHeight === 1080 && screenX === 0 && screenY === 0", timeout=5000)
                     page.goto("https://device.example.test/")
                     yield context, page, device.path
                 finally:
@@ -703,7 +705,7 @@ def test_codex_existing_session_continuation_is_identity_bound_and_recovers(
                 context.route("**/*", intercept)
                 page = context.new_page()
                 pages.append(page)
-                return SimpleNamespace(new_page=lambda: page, route=context.route,
+                return SimpleNamespace(new_page=lambda: page, route=context.route, new_cdp_session=context.new_cdp_session,
                                        set_default_timeout=context.set_default_timeout,
                                        storage_state=context.storage_state, cookies=context.cookies, close=context.close)
 
