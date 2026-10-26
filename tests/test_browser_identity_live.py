@@ -44,7 +44,7 @@ PROBE = """async () => ({
     ua: navigator.userAgent, platform: navigator.platform,
     language: navigator.language, webdriver: navigator.webdriver,
     ch: await navigator.userAgentData.getHighEntropyValues([
-        'platformVersion', 'architecture', 'bitness', 'fullVersionList'])
+        'platformVersion', 'architecture', 'bitness', 'fullVersionList']),
     worker: await new Promise(resolve => {
         const url = URL.createObjectURL(new Blob([
             "postMessage({platform: navigator.platform, webdriver: navigator.webdriver})"
