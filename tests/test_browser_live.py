@@ -491,7 +491,8 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts()
                     fit_browser_window(context, page)
                     page.wait_for_timeout(200)
                     print("Fitted native geometry: " + json.dumps(page.evaluate("({width:innerWidth,height:innerHeight,outerWidth,outerHeight,screenX,screenY,screenWidth:screen.width,screenHeight:screen.height})")), flush=True)
-                    page.wait_for_function("outerWidth === 1920 && outerHeight === 1080 && screenX === 0 && screenY === 0", timeout=5000)
+                    # Native Chromium frame calculations can round down by one pixel.
+                    page.wait_for_function("outerWidth >= 1919 && outerWidth <= 1920 && outerHeight >= 1079 && outerHeight <= 1080 && screenX === 0 && screenY === 0", timeout=5000)
                     page.goto("https://device.example.test/")
                     yield context, page, device.path
                 finally:
@@ -527,7 +528,8 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts()
             }""")
             identity = page.evaluate("({width: innerWidth, height: innerHeight, outerWidth, outerHeight, screenWidth: screen.width, screenHeight: screen.height, screenAvailWidth: screen.availWidth, screenAvailHeight: screen.availHeight, dpr: devicePixelRatio, locale: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})")
             print("Synthetic headed device geometry: " + json.dumps(identity, sort_keys=True))
-            assert (identity["outerWidth"], identity["outerHeight"]) == (1920, 1080)
+            assert 1919 <= identity["outerWidth"] <= 1920
+            assert 1079 <= identity["outerHeight"] <= 1080
             assert 1800 <= identity["width"] <= 1920
             assert 900 <= identity["height"] < 1080
             assert (identity["screenWidth"], identity["screenHeight"]) == (1920, 1080)
@@ -542,7 +544,7 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts()
                 "windowId": window_id,
                 "bounds": {"left": 200, "top": 100, "width": 1000, "height": 700},
             })
-            page.wait_for_function("outerWidth === 1000 && outerHeight === 700 && innerWidth <= 1000 && innerHeight < 700")
+            page.wait_for_function("outerWidth >= 999 && outerWidth <= 1000 && outerHeight >= 699 && outerHeight <= 700 && innerWidth <= 1000 && innerHeight < 700", timeout=5000)
             session.detach()
         assert not first_path.exists()
         assert first_control.saves == 1 and first_control.ciphertext is not None
