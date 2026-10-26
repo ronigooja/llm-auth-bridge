@@ -148,7 +148,7 @@ def resizable_vnc(settings, tmp_path):
                 page = context.new_page()
                 fit_browser_window(context, page)
                 page.goto("https://synthetic.example.test/")
-                yield replace(settings, takeover_url=f"ws://127.0.0.1:{websocket_port}/websockify", lease_seconds=180), page
+                yield replace(settings, takeover_url=f"ws://127.0.0.1:{websocket_port}/websockify", lease_seconds=180), page, playwright
             finally:
                 context.close()
     finally:
@@ -201,8 +201,17 @@ def assert_read_only_viewer(frame):
 
 
 @contextmanager
-def viewer_browser(engine):
-    if engine == "chromium":
+def viewer_browser(engine, driver=None):
+    if driver is not None:
+        options = {"headless": True}
+        if engine == "chromium":
+            options["chromium_sandbox"] = os.geteuid() != 0
+        browser = getattr(driver, engine).launch(**options)
+        try:
+            yield browser
+        finally:
+            browser.close()
+    elif engine == "chromium":
         with real_browser() as browser:
             yield browser
     else:
@@ -222,7 +231,7 @@ def test_packaged_novnc_connects_read_only_without_pausing_task(settings, resour
     account, target = resources
     transport = resizable_vnc if viewer == "account-popup" else packaged_vnc
     with transport(settings, tmp_path) as transport_result:
-        config, native_page = transport_result if viewer == "account-popup" else (transport_result, None)
+        config, native_page, driver = transport_result if viewer == "account-popup" else (transport_result, None, None)
         if viewer == "account-popup" and not Path("frontend/dist/index.html").is_file():
             if os.environ.get("CI"):
                 pytest.fail("Build the frontend before account popup acceptance")
@@ -231,7 +240,7 @@ def test_packaged_novnc_connects_read_only_without_pausing_task(settings, resour
         task = queue.create(account, target)
         claim = queue.claim()
         queue.update(task["id"], claim["execution_id"], state="running", takeover_available=1)
-        with web_server(config) as url, viewer_browser(engine) as browser:
+        with web_server(config) as url, viewer_browser(engine, driver) as browser:
             # A non-loopback HTTP hostname exercises LAN cookie/site behavior.
             if os.getenv("BRIDGE_TEST_LAN_HOST"):
                 url = url.replace("127.0.0.1", os.environ["BRIDGE_TEST_LAN_HOST"])
