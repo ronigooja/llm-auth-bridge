@@ -139,6 +139,14 @@ jobs:
           labels: org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha,scope=bridge-deployment-arm64-worker
           cache-to: type=gha,scope=bridge-deployment-arm64-worker,mode=max
+      - name: Verify resizable desktop in the production ARM64 worker
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          docker run --rm --shm-size=1g --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777 \
+            --security-opt no-new-privileges:true --security-opt seccomp=deploy/playwright-seccomp.json \
+            -e PYTHONPATH=/app -v "$PWD/tests/native_desktop_probe.py:/acceptance/native_desktop_probe.py:ro" \
+            --entrypoint python "llm-auth-bridge-worker:$GITHUB_SHA" /acceptance/native_desktop_probe.py
       - name: Verify and export native ARM64 deployment images
         timeout-minutes: 10
         run: |
