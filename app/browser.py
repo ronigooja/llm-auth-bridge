@@ -33,6 +33,9 @@ BROWSER_ARGS = [
     "--disable-domain-reliability",
     "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
     "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+    # Keep Blink's automation-controlled runtime disabled. This is measured
+    # in synthetic CI; it does not alter UA, platform, fonts, graphics or TLS.
+    "--disable-blink-features=AutomationControlled",
 ]
 # Unknown/loading pages and submitted navigation controls need a longer window
 # than a password/code form that remains available for review.
