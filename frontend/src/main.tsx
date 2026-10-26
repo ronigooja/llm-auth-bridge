@@ -668,6 +668,20 @@ function AccountForm({
   const unconfigured = !account || account.route_type === "unset";
   const [route, setRoute] = useState(unconfigured ? "proxy" : account.route_type);
   const [server, setServer] = useState("");
+  useEffect(() => {
+    if (!account) return;
+    void api<{ password: string | null; totp: string | null; mailbox_url: string | null; proxy: { server: string; username?: string; password?: string } | null }>(`/accounts/${account.id}/secrets`)
+      .then((v) => {
+        setPassword(v.password || "");
+        setTotp(v.totp || "");
+        setMailbox(v.mailbox_url || "");
+        if (v.proxy) {
+          const auth = v.proxy.username ? `${encodeURIComponent(v.proxy.username)}${v.proxy.password ? `:${encodeURIComponent(v.proxy.password)}` : ""}@` : "";
+          setServer(`${v.proxy.server.split("://")[0]}://${auth}${v.proxy.server.split("://")[1] || v.proxy.server}`);
+        }
+      })
+      .catch(() => undefined);
+  }, [account]);
   const [ids, setIds] = useState<number[]>(
     unconfigured && !account?.target_ids.length
       ? targets.filter((t) => ["cliproxyapi", "chatgpt-web-voice"].includes(t.kind)).map((t) => t.id)
@@ -722,7 +736,7 @@ function AccountForm({
             onChange={(e) => setUsername(e.target.value)}
           />
         </Field>
-        <Field title={account ? "新密码（留空保留）" : "密码"}>
+          <Field title={account ? "密码" : "密码"}>
           <input
             type="text"
               spellCheck={false}
@@ -755,7 +769,7 @@ function AccountForm({
           )}
           <Field title="邮箱取码地址（留空保留）">
             <input
-              type="password"
+              type="text"
               autoComplete="off"
               value={mailbox}
               onChange={(e) => setMailbox(e.target.value)}
@@ -790,7 +804,7 @@ function AccountForm({
         </Field>
         {route === "proxy" && (
           <>
-            <Field title={account ? "新代理 URL（留空保留）" : "代理 URL"}>
+            <Field title={account ? "代理 URL" : "代理 URL"}>
               <input
                 type="text"
                 spellCheck={false}

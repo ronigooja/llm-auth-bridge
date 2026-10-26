@@ -344,6 +344,19 @@ def create_app(settings: Settings | None = None):
                 ]
             }
 
+    @app.get("/api/v1/accounts/{account_id}/secrets")
+    def account_secrets(account_id: int):
+        """Return an administrator-requested account configuration for editing."""
+        with database(settings.db_path) as conn:
+            row = get_row(conn, "accounts", account_id)
+            key = app.state.key
+            return {
+                "password": decrypt(row["password_cipher"], key) if row["password_cipher"] else None,
+                "totp": decrypt(row["totp_cipher"], key) if row["totp_cipher"] else None,
+                "mailbox_url": decrypt(row["mailbox_url_cipher"], key) if row["mailbox_url_cipher"] else None,
+                "proxy": json.loads(decrypt(row["proxy_cipher"], key)) if row["proxy_cipher"] else None,
+            }
+
     def save_account(body, account_id=None):
         key = app.state.key
         values = body.model_dump(exclude_unset=True)
