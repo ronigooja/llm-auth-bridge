@@ -927,7 +927,7 @@ def create_app(settings: Settings | None = None):
         return get_settings()
 
     @app.get("/account-window", response_class=HTMLResponse)
-    def account_window():
+    def account_window_shell():
         # A real same-site top-level document keeps Strict cookies available
         # to the embedded viewer's subresources, including in WebKit.
         return '<!doctype html><html><head><meta charset="utf-8"><title>账号窗口</title></head><body></body></html>'
