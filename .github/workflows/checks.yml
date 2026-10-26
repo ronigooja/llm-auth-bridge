@@ -73,7 +73,11 @@ jobs:
           BRIDGE_TEST_GOST: /tmp/gost
         run: |
           set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
+          workspace="$GITHUB_WORKSPACE"
+          if ! git -C "$workspace" rev-parse --show-toplevel >/dev/null 2>&1; then
+            workspace=$(dirname "$(find /__w -type d -name .git -print -quit)")
+          fi
+          cd "$workspace"
           mkdir -p check-logs
           git rev-parse HEAD > check-logs/source-revision.txt
           git status --porcelain=v1 -- . ':!check-logs' > check-logs/uncommitted-inputs.txt
@@ -98,7 +102,11 @@ jobs:
           BRIDGE_TEST_GOST: /tmp/gost
         run: |
           set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
+          workspace="$GITHUB_WORKSPACE"
+          if ! git -C "$workspace" rev-parse --show-toplevel >/dev/null 2>&1; then
+            workspace=$(dirname "$(find /__w -type d -name .git -print -quit)")
+          fi
+          cd "$workspace"
           set +e
           timeout --kill-after=10s 7m bash -o pipefail -c 'xvfb-run -a -s "-screen 0 1920x1080x24" uv run pytest -v -ra -o faulthandler_timeout=120 --junitxml=check-logs/pytest.xml 2>&1 | tee check-logs/pytest.log'
           result=$?
