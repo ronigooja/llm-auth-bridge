@@ -1,12 +1,13 @@
 name: Checks
 on:
+  workflow_dispatch:
   push:
     branches-ignore: ["validation/**", "deployment/**", "artifacts/**"]
   pull_request:
 permissions:
   contents: read
 concurrency:
-  group: checks-${{ github.workflow }}-${{ github.ref }}
+  group: checks-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   check:
