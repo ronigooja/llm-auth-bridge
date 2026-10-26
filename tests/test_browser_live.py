@@ -540,6 +540,7 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts()
             assert page.evaluate("sessionStorage.getItem('tab')") == "first-tab"
             session = context.new_cdp_session(page)
             window_id = session.send("Browser.getWindowForTarget")["windowId"]
+            session.send("Browser.setWindowBounds", {"windowId": window_id, "bounds": {"windowState": "normal"}})
             session.send("Browser.setWindowBounds", {
                 "windowId": window_id,
                 "bounds": {"left": 200, "top": 100, "width": 1000, "height": 700},

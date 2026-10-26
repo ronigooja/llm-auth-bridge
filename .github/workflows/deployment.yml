@@ -86,7 +86,7 @@ jobs:
           uv sync --frozen --extra test --extra browser
           uv run playwright install --with-deps chromium
           sudo apt-get update
-          sudo apt-get install -y xvfb xauth novnc x11vnc websockify
+          sudo apt-get install -y xvfb xauth novnc x11vnc websockify tigervnc-standalone-server openbox x11-utils
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Run bounded headed acceptance
         timeout-minutes: 8

@@ -42,7 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && tar -xzf /tmp/gost.tar.gz -C /usr/local/bin gost \
     && rm /tmp/gost.tar.gz
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright DISPLAY=:99
-RUN apt-get update && apt-get install -y --no-install-recommends xvfb x11vnc websockify \
+RUN apt-get update && apt-get install -y --no-install-recommends tigervnc-standalone-server openbox x11-utils websockify \
     && pip install --no-cache-dir playwright==1.56.0 \
     && /usr/local/bin/playwright install --with-deps --no-shell chromium \
     && chmod -R a+rX /opt/playwright \
@@ -53,16 +53,21 @@ RUN <<'SH'
 cat > /usr/local/bin/bridge-worker <<'SCRIPT'
 #!/bin/sh
 set -eu
-Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp &
-xvfb_pid=$!
-# Wait for the local display socket before connecting the VNC server.
+Xtigervnc :99 -geometry 1920x1080 -depth 24 -rfbport 5900 -localhost -SecurityTypes None -AlwaysShared -AcceptSetDesktopSize=1 -nolisten tcp &
+vnc_pid=$!
+# Wait for the local display before starting the window manager.
 n=0
 while [ ! -S /tmp/.X11-unix/X99 ]; do
   n=$((n+1)); [ "$n" -lt 100 ] || exit 1
   sleep 0.1
 done
-x11vnc -display :99 -localhost -rfbport 5900 -forever -shared -nopw -quiet &
-vnc_pid=$!
+openbox --sm-disable &
+wm_pid=$!
+n=0
+while ! xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q 'window id'; do
+  n=$((n+1)); [ "$n" -lt 100 ] || exit 1
+  sleep 0.1
+done
 websockify 0.0.0.0:6080 localhost:5900 &
 web_pid=$!
 python -m app.worker &
@@ -71,7 +76,7 @@ cleanup() {
   trap - TERM INT EXIT
   kill "$worker_pid" 2>/dev/null || true
   wait "$worker_pid" 2>/dev/null || true
-  kill "$web_pid" "$vnc_pid" "$xvfb_pid" 2>/dev/null || true
+  kill "$web_pid" "$wm_pid" "$vnc_pid" 2>/dev/null || true
 }
 trap cleanup TERM INT EXIT
 wait "$worker_pid"

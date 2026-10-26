@@ -96,6 +96,96 @@ def packaged_vnc(settings, tmp_path):
             log.close()
 
 
+@contextmanager
+def resizable_vnc(settings, tmp_path):
+    """Real resizable desktop and maximized browser, with synthetic content only."""
+    from app.browser import BROWSER_ARGS, fit_browser_window
+    from app.browser_identity import context_options, generate_profile
+    for executable in ("Xtigervnc", "openbox", "xprop"):
+        if not shutil.which(executable):
+            pytest.fail(f"Missing native resize prerequisite: {executable}")
+    display = next(f":{number}" for number in range(110, 200)
+                   if not Path(f"/tmp/.X11-unix/X{number}").exists())
+    vnc_port, websocket_port = unused_port(), unused_port()
+    while websocket_port == vnc_port:
+        websocket_port = unused_port()
+    env = {**os.environ, "DISPLAY": display}
+    processes, logs = [], []
+    commands = [
+        ["Xtigervnc", display, "-geometry", "1920x1080", "-depth", "24", "-rfbport", str(vnc_port),
+         "-localhost", "-SecurityTypes", "None", "-AlwaysShared", "-AcceptSetDesktopSize=1", "-nolisten", "tcp"],
+        ["openbox", "--sm-disable"],
+        ["websockify", f"127.0.0.1:{websocket_port}", f"127.0.0.1:{vnc_port}"],
+    ]
+    try:
+        for index, command in enumerate(commands):
+            log_path = tmp_path / f"native-{command[0]}.log"
+            log = log_path.open("w")
+            logs.append(log)
+            process = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT)
+            processes.append(process)
+            if index in (0, 2):
+                wait_listening(process, vnc_port if index == 0 else websocket_port, log_path)
+            else:
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    result = subprocess.run(["xprop", "-root", "_NET_SUPPORTING_WM_CHECK"], env=env, capture_output=True)
+                    if b"window id" in result.stdout:
+                        break
+                    time.sleep(0.1)
+                else:
+                    pytest.fail("Native window manager did not become ready: " + log_path.read_text())
+        with sync_playwright() as playwright:
+            context = playwright.chromium.launch_persistent_context(
+                user_data_dir=str(tmp_path / "synthetic-native-profile"), headless=False,
+                chromium_sandbox=os.geteuid() != 0, env=env,
+                args=BROWSER_ARGS + ["--no-proxy-server"],
+                **context_options(generate_profile(), native_window=True),
+            )
+            try:
+                context.route("**/*", lambda route: route.fulfill(content_type="text/html", body=
+                    '<body style="margin:0;font:16px sans-serif;background:white"><p id="glyph">Synthetic 16px text</p></body>'))
+                page = context.new_page()
+                fit_browser_window(context, page)
+                page.goto("https://synthetic.example.test/")
+                yield replace(settings, takeover_url=f"ws://127.0.0.1:{websocket_port}/websockify", lease_seconds=180), page
+            finally:
+                context.close()
+    finally:
+        for process in reversed(processes):
+            if process.poll() is None:
+                process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        for log in logs:
+            log.close()
+
+
+def assert_native_viewer(frame, native_page):
+    frame.wait_for_function("""() => {
+        const canvas = document.querySelector('canvas');
+        if (!canvas) return false;
+        const rect = canvas.getBoundingClientRect();
+        return canvas.width === innerWidth && canvas.height === innerHeight
+            && rect.width === innerWidth && rect.height === innerHeight
+            && rect.left === 0 && rect.top === 0;
+    }""", timeout=15000)
+    viewer_size = frame.evaluate("({width: innerWidth, height: innerHeight})")
+    native_page.wait_for_function("""size => screen.width === size.width && screen.height === size.height
+        && Math.abs(outerWidth - size.width) <= 1 && Math.abs(outerHeight - size.height) <= 1""", arg=viewer_size, timeout=10000)
+    assert native_page.evaluate("devicePixelRatio") == 1
+    assert native_page.locator("#glyph").evaluate("e => getComputedStyle(e).fontSize") == "16px"
+    assert frame.evaluate("""async () => {
+        const {rfb} = await import('/account-viewer.js');
+        return {readonly: rfb.viewOnly, scale: rfb.scaleViewport, resize: rfb.resizeSession};
+    }""") == {"readonly": True, "scale": False, "resize": True}
+    assert frame.get_by_role("status").is_hidden()
+    assert frame.locator("select, button, input").count() == 0
+
+
 def assert_read_only_viewer(frame):
     frame.wait_for_function("""() => {
         const canvas = document.querySelector('#noVNC_container canvas');
@@ -130,7 +220,9 @@ def viewer_browser(engine):
 ))])
 def test_packaged_novnc_connects_read_only_without_pausing_task(settings, resources, tmp_path, viewer, engine):
     account, target = resources
-    with packaged_vnc(settings, tmp_path) as config:
+    transport = resizable_vnc if viewer == "account-popup" else packaged_vnc
+    with transport(settings, tmp_path) as transport_result:
+        config, native_page = transport_result if viewer == "account-popup" else (transport_result, None)
         if viewer == "account-popup" and not Path("frontend/dist/index.html").is_file():
             if os.environ.get("CI"):
                 pytest.fail("Build the frontend before account popup acceptance")
@@ -182,7 +274,10 @@ def test_packaged_novnc_connects_read_only_without_pausing_task(settings, resour
                     assert f"api/v1/tasks/{task['id']}/monitor" in iframe.get_attribute("src")
                     frame = iframe.element_handle().content_frame()
                     assert frame is not None
-                    assert_read_only_viewer(frame)
+                    assert native_page is not None
+                    for width, height in ((1100, 900), (1400, 760), (900, 1000)):
+                        popup.set_viewport_size({"width": width, "height": height})
+                        assert_native_viewer(frame, native_page)
                     popup.close()
                 assert failed_assets == []
                 with database(config.db_path) as conn:

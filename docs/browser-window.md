@@ -20,10 +20,23 @@ filter supports RFB 3.8, None security on the internal transport, and shared
 ClientInit. It forwards bounded pixel-format configuration, sanitized passive
 image/update encodings, framebuffer requests and bounded Fence replies. It
 buffers fragmented RFB messages across WebSocket chunks. Keyboard, pointer,
-clipboard, desktop resize, exclusive ClientInit, unknown client messages and
-unsupported extensions close the connection. The client should also set
-`viewOnly`, `shared`, and disable resize requests; client settings alone are not
-an authorization boundary.
+clipboard, exclusive ClientInit, unknown client messages and unsupported
+extensions close the connection. A geometry-only exception accepts one desktop
+at origin (0, 0), with dimensions 64–4096 pixels per axis, at most 8,847,360 pixels,
+and zero screen flags. Fragmented resize messages are validated before forwarding.
+ExtendedDesktopSize negotiation is allowed. The client remains `viewOnly` and
+`shared`; client settings alone are not an authorization boundary.
+
+The authenticated `/account-viewer` and `/account-viewer.js` use Debian noVNC's
+core renderer without its settings menus. They request a remote desktop matching
+the iframe's CSS dimensions and display its framebuffer at 1:1 CSS scale. The
+small noVNC 1.3 adapter permits geometry requests in view-only mode; input is
+still disabled in the client and rejected by the monitor's server filter. The
+worker runs TigerVNC with desktop resizing enabled and Openbox, so a maximized
+Chromium window follows screen size changes. Browser chrome remains visible.
+This replaces Xvfb/x11vnc's fixed desktop and the previous local scaling mode.
+Changing popup aspect ratio must resize the desktop instead of adding bars or
+cropping. VNC and its X display remain private to the worker.
 
 VNC remains internal; do not expose its ports. The viewer streams live frames
 without storing screenshots, recordings, browser state or credentials. Real-account

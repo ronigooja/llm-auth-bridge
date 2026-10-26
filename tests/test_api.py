@@ -16,6 +16,16 @@ def test_account_window_shell_requires_session(client, admin):
     assert client.get("/account-window").status_code == 401
 
 
+@pytest.mark.parametrize("path", ["/account-viewer", "/account-viewer.js"])
+def test_native_viewer_requires_session_and_disables_caching(client, admin, path):
+    response = admin.get(path)
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-frame-options"] == "SAMEORIGIN"
+    admin.cookies.clear()
+    assert client.get(path).status_code == 401
+
+
 @pytest.mark.parametrize(
     "path",
     [

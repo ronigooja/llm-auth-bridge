@@ -34,14 +34,14 @@ def test_encoding_negotiation_removes_active_extensions():
     parser = ready()
     encodings = (0, 7, -223, -308, -309, -312, -313, -316, 123456)
     packet = struct.pack(">BBH", 2, 0, len(encodings)) + struct.pack(">9i", *encodings)
-    assert parser.feed(packet) == [struct.pack(">BBH3i", 2, 0, 3, 0, 7, -223)]
+    assert parser.feed(packet) == [struct.pack(">BBH4i", 2, 0, 4, 0, 7, -223, -308)]
 
 
 @pytest.mark.parametrize("packet", [
     b"\x04\x01\0\0\0\0\0a",  # KeyEvent
     b"\x05\x01\0\0\0\0",  # PointerEvent
     b"\x06\0\0\0\0\0\0\x04paste",  # ClientCutText
-    b"\xfb",  # SetDesktopSize
+    b"\xfb\0\x10\x01\0\xff\x01\0",  # Oversized SetDesktopSize
     b"\x96",  # EnableContinuousUpdates
     b"\xff",  # unknown extension
     b"\xf8\0\0\0\x80\0\0\0\0",  # Fence request
@@ -72,3 +72,28 @@ def test_bounds_and_passive_fence_reply():
     assert parser.feed(packet[7:]) == [packet]
     with pytest.raises(InvalidRFB):
         parser.feed(b"x" * 65537)
+
+
+def desktop_size(width=1280, height=800, x=0, y=0, flags=0):
+    return struct.pack(">BBHHBBIHHHHI", 251, 0, width, height, 1, 0, 0, x, y, width, height, flags)
+
+
+def test_fragmented_geometry_only_resize_keeps_input_blocked():
+    parser = ready()
+    packet = desktop_size()
+    assert parser.feed(packet[:7]) == []
+    assert parser.feed(packet[7:20]) == []
+    assert parser.feed(packet[20:]) == [packet]
+    with pytest.raises(InvalidRFB):
+        parser.feed(b"\x04")
+
+
+@pytest.mark.parametrize("packet", [
+    desktop_size(width=63), desktop_size(height=4097), desktop_size(width=4096, height=4096),
+    desktop_size(x=1), desktop_size(y=1), desktop_size(flags=1),
+    desktop_size()[:6] + b"\x02\0",
+    desktop_size()[:16] + b"\0\x40" + desktop_size()[18:],
+])
+def test_resize_rejects_oversized_or_non_rectangular_layout(packet):
+    with pytest.raises(InvalidRFB):
+        ready().feed(packet)

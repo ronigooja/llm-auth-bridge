@@ -87,12 +87,16 @@ def test_monitor_handshake_framebuffer_and_forbidden_input(settings, resources, 
             socket.send(update[4:])
             assert socket.recv(timeout=3) == framebuffer
             assert received == [update]
+            resize = struct.pack(">BBHHBBIHHHHI", 251, 0, 1100, 800, 1, 0, 0, 0, 0, 1100, 800, 0)
+            socket.send(resize)
+            assert socket.recv(timeout=3) == framebuffer
+            assert received == [update, resize]
             with database(config.db_path) as conn:
                 assert conn.execute("SELECT state FROM tasks WHERE id=?", (task["id"],)).fetchone()[0] == state
             socket.send(b"\x04\x01\0\0\0\0\0a")
             with pytest.raises(ConnectionClosed):
                 socket.recv(timeout=3)
-            assert received == [update]
+            assert received == [update, resize]
 
 
 @pytest.mark.parametrize("change", ["logout", "cancel", "lease", "owner", "account", "finished", "unavailable"])

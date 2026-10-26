@@ -15,7 +15,8 @@ class ReadOnlyRFB:
     MAX_BUFFER = 65536
     # Image encodings and passive server notifications only. In particular, do
     # not negotiate continuous updates, clipboard, fence requests or input APIs.
-    ENCODINGS = {0, 1, 2, 4, 5, 6, 7, 16, 21, -223, -224, -232, -239, -240, -307}
+    # ExtendedDesktopSize is the single bounded geometry exception.
+    ENCODINGS = {0, 1, 2, 4, 5, 6, 7, 16, 21, -223, -224, -232, -239, -240, -307, -308}
 
     def __init__(self):
         self.buffer = bytearray()
@@ -51,6 +52,15 @@ class ReadOnlyRFB:
                     size = 4 + count * 4
                 elif kind == 3:  # FramebufferUpdateRequest
                     size = 10
+                elif kind == 251:  # One bounded desktop, geometry only.
+                    if len(self.buffer) < 8:
+                        break
+                    width, height = struct.unpack(">HH", self.buffer[2:6])
+                    if (self.buffer[1] or self.buffer[7] or self.buffer[6] != 1
+                            or not 64 <= width <= 4096 or not 64 <= height <= 4096
+                            or width * height > 8847360):
+                        raise InvalidRFB("invalid RFB desktop dimensions")
+                    size = 24
                 elif kind == 248:  # Fence reply, never a request/block operation
                     if len(self.buffer) < 9:
                         break
@@ -82,6 +92,10 @@ class ReadOnlyRFB:
                                  if value[0] in self.ENCODINGS]
                     message = struct.pack(">BBH", 2, 0, len(encodings)) + b"".join(
                         struct.pack(">i", value) for value in encodings)
+                elif kind == 251:
+                    x, y, screen_width, screen_height, flags = struct.unpack(">HHHHI", message[12:24])
+                    if x or y or screen_width != width or screen_height != height or flags:
+                        raise InvalidRFB("unsupported RFB desktop layout")
                 elif kind == 3 and message[1] not in (0, 1):
                     raise InvalidRFB("invalid RFB framebuffer request")
             del self.buffer[:size]

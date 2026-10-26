@@ -18,7 +18,7 @@ async function waitForShell(target: Window) {
 }
 
 export function accountViewerUrl(id: number, interactive: boolean) {
-  return `/novnc/vnc.html?autoconnect=true&resize=scale&view_only=${!interactive}&shared=true&path=api/v1/tasks/${id}/${interactive ? "takeover" : "monitor"}`;
+  return `/account-viewer?autoconnect=true&resize=remote&view_only=${!interactive}&shared=true&path=api/v1/tasks/${id}/${interactive ? "takeover" : "monitor"}`;
 }
 
 // One controller survives page navigation. A native close releases only idle

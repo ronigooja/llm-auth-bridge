@@ -138,7 +138,7 @@ def create_app(settings: Settings | None = None):
             and int(request.headers.get("content-length", "0")) > 2_100_000
         ):
             return JSONResponse({"detail": "request is too large"}, 413)
-        if path.startswith(("/api/", "/novnc")) or path == "/account-window":
+        if path.startswith(("/api/", "/novnc", "/account-viewer")) or path == "/account-window":
             if path != "/api/v1/auth/login":
                 auth = session(request.cookies.get("bridge_session"))
                 if not auth:
@@ -157,7 +157,7 @@ def create_app(settings: Settings | None = None):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Frame-Options"] = "SAMEORIGIN"
-        if path.startswith(("/api/", "/novnc")) or path == "/account-window":
+        if path.startswith(("/api/", "/novnc", "/account-viewer")) or path == "/account-window":
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -931,6 +931,14 @@ def create_app(settings: Settings | None = None):
         # A real same-site top-level document keeps Strict cookies available
         # to the embedded viewer's subresources, including in WebKit.
         return '<!doctype html><html><head><meta charset="utf-8"><title>账号窗口</title></head><body></body></html>'
+
+    @app.get("/account-viewer")
+    def account_viewer():
+        return FileResponse(Path(__file__).parent / "static/account-viewer.html", media_type="text/html")
+
+    @app.get("/account-viewer.js")
+    def account_viewer_script():
+        return FileResponse(Path(__file__).parent / "static/account-viewer.js", media_type="text/javascript")
 
     novnc = Path("/usr/share/novnc")
     if novnc.exists():

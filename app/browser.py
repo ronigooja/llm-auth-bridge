@@ -528,6 +528,10 @@ def fit_browser_window(context, page) -> None:
             "windowId": window_id, "bounds": {"windowState": "normal"},
         })
         session.send("Browser.setWindowBounds", {"windowId": window_id, "bounds": bounds})
+        # With the worker window manager, maximize follows RandR desktop changes.
+        session.send("Browser.setWindowBounds", {
+            "windowId": window_id, "bounds": {"windowState": "maximized"},
+        })
     finally:
         session.detach()
 
