@@ -5,6 +5,10 @@ on:
     branches: ["validation/**"]
 permissions:
   contents: read
+defaults:
+  run:
+    shell: bash
+    working-directory: /__w/llm-auth-bridge/llm-auth-bridge
 concurrency:
   group: native-validation-${{ github.ref }}
   cancel-in-progress: true
@@ -12,9 +16,14 @@ jobs:
   bridge:
     if: github.ref != 'refs/heads/validation/upstream-late-interrupt'
     runs-on: ubuntu-24.04
+    container:
+      image: debian:12
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Install Debian runner tools
+        run: apt-get update && apt-get install -y ca-certificates curl git tar
+
       - name: Record source and runner
         run: |
           mkdir -p validation-logs
@@ -39,7 +48,6 @@ jobs:
           uv sync --frozen --extra test --extra browser
           uv run playwright install --with-deps chromium
           # GitHub Ubuntu 24.04 AppArmor otherwise blocks Chromium user namespaces.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           curl -fsSL https://github.com/go-gost/gost/releases/download/v3.3.1/gost_3.3.1_linux_amd64.tar.gz -o /tmp/gost.tar.gz
           echo 'e0e3a2c9116e2f025e962bba340749f80696bda318613d45e5ae96dd0bcae37c  /tmp/gost.tar.gz' | sha256sum -c -
           tar -xzf /tmp/gost.tar.gz -C /tmp gost
@@ -69,9 +77,14 @@ jobs:
   cpa:
     if: github.ref != 'refs/heads/validation/upstream-late-interrupt'
     runs-on: ubuntu-24.04
+    container:
+      image: debian:12
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Install Debian runner tools
+        run: apt-get update && apt-get install -y ca-certificates curl git tar
+
       - name: Record source and runner
         run: |
           mkdir -p validation-logs
@@ -134,9 +147,14 @@ jobs:
   cpa-baseline:
     if: github.ref != 'refs/heads/validation/upstream-late-interrupt'
     runs-on: ubuntu-24.04
+    container:
+      image: debian:12
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Install Debian runner tools
+        run: apt-get update && apt-get install -y ca-certificates curl git tar
+
       - name: Fetch untouched pinned upstream baseline
         run: |
           set -euxo pipefail

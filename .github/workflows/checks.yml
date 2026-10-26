@@ -5,15 +5,24 @@ on:
   pull_request:
 permissions:
   contents: read
+defaults:
+  run:
+    shell: bash
+    working-directory: /__w/llm-auth-bridge/llm-auth-bridge
 concurrency:
   group: checks-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   check:
     runs-on: ubuntu-24.04
+    container:
+      image: debian:12
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Install Debian runner tools
+        run: apt-get update && apt-get install -y ca-certificates curl git tar
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -44,8 +53,6 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
-      - name: Enable Chromium sandbox namespaces on ephemeral runner
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Install checksum-verified synthetic proxy test executable
         run: |
           curl -fsSL https://github.com/go-gost/gost/releases/download/v3.3.1/gost_3.3.1_linux_amd64.tar.gz -o /tmp/gost.tar.gz
@@ -66,12 +73,11 @@ jobs:
           BRIDGE_TEST_GOST: /tmp/gost
         run: |
           set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
           mkdir -p check-logs
-          git rev-parse HEAD > check-logs/source-revision.txt
-          git status --porcelain=v1 -- . ':!check-logs' > check-logs/uncommitted-inputs.txt
           printf 'run=%s\njob=%s\nos=%s\narch=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$GITHUB_JOB" "$RUNNER_OS" "$RUNNER_ARCH" > check-logs/environment.txt
-          sudo apt-get update
-          sudo apt-get install -y xvfb xauth novnc x11vnc websockify tigervnc-standalone-server openbox x11-utils
+          apt-get update
+          apt-get install -y xvfb xauth novnc x11vnc websockify tigervnc-standalone-server openbox x11-utils
           set +e
           timeout --kill-after=10s 180s bash -o pipefail -c 'uv run pytest -v -ra tests/test_browser_live.py -k codex_existing --junitxml=check-logs/codex.xml 2>&1 | tee check-logs/codex.log'
           targeted_result=$?
@@ -90,6 +96,7 @@ jobs:
           BRIDGE_TEST_GOST: /tmp/gost
         run: |
           set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
           set +e
           timeout --kill-after=10s 7m bash -o pipefail -c 'xvfb-run -a -s "-screen 0 1920x1080x24" uv run pytest -v -ra -o faulthandler_timeout=120 --junitxml=check-logs/pytest.xml 2>&1 | tee check-logs/pytest.log'
           result=$?

@@ -18,6 +18,12 @@ The synthetic browser job installs Chromium (`uv run playwright install --with-d
 
 Use `LLM_AUTH_DB` and `LLM_AUTH_MASTER_KEY_FILE` pointing at temporary local paths for development. `python -m app.cli init` prompts for a password; never pass one on the command line. Set `LLM_AUTH_SECURE_COOKIE=false` only for local HTTP. Vite development requires an explicitly configured same-origin API proxy; the supported acceptance path builds assets and serves them through FastAPI.
 
+## Git baseline and cleanup
+
+GitHub's default branch and the integration target are `main`. Start each task with `git fetch origin --prune` and a new branch from `origin/main`; record `git rev-parse origin/main` as the task baseline. Preserve existing local changes before changing branches. A completed branch is historical evidence, not a starting point for new development.
+
+Fetch again before integration, incorporate any new main commits, and run the required hosted CI checks on the resulting revision before merging. Remove clean completed worktrees and integrated task branches after acceptance. Keep deployment and validation milestones as tags; never delete dirty worktrees. Branch protection is not configured as of the [initial audit](branch-audit-20261026.md), so these are working agreements rather than a server-enforced merge gate.
+
 ## Collaboration and extensions
 
 Main owns architecture, contracts, migrations, scheduling, integration and serial real-account acceptance. Per AGENTS.md, file-changing delegates use isolated worktrees under `$HOME/subagents/llm-auth-bridge/<task>` after a main commit. Bounded work uses gpt-6-luna at medium effort; UI, complex code and independent review use gpt-6.1-sol at medium effort. Each handoff includes its commit, changed files, pytest result and unresolved issues. Integrate sequentially and rerun affected checks.
