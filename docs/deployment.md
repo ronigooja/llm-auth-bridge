@@ -214,8 +214,10 @@ Proxy logins additionally require HTTPS access to `https://ipwho.is/` through th
 configured account proxy. A failed or invalid geolocation response stops the task
 before provider navigation. The service receives the public proxy exit IP; no
 account identifier, password or OTP is sent. Direct routing keeps the existing
-profile timezone. A rotating proxy can change exit IP between requests, so this
-lookup does not guarantee a stable regional route throughout a task.
+profile timezone. The bridge does not rotate proxy exits: it starts one temporary GOST route for
+the configured account proxy and uses that route for the browser and HTTP
+clients throughout the task. If the external proxy service itself rotates its
+exit IP between connections, this lookup does not pin or detect that change.
 
 The deployment workflow runs pytest under a 1920×1080 Xvfb display to exercise the
 headed synthetic persistence/isolation acceptance in addition to form tests.
