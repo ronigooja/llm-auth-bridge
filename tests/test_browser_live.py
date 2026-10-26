@@ -440,7 +440,7 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts()
     if not os.getenv("DISPLAY"):
         pytest.skip("Headed native device acceptance requires DISPLAY / Xvfb")
     from app.browser_identity import generate_profile, context_options
-    from app.browser import _snapshot_session_cookies, _restore_session_cookies, DEVICE_READY_FILE
+    from app.browser import _snapshot_session_cookies, _restore_session_cookies, DEVICE_READY_FILE, fit_browser_window
     from app.browser_device import device_directory
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -480,7 +480,7 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts()
                     proxy=None, accept_downloads=False, service_workers="block",
                     env={**os.environ, "DISPLAY": os.getenv("DISPLAY", ":99")},
                     args=BROWSER_ARGS + ["--no-proxy-server"],
-                    **context_options(profile),
+                    **context_options(profile, native_window=True),
                 )
                 try:
                     _restore_session_cookies(context, device.path)
@@ -488,6 +488,8 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts()
                     device.mark_ready()
                     context.route("**/*", lambda route: route.fulfill(body="<p>Synthetic</p>", content_type="text/html"))
                     page = context.new_page()
+                    fit_browser_window(context, page)
+                    page.wait_for_function("outerWidth === 1920 && outerHeight === 1080 && screenX === 0 && screenY === 0")
                     page.goto("https://device.example.test/")
                     yield context, page, device.path
                 finally:
@@ -523,13 +525,23 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts()
             }""")
             identity = page.evaluate("({width: innerWidth, height: innerHeight, outerWidth, outerHeight, screenWidth: screen.width, screenHeight: screen.height, screenAvailWidth: screen.availWidth, screenAvailHeight: screen.availHeight, dpr: devicePixelRatio, locale: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})")
             print("Synthetic headed device geometry: " + json.dumps(identity, sort_keys=True))
-            assert (identity["width"], identity["height"]) == (1760, 900)
+            assert (identity["outerWidth"], identity["outerHeight"]) == (1920, 1080)
+            assert 1800 <= identity["width"] <= 1920
+            assert 900 <= identity["height"] < 1080
             assert (identity["screenWidth"], identity["screenHeight"]) == (1920, 1080)
             assert identity["dpr"] == 1
             assert identity["width"] <= identity["outerWidth"] <= identity["screenAvailWidth"] <= 1920
             assert identity["height"] <= identity["outerHeight"] <= identity["screenAvailHeight"] <= 1080
             page.reload()
             assert page.evaluate("sessionStorage.getItem('tab')") == "first-tab"
+            session = context.new_cdp_session(page)
+            window_id = session.send("Browser.getWindowForTarget")["windowId"]
+            session.send("Browser.setWindowBounds", {
+                "windowId": window_id,
+                "bounds": {"left": 200, "top": 100, "width": 1000, "height": 700},
+            })
+            page.wait_for_function("outerWidth === 1000 && outerHeight === 700 && innerWidth <= 1000 && innerHeight < 700")
+            session.detach()
         assert not first_path.exists()
         assert first_control.saves == 1 and first_control.ciphertext is not None
         assert b"synthetic-token" not in first_control.ciphertext
@@ -559,7 +571,7 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts()
             assert page.evaluate("indexedDB.databases().then(dbs => dbs.length)") == 0
             assert page.evaluate("sessionStorage.length") == 0
             assert first["identity_seed"] != second["identity_seed"]
-            assert (page.evaluate("innerWidth"), page.evaluate("innerHeight")) == (1760, 900)
+            assert page.evaluate("({width: innerWidth, height: innerHeight})") == {"width": identity["width"], "height": identity["height"]}
         assert not second_path.exists()
         assert second_control.saves == 1
 

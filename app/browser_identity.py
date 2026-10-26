@@ -51,7 +51,7 @@ def _upgrade_profile(profile: dict) -> dict:
     return profile
 
 
-def context_options(profile: dict) -> dict:
+def context_options(profile: dict, *, native_window: bool = False) -> dict:
     """Return only the supported native Chromium context options, never the seed."""
     if profile.get("version") != PROFILE_VERSION:
         raise ValueError("Unsupported browser profile version")
@@ -63,6 +63,12 @@ def context_options(profile: dict) -> dict:
     }
     if set(options) != expected:
         raise ValueError("Invalid browser profile options")
+    if native_window:
+        # Let the headed browser's content follow its real desktop window.
+        # Fixed emulation otherwise leaves unused desktop around that window.
+        for key in ("viewport", "screen", "device_scale_factor"):
+            options.pop(key)
+        options["no_viewport"] = True
     return options
 
 

@@ -517,6 +517,21 @@ def _native_result(client, session, control):
     return client.result(session)
 
 
+def fit_browser_window(context, page) -> None:
+    """Fill the real desktop, including browser chrome, without viewport emulation."""
+    bounds = page.evaluate("({left: screen.availLeft || 0, top: screen.availTop || 0, width: screen.availWidth, height: screen.availHeight})")
+    session = context.new_cdp_session(page)
+    try:
+        window_id = session.send("Browser.getWindowForTarget")["windowId"]
+        # Restored profiles can contain maximized/minimized or stale bounds.
+        session.send("Browser.setWindowBounds", {
+            "windowId": window_id, "bounds": {"windowState": "normal"},
+        })
+        session.send("Browser.setWindowBounds", {"windowId": window_id, "bounds": bounds})
+    finally:
+        session.detach()
+
+
 def run_browser_window(account, control, saved_state=None) -> None:
     """Open this account's persistent browser until its operator closes it."""
     _run_login(account, {"kind": "browser_window"}, control, saved_state)
@@ -584,7 +599,7 @@ def _run_login(
                         if route.playwright_proxy is None
                         else ["--proxy-bypass-list=<-loopback>"]
                     ),
-                    **context_options(account["_browser_profile"]),
+                    **context_options(account["_browser_profile"], native_window=True),
                     accept_downloads=False,
                     service_workers="block",
                 )
@@ -602,6 +617,7 @@ def _run_login(
                 device.mark_ready()
                 context.set_default_timeout(10000)
                 page = context.new_page()
+                fit_browser_window(context, page)
                 if hasattr(control, "browser_ready"):
                     control.browser_ready(
                         int(os.getenv("BRIDGE_WEBSOCKIFY_PORT", "6080"))

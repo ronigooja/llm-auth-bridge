@@ -121,6 +121,7 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path,
             pass
 
     page = Page()
+    monkeypatch.setattr(module, "fit_browser_window", lambda *a: events.append("window_fitted"))
 
     class Context:
         def new_page(self):
@@ -278,7 +279,9 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path,
     options = launch
     assert launch["user_data_dir"] == str(tmp_path)
     assert "storage_state" not in launch
-    assert all(options[key] == value for key, value in profile["context"].items())
+    from app.browser_identity import context_options
+    assert all(options[key] == value for key, value in context_options(profile, native_window=True).items())
+    assert events.index("window_fitted") < events.index("navigation")
     assert "identity_seed" not in options
     assert events.index(next(e for e in events if isinstance(e, tuple) and e[0] == "launch")) < events.index("navigation")
     assert migrations == ([] if restored is True else [{"cookies": [], "origins": []}])
