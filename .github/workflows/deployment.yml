@@ -19,6 +19,9 @@ jobs:
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
+      - name: Install Debian runner tools
+        run: apt-get update && apt-get install -y ca-certificates curl git tar
+
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - uses: actions/setup-node@v4
@@ -64,6 +67,9 @@ jobs:
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
+      - name: Install Debian runner tools
+        run: apt-get update && apt-get install -y ca-certificates curl git tar
+
       - uses: astral-sh/setup-uv@v6
         with:
           version: ${{ env.UV_VERSION }}
