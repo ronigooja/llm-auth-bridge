@@ -722,6 +722,7 @@ function AccountForm({
         body,
       );
       await saved();
+      close();
     });
   }
   return (
