@@ -1,0 +1,73 @@
+name: Account viewer regression
+on:
+  workflow_dispatch:
+  push:
+    branches: ["fix/novnc-cookie-context"]
+permissions:
+  contents: read
+concurrency:
+  group: novnc-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  viewer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+        with: {version: "0.8.22", enable-cache: true}
+      - name: Record inputs
+        run: |
+          mkdir -p viewer-logs
+          git rev-parse HEAD > viewer-logs/source-revision.txt
+          git status --porcelain=v1 -- . ':!viewer-logs' > viewer-logs/uncommitted-inputs.txt
+          printf 'run=%s\njob=%s\nos=%s\narch=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$GITHUB_JOB" "$RUNNER_OS" "$RUNNER_ARCH" > viewer-logs/environment.txt
+      - name: Install browsers and production Debian noVNC
+        timeout-minutes: 6
+        run: |
+          set -euo pipefail
+          uv sync --frozen --extra test --extra browser
+          uv run playwright install --with-deps chromium webkit
+          sudo apt-get install -y xvfb xauth x11vnc websockify
+          curl -fsSL https://deb.debian.org/debian/pool/main/n/novnc/novnc_1.3.0-1_all.deb -o /tmp/novnc.deb
+          echo '5ff8b8c93c1c6cc911e01bfa77d12d4098e1904f738a996040c8095e02492ebb  /tmp/novnc.deb' | sha256sum -c -
+          sudo apt-get install -y --allow-downgrades /tmp/novnc.deb
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          echo '127.0.0.1 bridge.test' | sudo tee -a /etc/hosts
+          npm ci --ignore-scripts --prefix frontend
+      - name: Frontend and backend regression
+        timeout-minutes: 5
+        run: |
+          set -Eeuo pipefail
+          exec > >(tee viewer-logs/regression.log) 2>&1
+          trap 'rc=$?; printf "%s\n" "$rc" > viewer-logs/regression.exit' EXIT
+          npm test --prefix frontend
+          npm run build --prefix frontend
+          uv run pytest -v -ra tests/test_api.py tests/test_account_workflow.py --junitxml=viewer-logs/api.xml
+      - name: LAN HTTP Chromium and WebKit noVNC acceptance
+        timeout-minutes: 4
+        env:
+          BRIDGE_TEST_WEBKIT: "1"
+          BRIDGE_TEST_LAN_HOST: bridge.test
+          NO_PROXY: bridge.test,127.0.0.1,localhost
+          no_proxy: bridge.test,127.0.0.1,localhost
+        run: |
+          set -Eeuo pipefail
+          exec > >(tee viewer-logs/browser.log) 2>&1
+          trap 'rc=$?; printf "%s\n" "$rc" > viewer-logs/browser.exit' EXIT
+          timeout --signal=TERM --kill-after=10s 180s xvfb-run -a -s '-screen 0 1920x1080x24' uv run pytest -v -ra tests/test_novnc_live.py --junitxml=viewer-logs/browser.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: viewer-${{ github.sha }}
+          path: |
+            viewer-logs/
+            frontend/dist/
+          retention-days: 7

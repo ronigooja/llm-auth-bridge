@@ -5,6 +5,18 @@ import { requestId } from "./id";
 
 type BrowserTask = { id: number; account_id?: number; depends_on_task_id?: number | null; state: string; kind?: string; phase?: string; message?: string; takeover_available?: boolean };
 const active = new Set(["queued", "running", "waiting_human", "sync_pending"]);
+const shellPath = "/account-window";
+
+async function waitForShell(target: Window) {
+  const deadline = Date.now() + 15000;
+  while (!target.closed) {
+    if (target.location.pathname === shellPath && target.document.readyState === "complete") return;
+    if (Date.now() >= deadline) throw new Error("账号窗口加载超时，请关闭窗口后重试。");
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+  }
+  throw new Error("账号窗口已关闭。");
+}
+
 export function accountViewerUrl(id: number, interactive: boolean) {
   return `/novnc/vnc.html?autoconnect=true&resize=scale&view_only=${!interactive}&shared=true&path=api/v1/tasks/${id}/${interactive ? "takeover" : "monitor"}`;
 }
@@ -78,28 +90,30 @@ export function useAccountWindow(enabled: boolean) {
     }
     const width = Math.max(1, Math.min(1600, window.screen.availWidth || window.innerWidth));
     const height = Math.max(1, Math.min(1000, window.screen.availHeight || window.innerHeight));
-    const target = popup.current && !popup.current.closed ? popup.current : window.open("about:blank", "_blank", `popup=yes,width=${width},height=${height},resizable=yes,scrollbars=yes`);
+    const target = popup.current && !popup.current.closed ? popup.current : window.open(shellPath, "_blank", `popup=yes,width=${width},height=${height},resizable=yes,scrollbars=yes`);
     if (!target) { setError("账号窗口被浏览器拦截，请允许弹窗后再次点击“账号窗口”。"); return; }
     target.opener = null;
-    target.document.title = "账号窗口";
-    target.document.body.style.cssText = "margin:0;background:#101820;color:#eef4f8;font:16px system-ui;height:100vh";
-    const root = target.document.createElement("div");
-    root.style.cssText = "height:100%;display:flex;flex-direction:column";
-    target.document.body.replaceChildren(root);
-    account.current = accountId;
-    popup.current = target;
-    hidden.current = false;
-    setHost(root);
-    if (resumeIdle) return;
-    saving.current = null;
-    closeRequested.current = null;
-    setClosing(false);
-    update(null);
-    setInteractive(false);
-    setTakeoverRequested(false);
-    setError("");
     opening.current = true;
+    popup.current = target;
     try {
+      await waitForShell(target);
+      target.document.title = "账号窗口";
+      target.document.body.style.cssText = "margin:0;background:#101820;color:#eef4f8;font:16px system-ui;height:100vh";
+      const root = target.document.createElement("div");
+      root.style.cssText = "height:100%;display:flex;flex-direction:column";
+      target.document.body.replaceChildren(root);
+      account.current = accountId;
+      popup.current = target;
+      hidden.current = false;
+      setHost(root);
+      if (resumeIdle) return;
+      saving.current = null;
+      closeRequested.current = null;
+      setClosing(false);
+      update(null);
+      setInteractive(false);
+      setTakeoverRequested(false);
+      setError("");
       const result = await api<{ task: BrowserTask }>(`/accounts/${accountId}/browser`, "POST", { idempotency_key: requestId() });
       update(result.task);
     } catch (e) { setError(e instanceof Error ? e.message : "无法打开账号窗口"); }
@@ -185,7 +199,7 @@ export function useAccountWindow(enabled: boolean) {
         <span role="status">{!task ? "正在准备账号浏览器…" : closing ? "正在关闭账号窗口，请稍候…" : task.state === "sync_pending" ? "正在同步账号，请稍候…" : !active.has(task.state) ? task.state === "succeeded" ? "任务已完成。" : task.message || "任务已结束，请检查任务记录。" : interactive ? "可操作浏览器" : "正在观察自动操作（只读）"}</span>
         {task && active.has(task.state) && task.state !== "sync_pending" && !idle(task) && !interactive && <button disabled={busy || !available || takeoverRequested} onClick={() => void takeControl()}>{takeoverRequested ? "正在等待接管…" : "接管"}</button>}
       </header>
-      <p style={{ margin: "0 12px 12px" }}>{task && idle(task) ? "完成后直接关闭窗口；后台会自动结束本次会话，请稍候。" : "关闭窗口仅关闭查看器，登录任务会继续。接管后请返回任务页点击“继续任务”。"}</p>
+      {task && !idle(task) && <p style={{ margin: "0 12px 12px" }}>关闭窗口仅关闭查看器，登录任务会继续。接管后请返回任务页点击“继续任务”。</p>}
       {error && <p role="alert">{error}</p>}
       {available && <iframe title="账号浏览器" src={accountViewerUrl(task.id, interactive)} style={{ border: 0, width: "100%", flex: 1, minHeight: 0 }} />}
     </>, host)}

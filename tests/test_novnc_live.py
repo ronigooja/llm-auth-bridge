@@ -13,6 +13,7 @@ import socket
 import subprocess
 import time
 from urllib.parse import urlencode
+from playwright.sync_api import sync_playwright
 
 import pytest
 
@@ -105,10 +106,29 @@ def assert_read_only_viewer(frame):
         const {default: UI} = await import('/novnc/app/ui.js');
         return UI.rfb.viewOnly;
     }""") is True
+    assert frame.locator("#noVNC_fallback_error").is_hidden()
+    assert frame.locator("#noVNC_power").is_hidden()
+
+
+@contextmanager
+def viewer_browser(engine):
+    if engine == "chromium":
+        with real_browser() as browser:
+            yield browser
+    else:
+        with sync_playwright() as playwright:
+            browser = playwright.webkit.launch(headless=True)
+            try:
+                yield browser
+            finally:
+                browser.close()
 
 
 @pytest.mark.parametrize("viewer", ["direct", "account-popup"])
-def test_packaged_novnc_connects_read_only_without_pausing_task(settings, resources, tmp_path, viewer):
+@pytest.mark.parametrize("engine", ["chromium", pytest.param("webkit", marks=pytest.mark.skipif(
+    not os.getenv("BRIDGE_TEST_WEBKIT"), reason="Enable installed WebKit acceptance explicitly",
+))])
+def test_packaged_novnc_connects_read_only_without_pausing_task(settings, resources, tmp_path, viewer, engine):
     account, target = resources
     with packaged_vnc(settings, tmp_path) as config:
         if viewer == "account-popup" and not Path("frontend/dist/index.html").is_file():
@@ -119,8 +139,15 @@ def test_packaged_novnc_connects_read_only_without_pausing_task(settings, resour
         task = queue.create(account, target)
         claim = queue.claim()
         queue.update(task["id"], claim["execution_id"], state="running", takeover_available=1)
-        with web_server(config) as url, real_browser() as browser:
+        with web_server(config) as url, viewer_browser(engine) as browser:
+            # A non-loopback HTTP hostname exercises LAN cookie/site behavior.
+            if os.getenv("BRIDGE_TEST_LAN_HOST"):
+                url = url.replace("127.0.0.1", os.environ["BRIDGE_TEST_LAN_HOST"])
             context = browser.new_context(service_workers="block")
+            failed_assets = []
+            context.on("response", lambda response: failed_assets.append(
+                (response.url, response.status)
+            ) if "/novnc/" in response.url and response.status >= 400 else None)
             try:
                 response = context.request.post(
                     url + "/api/v1/auth/login",
@@ -144,6 +171,7 @@ def test_packaged_novnc_connects_read_only_without_pausing_task(settings, resour
                     with page.expect_popup() as opened:
                         card.get_by_role("button", name="账号窗口", exact=True).click()
                     popup = opened.value
+                    popup.wait_for_url("**/account-window")
                     assert popup.evaluate("window.opener") is None
                     iframe = popup.locator('iframe[title="账号浏览器"]')
                     iframe.wait_for(state="attached")
@@ -152,6 +180,7 @@ def test_packaged_novnc_connects_read_only_without_pausing_task(settings, resour
                     assert frame is not None
                     assert_read_only_viewer(frame)
                     popup.close()
+                assert failed_assets == []
                 with database(config.db_path) as conn:
                     row = conn.execute(
                         "SELECT state,execution_id,takeover_requested,cancel_requested FROM tasks WHERE id=?",

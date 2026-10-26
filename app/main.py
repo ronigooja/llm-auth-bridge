@@ -13,7 +13,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError, InvalidHashError
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from .config import Settings
 from .crypto import load_key, encrypt, decrypt
@@ -138,7 +138,7 @@ def create_app(settings: Settings | None = None):
             and int(request.headers.get("content-length", "0")) > 2_100_000
         ):
             return JSONResponse({"detail": "request is too large"}, 413)
-        if path.startswith("/api/") or path.startswith("/novnc"):
+        if path.startswith(("/api/", "/novnc")) or path == "/account-window":
             if path != "/api/v1/auth/login":
                 auth = session(request.cookies.get("bridge_session"))
                 if not auth:
@@ -157,7 +157,7 @@ def create_app(settings: Settings | None = None):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Frame-Options"] = "SAMEORIGIN"
-        if path.startswith(("/api/", "/novnc")):
+        if path.startswith(("/api/", "/novnc")) or path == "/account-window":
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -925,6 +925,12 @@ def create_app(settings: Settings | None = None):
                     tuple(values.values()),
                 )
         return get_settings()
+
+    @app.get("/account-window", response_class=HTMLResponse)
+    def account_window():
+        # A real same-site top-level document keeps Strict cookies available
+        # to the embedded viewer's subresources, including in WebKit.
+        return '<!doctype html><html><head><meta charset="utf-8"><title>账号窗口</title></head><body></body></html>'
 
     novnc = Path("/usr/share/novnc")
     if novnc.exists():

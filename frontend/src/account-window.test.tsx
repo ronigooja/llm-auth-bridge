@@ -16,7 +16,7 @@ function popup() {
   frame.dataset.popupFixture = "true";
   document.body.appendChild(frame);
   const doc = frame.contentDocument!;
-  const target = { document: doc, closed: false, opener: window, focus: vi.fn(), close: vi.fn() };
+  const target = { document: doc, location: { pathname: "/account-window" }, closed: false, opener: window, focus: vi.fn(), close: vi.fn() };
   vi.spyOn(window, "open").mockReturnValue(target as unknown as Window);
   return target;
 }
@@ -32,7 +32,7 @@ describe("unified account window", () => {
     vi.stubGlobal("fetch", vi.fn(() => json({ task })));
     render(<Harness />);
     fireEvent.click(screen.getByRole("button", { name: "账号窗口" }));
-    expect(window.open).toHaveBeenCalledWith("about:blank", "_blank", expect.stringContaining("resizable=yes"));
+    expect(window.open).toHaveBeenCalledWith("/account-window", "_blank", expect.stringContaining("resizable=yes"));
     await waitFor(() => expect(target.document.querySelector("iframe")?.src).toContain("view_only=true&shared=true&path=api/v1/tasks/7/monitor"));
     expect(target.opener).toBeNull();
     expect(fetch).toHaveBeenCalledTimes(1);

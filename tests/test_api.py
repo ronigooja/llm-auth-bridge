@@ -5,6 +5,17 @@ from app.crypto import load_key, decrypt, encrypt
 from app.queue import Queue
 
 
+def test_account_window_shell_requires_session(client, admin):
+    response = admin.get("/account-window")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-frame-options"] == "SAMEORIGIN"
+    assert "<body></body>" in response.text
+    admin.cookies.clear()
+    assert client.get("/account-window").status_code == 401
+
+
 @pytest.mark.parametrize(
     "path",
     [
