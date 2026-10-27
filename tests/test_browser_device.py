@@ -1,6 +1,8 @@
 """Synthetic profile fixtures only: no browser or real account state."""
 
 import io
+import json
+import os
 from pathlib import Path
 import tarfile
 
@@ -26,9 +28,14 @@ class Control:
         self.saves += 1
 
 
-def packed(entries):
+def packed(entries, *, marked=True):
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        if marked:
+            payload = json.dumps(browser_device.ARCHIVE_FORMAT).encode()
+            marker = tarfile.TarInfo(browser_device.ARCHIVE_FORMAT_FILE)
+            marker.size = len(payload)
+            archive.addfile(marker, io.BytesIO(payload))
         for name, kind, content in entries:
             member = tarfile.TarInfo(name)
             member.type = kind
@@ -44,9 +51,10 @@ def packed(entries):
 def test_roundtrip_keeps_full_profile_and_excludes_transient_data():
     control = Control()
     retained = [
-        "Local State", "Default/Network/Cookies", "Default/IndexedDB/example/data",
-        "Default/Local Storage/leveldb/data", "Default/Session Storage/data",
-        "Default/Preferences", "Default/Extensions/synthetic/manifest.json",
+        "cookies.sqlite", "cookies.sqlite-wal", "prefs.js", "storage.sqlite",
+        "storage/default/https+++synthetic.example/ls/data.sqlite",
+        "storage/default/https+++synthetic.example/idb/data.sqlite",
+        "sessionstore-backups/recovery.jsonlz4", "extensions/synthetic/manifest.json",
     ]
     with device_directory({"id": "synthetic-a"}, control) as device:
         device.mark_ready()
@@ -57,11 +65,12 @@ def test_roundtrip_keeps_full_profile_and_excludes_transient_data():
             target = device.path / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(b"synthetic-profile-data")
-        cache = device.path / "Default/Cache/data"
-        cache.parent.mkdir()
+        cache = device.path / "cache2/entries/data"
+        cache.parent.mkdir(parents=True)
         cache.write_bytes(b"synthetic-cache")
-        (device.path / "DevToolsActivePort").write_text("synthetic")
-        (device.path / "SingletonLock").symlink_to("/synthetic/nonexistent")
+        (device.path / ".parentlock").touch()
+        (device.path / "parent.lock").touch()
+        (device.path / "lock").symlink_to("synthetic-host:+12345")
     assert not first_path.exists()
     assert control.saves == 1
     with device_directory({"id": "synthetic-a"}, control) as device:
@@ -72,9 +81,11 @@ def test_roundtrip_keeps_full_profile_and_excludes_transient_data():
             target = device.path / name
             assert target.read_bytes() == b"synthetic-profile-data"
             assert target.stat().st_mode & 0o777 == 0o600
-        assert not (device.path / "Default/Cache").exists()
-        assert not (device.path / "DevToolsActivePort").exists()
-        assert not (device.path / "SingletonLock").is_symlink()
+        assert not (device.path / "cache2").exists()
+        assert not (device.path / ".parentlock").exists()
+        assert not (device.path / "parent.lock").exists()
+        assert not (device.path / "lock").is_symlink()
+        assert not (device.path / browser_device.ARCHIVE_FORMAT_FILE).exists()
     assert not device.path.exists()
 
 
@@ -84,15 +95,15 @@ def test_controls_isolate_accounts_and_account_paths_are_ignored(tmp_path):
     account = {"id": "../synthetic-a", "device_path": str(tmp_path)}
     with device_directory(account, first) as device:
         device.mark_ready()
-        (device.path / "Local State").write_text("synthetic-first")
+        (device.path / "prefs.js").write_text("synthetic-first")
     with device_directory(account, second) as device:
         device.mark_ready()
         assert not device.restored
-        assert not (device.path / "Local State").exists()
-        (device.path / "Local State").write_text("synthetic-second")
+        assert not (device.path / "prefs.js").exists()
+        (device.path / "prefs.js").write_text("synthetic-second")
     with device_directory(account, first) as device:
         device.mark_ready()
-        assert (device.path / "Local State").read_text() == "synthetic-first"
+        assert (device.path / "prefs.js").read_text() == "synthetic-first"
     assert list(tmp_path.iterdir()) == []
 
 
@@ -102,14 +113,14 @@ def test_error_snapshots_partial_profile_and_removes_plaintext():
     with pytest.raises(RuntimeError) as caught:
         with device_directory({}, control) as device:
             device.mark_ready()
-            (device.path / "Local State").write_text("synthetic-progress")
+            (device.path / "prefs.js").write_text("synthetic-progress")
             raise original
     assert caught.value is original
     assert not device.path.exists()
     assert control.saves == 1
     with device_directory({}, control) as device:
         device.mark_ready()
-        assert (device.path / "Local State").read_text() == "synthetic-progress"
+        assert (device.path / "prefs.js").read_text() == "synthetic-progress"
 
 
 def test_save_failure_preserves_cancellation_and_cleanup():
@@ -130,7 +141,7 @@ def test_normal_save_failure_is_visible_and_plaintext_removed():
     with pytest.raises(RuntimeError, match="lease expired"):
         with device_directory({}, control) as device:
             device.mark_ready()
-            (device.path / "Local State").write_text("synthetic")
+            (device.path / "prefs.js").write_text("synthetic")
     assert not device.path.exists()
 
 
@@ -153,8 +164,8 @@ def test_rejects_non_regular_members(kind):
 
 def test_rejects_duplicate_members():
     control = Control(packed([
-        ("Local State", tarfile.REGTYPE, b"first"),
-        ("Local State", tarfile.REGTYPE, b"second"),
+        ("prefs.js", tarfile.REGTYPE, b"first"),
+        ("prefs.js", tarfile.REGTYPE, b"second"),
     ]))
     with pytest.raises(DeviceArchiveError, match="Duplicate"):
         with device_directory({}, control):
@@ -179,7 +190,7 @@ def test_restore_failure_removes_temporary_directory(monkeypatch, tmp_path):
 
 
 def test_archive_size_limits(monkeypatch):
-    archive = packed([("Local State", tarfile.REGTYPE, b"synthetic" * 100)])
+    archive = packed([("prefs.js", tarfile.REGTYPE, b"synthetic" * 100)])
     monkeypatch.setattr(browser_device, "MAX_COMPRESSED_BYTES", len(archive) - 1)
     with pytest.raises(DeviceArchiveError, match="compressed size"):
         with device_directory({}, Control(archive)):
@@ -196,7 +207,7 @@ def test_member_limit_and_snapshot_limit(monkeypatch):
         ("first", tarfile.REGTYPE, b"synthetic"),
         ("second", tarfile.REGTYPE, b"synthetic"),
     ])
-    monkeypatch.setattr(browser_device, "MAX_MEMBERS", 1)
+    monkeypatch.setattr(browser_device, "MAX_MEMBERS", 2)
     with pytest.raises(DeviceArchiveError, match="member limit"):
         with device_directory({}, Control(archive)):
             pytest.fail("Too many members yielded a directory")
@@ -227,13 +238,13 @@ def test_snapshot_size_limit_cleans_up_without_saving(monkeypatch, limit):
     with pytest.raises(DeviceArchiveError, match="size limit"):
         with device_directory({}, control) as device:
             device.mark_ready()
-            (device.path / "Local State").write_bytes(b"synthetic" * 100)
+            (device.path / "prefs.js").write_bytes(b"synthetic" * 100)
     assert not device.path.exists()
     assert control.saves == 0
 
 
 def test_truncated_gzip_archive_is_rejected():
-    archive = packed([("Local State", tarfile.REGTYPE, b"synthetic")])
+    archive = packed([("prefs.js", tarfile.REGTYPE, b"synthetic")])
     with pytest.raises(DeviceArchiveError):
         with device_directory({}, Control(archive[:-8])):
             pytest.fail("Truncated archive yielded a directory")
@@ -242,14 +253,14 @@ def test_truncated_gzip_archive_is_rejected():
 @pytest.mark.parametrize("restored", [False, True])
 @pytest.mark.parametrize("error", [False, True])
 def test_startup_failure_or_unready_exit_preserves_archive(restored, error):
-    archive = packed([("Local State", tarfile.REGTYPE, b"synthetic-old")]) if restored else None
+    archive = packed([("prefs.js", tarfile.REGTYPE, b"synthetic-old")]) if restored else None
     control = Control(archive)
     original = RuntimeError("synthetic startup or import failure")
     try:
         with device_directory({}, control) as device:
             assert not device.ready
             assert device.restored is restored
-            (device.path / "Local State").write_text("synthetic-incomplete")
+            (device.path / "prefs.js").write_text("synthetic-incomplete")
             if error:
                 raise original
     except RuntimeError as caught:
@@ -261,13 +272,13 @@ def test_startup_failure_or_unready_exit_preserves_archive(restored, error):
 
 @pytest.mark.parametrize("error", [False, True])
 def test_close_failure_discard_preserves_previous_archive(error):
-    archive = packed([("Local State", tarfile.REGTYPE, b"synthetic-old")])
+    archive = packed([("prefs.js", tarfile.REGTYPE, b"synthetic-old")])
     control = Control(archive)
     original = RuntimeError("synthetic browser error")
     try:
         with device_directory({}, control) as device:
             device.mark_ready()
-            (device.path / "Local State").write_text("synthetic-progress")
+            (device.path / "prefs.js").write_text("synthetic-progress")
             device.abort_snapshot()
             # Discard is permanent even if another caller marks it ready again.
             device.mark_ready()
@@ -278,3 +289,73 @@ def test_close_failure_discard_preserves_previous_archive(error):
     assert control.saves == 0
     assert control.archive is archive
     assert not device.path.exists()
+
+
+def test_unmarked_chromium_archive_starts_empty_and_is_preserved_until_ready():
+    previous = packed([
+        ("Local State", tarfile.REGTYPE, b"synthetic-chromium"),
+        ("Default/Network/Cookies", tarfile.REGTYPE, b"synthetic-cookie"),
+    ], marked=False)
+    control = Control(previous)
+    with device_directory({}, control) as device:
+        assert not device.restored
+        assert list(device.path.iterdir()) == []
+    assert control.archive is previous
+    assert control.saves == 0
+    with device_directory({}, control) as device:
+        assert not device.restored
+        device.mark_ready()
+        (device.path / "prefs.js").write_text("synthetic-firefox")
+    with device_directory({}, control) as device:
+        assert device.restored
+        assert (device.path / "prefs.js").read_text() == "synthetic-firefox"
+        assert not (device.path / "Default").exists()
+        assert not (device.path / "Local State").exists()
+
+
+@pytest.mark.parametrize("payload", [
+    b"invalid-json", b"[]", b'{"engine":"chromium","format":"firefox-profile","version":1}',
+    b'{"engine":"camoufox","format":"firefox-profile","version":2}',
+    b'{"engine":"camoufox","format":"firefox-profile","version":true}',
+])
+def test_invalid_or_unsupported_firefox_format_fails_without_replacing_archive(payload):
+    previous = packed([
+        (browser_device.ARCHIVE_FORMAT_FILE, tarfile.REGTYPE, payload),
+        ("prefs.js", tarfile.REGTYPE, b"synthetic"),
+    ], marked=False)
+    control = Control(previous)
+    with pytest.raises(DeviceArchiveError, match="format"):
+        with device_directory({}, control):
+            pytest.fail("Invalid format yielded a directory")
+    assert control.archive is previous
+    assert control.saves == 0
+
+
+@pytest.mark.parametrize("name", ["nested/lock", "cache2", "prefs.js"])
+def test_snapshot_rejects_links_outside_known_root_locks(name):
+    control = Control()
+    with pytest.raises(DeviceArchiveError, match="Unsupported"):
+        with device_directory({}, control) as device:
+            device.mark_ready()
+            path = device.path / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.symlink_to("/synthetic/target")
+    assert control.saves == 0
+
+
+def test_snapshot_rejects_special_file_even_when_named_like_transient_lock():
+    control = Control()
+    with pytest.raises(DeviceArchiveError, match="Unsupported"):
+        with device_directory({}, control) as device:
+            device.mark_ready()
+            os.mkfifo(device.path / "lock")
+    assert control.saves == 0
+
+
+def test_snapshot_reserves_archive_format_marker():
+    control = Control()
+    with pytest.raises(DeviceArchiveError, match="Reserved"):
+        with device_directory({}, control) as device:
+            device.mark_ready()
+            (device.path / browser_device.ARCHIVE_FORMAT_FILE).write_text("synthetic")
+    assert control.saves == 0

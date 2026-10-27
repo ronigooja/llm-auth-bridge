@@ -1,6 +1,6 @@
-"""Restricted, temporary Chromium profiles backed by encrypted control storage.
+"""Restricted, temporary Firefox profiles backed by encrypted control storage.
 
-Callers must close Chromium before leaving ``device_directory``. The control owns
+Callers must close Camoufox before leaving ``device_directory``. The control owns
 account binding, encryption, and lease checks; account data never selects paths.
 """
 
@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import gzip
 import io
+import json
 import os
 from pathlib import Path, PurePosixPath
 import stat
@@ -18,11 +19,16 @@ import tempfile
 MAX_COMPRESSED_BYTES = 64 * 1024 * 1024
 MAX_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
 MAX_MEMBERS = 20_000
-_EXCLUDED = {
-    "SingletonLock", "SingletonCookie", "SingletonSocket", "DevToolsActivePort",
-    "Cache", "Code Cache", "GPUCache", "DawnCache", "GrShaderCache",
-    "ShaderCache", "CacheStorage", "Crashpad", "Crash Reports", "BrowserMetrics",
-}
+ARCHIVE_FORMAT_FILE = ".bridge-firefox-archive.json"
+ARCHIVE_FORMAT = {"engine": "camoufox", "format": "firefox-profile", "version": 1}
+# When snapshotting a Firefox profile, omit only these known root-level
+# transient entries. Unknown links and special files must still be rejected.
+_TRANSIENT_LOCKS = {"lock", ".parentlock", "parent.lock"}
+_TRANSIENT_DIRECTORIES = {"cache2", "startupCache", "shader-cache", "minidumps", "crashes"}
+
+
+def _excluded(relative):
+    return relative.parts[0] in (_TRANSIENT_LOCKS | _TRANSIENT_DIRECTORIES)
 
 
 class DeviceArchiveError(ValueError):
@@ -37,7 +43,7 @@ class BrowserDevice:
     _discarded: bool = False
 
     def mark_ready(self):
-        """Allow saving only after browser startup and legacy state import."""
+        """Allow saving only after browser startup and session restoration."""
         self.ready = True
 
     def abort_snapshot(self):
@@ -104,10 +110,27 @@ def _restore(archive, root):
                 if total > MAX_UNCOMPRESSED_BYTES:
                     raise DeviceArchiveError("Device archive exceeds content size limit")
                 members.append((member, relative))
-            # Validate all headers before creating any profile contents.
+            # Validate all headers and the format before creating any profile
+            # contents. Unmarked Chromium archives are retained by the control,
+            # but their data is never imported into a Firefox profile.
+            formats = [(member, relative) for member, relative in members
+                       if relative.as_posix() == ARCHIVE_FORMAT_FILE]
+            if not formats:
+                return False
+            marker, _ = formats[0]
+            if not marker.isreg() or marker.size > 1024:
+                raise DeviceArchiveError("Invalid Firefox device archive format")
+            try:
+                with source.extractfile(marker) as incoming:
+                    value = json.load(incoming)
+                if (value != ARCHIVE_FORMAT or not isinstance(value, dict)
+                        or type(value.get("version")) is not int):
+                    raise ValueError()
+            except (ValueError, UnicodeError):
+                raise DeviceArchiveError("Unsupported Firefox device archive format") from None
             for member, relative in members:
                 target = root.joinpath(*relative.parts)
-                if any(part in _EXCLUDED for part in relative.parts):
+                if relative.as_posix() == ARCHIVE_FORMAT_FILE or _excluded(relative):
                     continue
                 target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 if member.isdir():
@@ -123,6 +146,7 @@ def _restore(archive, root):
                                     raise DeviceArchiveError("Truncated device archive member")
                                 outgoing.write(data)
                                 remaining -= len(data)
+            return True
     except (OSError, EOFError, tarfile.TarError) as exc:
         raise DeviceArchiveError("Invalid device archive") from exc
 
@@ -135,18 +159,33 @@ def _snapshot(root):
 
     with gzip.GzipFile(fileobj=output, mode="wb", mtime=0) as compressed:
         with tarfile.open(fileobj=_LimitedWriter(compressed), mode="w|") as archive:
-            count = 0
+            payload = json.dumps(ARCHIVE_FORMAT, sort_keys=True).encode()
+            marker = tarfile.TarInfo(ARCHIVE_FORMAT_FILE)
+            marker.size = len(payload)
+            marker.mode = 0o600
+            archive.addfile(marker, io.BytesIO(payload))
+            count = 1
             for directory, directories, filenames in os.walk(root, followlinks=False, onerror=walk_error):
-                directories[:] = sorted(d for d in directories if d not in _EXCLUDED)
+                directories[:] = sorted(directories)
                 for name in directories + sorted(filenames):
-                    if name in _EXCLUDED:
+                    path = Path(directory) / name
+                    relative = path.relative_to(root)
+                    metadata = path.lstat()
+                    is_lock = len(relative.parts) == 1 and name in _TRANSIENT_LOCKS
+                    if stat.S_ISLNK(metadata.st_mode) and is_lock:
+                        continue
+                    if not (stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)):
+                        raise DeviceArchiveError("Unsupported device profile file")
+                    if relative.as_posix() == ARCHIVE_FORMAT_FILE:
+                        raise DeviceArchiveError("Reserved device archive format path")
+                    if _excluded(relative):
+                        if name in directories:
+                            directories.remove(name)
                         continue
                     count += 1
                     if count > MAX_MEMBERS:
                         raise DeviceArchiveError("Device archive exceeds member limit")
-                    path = Path(directory) / name
-                    metadata = path.lstat()
-                    member = tarfile.TarInfo(path.relative_to(root).as_posix())
+                    member = tarfile.TarInfo(relative.as_posix())
                     member.mtime = int(metadata.st_mtime)
                     if stat.S_ISDIR(metadata.st_mode):
                         member.type = tarfile.DIRTYPE
@@ -171,7 +210,9 @@ def _snapshot(root):
 def device_directory(account: dict, control):
     """Restore a profile, then save after the caller closes its browser.
 
-    Call ``mark_ready`` only after startup and legacy import succeed; call
+    When an archive has no Firefox format marker, start an empty profile and
+    preserve the previous archive until a successful snapshot replaces it.
+    Call ``mark_ready`` only after startup and session restoration succeed; call
     ``abort_snapshot`` when browser shutdown fails. Only a ready, undiscarded profile
     is saved. Exceptional exits preserve the original error, including
     cancellation and lease failure. Plaintext is always removed. Production
@@ -182,9 +223,7 @@ def device_directory(account: dict, control):
         root = Path(directory)
         os.chmod(root, 0o700)
         archive = control.load_device()
-        restored = archive is not None
-        if restored:
-            _restore(archive, root)
+        restored = _restore(archive, root) if archive is not None else False
         device = BrowserDevice(root, restored)
         try:
             yield device
