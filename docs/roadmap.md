@@ -64,6 +64,18 @@ readback does not prove provider usability, runtime reload, or actual egress.
   storage synchronization only. The [Voice contract](contracts/integrations/voice.md)
   describes the disposable harness and its limits.
 
+## Current regression gate
+
+The baseline `d22cdb8` [Checks run 40408984960](https://github.com/ronigooja/llm-auth-bridge/actions/runs/40408984960)
+failed the frontend case `keeps account editor busy until new route and bindings
+finish refreshing` because the expected account-editor dialog was absent. The
+same case failed on the documentation-only revision `c9d7441` in
+[run 40473738235](https://github.com/ronigooja/llm-auth-bridge/actions/runs/40473738235).
+The production frontend build and targeted Codex continuation preflight can run
+following that failure; their completion does not make the overall check pass.
+Resolve this baseline regression before claiming the complete current integration
+check is green. This documentation change does not alter application or test code.
+
 ## Required before full product acceptance
 
 1. Synthetically accept a deployed native CPA target's staging/commit recovery,
