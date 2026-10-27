@@ -29,6 +29,8 @@ def test_direct_disables_ambient_proxy(monkeypatch):
 
 
 def test_route_consumer_oserror_is_not_mislabeled_as_proxy_failure(monkeypatch):
+    from contextlib import nullcontext
+
     monkeypatch.setattr(routing.shutil, "which", lambda _: "/synthetic/gost")
 
     class Process:
@@ -42,7 +44,7 @@ def test_route_consumer_oserror_is_not_mislabeled_as_proxy_failure(monkeypatch):
             return 0
 
     monkeypatch.setattr(routing.subprocess, "Popen", lambda *a, **k: Process())
-    monkeypatch.setattr(routing.socket, "create_connection", lambda *a, **k: None)
+    monkeypatch.setattr(routing.socket, "create_connection", lambda *a, **k: nullcontext())
     with pytest.raises(OSError, match="consumer failure"):
         with routing.account_route(
             {"route_type": "proxy", "proxy": {"server": "socks5://proxy.example:1080"}}

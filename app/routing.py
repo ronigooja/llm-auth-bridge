@@ -109,11 +109,14 @@ def account_route(account: dict):
             json.dump(config, stream)
         process = None
         try:
-            process = subprocess.Popen(
-                [gost, "-C", str(path)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            try:
+                process = subprocess.Popen(
+                    [gost, "-C", str(path)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except OSError:
+                raise RouteError("Account proxy could not start") from None
             for _ in range(100):
                 if process.poll() is not None:
                     raise RouteError("Account proxy could not start")
@@ -127,9 +130,6 @@ def account_route(account: dict):
             else:
                 raise RouteError("Account proxy did not become ready")
             endpoint = f"http://127.0.0.1:{local_port}"
-        except OSError:
-            raise RouteError("Account proxy could not start") from None
-        try:
             with httpx.Client(
                 proxy=endpoint, trust_env=False, timeout=30, follow_redirects=False
             ) as session:

@@ -1,0 +1,27 @@
+name: Browser cache and routing regression
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  routing:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.8.22'
+      - name: Verify affected routing contracts
+        run: |
+          set -euo pipefail
+          uv sync --frozen --extra test > /tmp/routing-install.log 2>&1 || { tail -n 40 /tmp/routing-install.log; exit 1; }
+          curl -fsSL https://github.com/go-gost/gost/releases/download/v3.3.1/gost_3.3.1_linux_amd64.tar.gz -o /tmp/gost.tar.gz
+          echo 'e0e3a2c9116e2f025e962bba340749f80696bda318613d45e5ae96dd0bcae37c  /tmp/gost.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/gost.tar.gz -C /tmp gost
+          BRIDGE_TEST_GOST=/tmp/gost uv run pytest -q tests/test_routing.py tests/test_proxy_protocols.py tests/test_proxy_live.py > /tmp/routing-pytest.log 2>&1 || { tail -n 100 /tmp/routing-pytest.log; exit 1; }
+          tail -n 2 /tmp/routing-pytest.log
+          rm -f /tmp/gost /tmp/gost.tar.gz /tmp/routing-install.log /tmp/routing-pytest.log
