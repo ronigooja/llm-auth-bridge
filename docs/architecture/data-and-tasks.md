@@ -79,7 +79,7 @@ extension. The bridge persists its encrypted native-session reference and marks
 callback submission before sending it. Staging is distinct from installing a
 usable credential. Commit enters the same fenced `sync_pending` write boundary;
 readback must confirm identity, explicit route, stable remote ID and persisted
-credential digest. See the [CPA protocol](../integrations/cliproxyapi.md).
+credential digest. See the [CPA protocol](../contracts/integrations/cliproxyapi.md).
 
 ## Recovery and mutation boundaries
 
@@ -114,7 +114,7 @@ check is scheduled at the earlier of six hours later or one hour before known
 expiry. Unknown expiry and transient retry use six-hour checks. Invalid sessions require reauthorization. `maintenance_enabled` controls
 automatic maintenance, not manual task admission. CPA refresh remains downstream
 owned. See [worker.py](../../app/worker.py) and the
-[Voice integration](../integrations/voice.md).
+[Voice integration](../contracts/integrations/voice.md).
 
 Retention deletes final task records and their cascading events after the
 configured interval, preserving parents needed by active dependent tasks.

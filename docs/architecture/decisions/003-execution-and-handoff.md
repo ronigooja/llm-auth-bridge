@@ -48,4 +48,4 @@ The current lifecycle is documented in [data and tasks](../data-and-tasks.md).
 [queue.py](../../../app/queue.py), [worker.py](../../../app/worker.py) and the
 [worker adapter contract](../../contracts/worker-adapters.md) define the execution
 and synchronization boundaries. Downstream requirements belong to
-[CPA](../../integrations/cliproxyapi.md) and [Voice](../../integrations/voice.md).
+[CPA](../../contracts/integrations/cliproxyapi.md) and [Voice](../../contracts/integrations/voice.md).

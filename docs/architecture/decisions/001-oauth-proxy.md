@@ -17,7 +17,7 @@ usable by Chromium and the HTTP client. The worker image pins its release and
 architecture-specific checksums in the [Dockerfile](../../../Dockerfile).
 
 When native CPA delegates exchange to the downstream extension, require explicit
-route binding and attestation under the [CPA protocol](../../integrations/cliproxyapi.md).
+route binding and attestation under the [CPA protocol](../../contracts/integrations/cliproxyapi.md).
 Downstream management traffic remains a separate service connection.
 
 ## Consequences

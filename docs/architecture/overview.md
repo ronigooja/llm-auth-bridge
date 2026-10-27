@@ -36,13 +36,14 @@ from serving requests; see the [deployment guide](../guides/deployment.md).
   execution fencing, cancellation, recovery and retention.
 - [Security boundaries](security.md) describes administrator access, secret
   storage, network routes and the live desktop trust boundary.
-- [Architecture decisions](decisions/) records why routing, encryption and serial
-  handoff work this way.
+- Architecture decisions explain [account routing](decisions/001-oauth-proxy.md),
+  [encrypted secrets](decisions/002-encrypted-secrets.md), and
+  [serial execution and handoff](decisions/003-execution-and-handoff.md).
 
 Interface details have one home: [HTTP API](../contracts/http-api.md),
 [worker adapters](../contracts/worker-adapters.md) and
 [account window transport](../contracts/account-window.md). Downstream protocol
-requirements belong to [CLIProxyAPI](../integrations/cliproxyapi.md) and
-[Voice](../integrations/voice.md). The [capability matrix](../roadmap.md) is the
+requirements belong to [CLIProxyAPI](../contracts/integrations/cliproxyapi.md) and
+[Voice](../contracts/integrations/voice.md). The [capability matrix](../roadmap.md) is the
 authority for tested behavior, acceptance gaps and future work; the architectural
 boundaries here do not establish real-account acceptance.

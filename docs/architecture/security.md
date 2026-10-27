@@ -74,8 +74,8 @@ For native CPA OAuth, the extension owns token exchange and must attest the
 explicit account route along with identity and credential readback; the bridge
 cannot infer that guarantee from a generic successful HTTP response. Voice
 compatibility likewise requires the documented server contract. Protocol
-requirements belong to [CPA](../integrations/cliproxyapi.md) and
-[Voice](../integrations/voice.md).
+requirements belong to [CPA](../contracts/integrations/cliproxyapi.md) and
+[Voice](../contracts/integrations/voice.md).
 
 A successful browser login alone does not prove downstream installation, and a
 possible write cannot safely be treated as absent after a timeout. Execution
