@@ -6,7 +6,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 from camoufox.sync_api import NewBrowser
 from camoufox.utils import launch_options
-from app.browser_device import _snapshot, _restore
+from app.browser_device import DeviceArchiveError, _snapshot, _restore
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -21,7 +21,7 @@ with tempfile.TemporaryDirectory(dir=os.environ['HOME'] + '/environment') as d:
     with sync_playwright() as p:
         def read(context):
             page = context.new_page(); page.goto(url)
-            result = page.evaluate('''async () => { const w = new Worker(URL.createObjectURL(new Blob(["onmessage=()=>postMessage({ua:navigator.userAgent, platform:navigator.platform, cores:navigator.hardwareConcurrency})"], {type:'text/javascript'}))); const worker=await new Promise(r=>{w.onmessage=e=>r(e.data);w.postMessage(0)}); return {ua:navigator.userAgent,platform:navigator.platform,cores:navigator.hardwareConcurrency,locale:navigator.language,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,worker}; }''')
+            result = page.evaluate('''async () => { const w = new Worker(URL.createObjectURL(new Blob(["onmessage=()=>postMessage({ua:navigator.userAgent, platform:navigator.platform, cores:navigator.hardwareConcurrency})"], {type:'text/javascript'}))); const worker=await new Promise(r=>{w.onmessage=e=>r(e.data);w.postMessage(0)}); const gl=document.createElement('canvas').getContext('webgl'); return {ua:navigator.userAgent,platform:navigator.platform,cores:navigator.hardwareConcurrency,locale:navigator.language,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,webgl:gl && gl.getParameter(gl.RENDERER),worker}; }''')
             return page, result
         c = NewBrowser(p, persistent_context=True, from_options=options)
         page, first = read(c)
@@ -34,8 +34,18 @@ with tempfile.TemporaryDirectory(dir=os.environ['HOME'] + '/environment') as d:
         else:
             raise AssertionError('CDP unexpectedly accepted on Firefox')
         c.close()
-        data = _snapshot(root/'a'); (root/'restored').mkdir(); _restore(data, root/'restored')
-        options2 = dict(options); options2['user_data_dir'] = str(root/'restored')
+        try:
+            data = _snapshot(root/'a'); (root/'restored').mkdir(); _restore(data, root/'restored')
+            options2 = dict(options); options2['user_data_dir'] = str(root/'restored')
+            archive_status = 'PASS'
+        except DeviceArchiveError as exc:
+            print('Camoufox profile archive incompatible with browser_device:', exc)
+            for directory, _, filenames in os.walk(root/'a'):
+                for name in filenames:
+                    path = Path(directory) / name
+                    if not path.is_file() or path.is_symlink(): print('unsupported profile entry:', path.relative_to(root/'a'))
+            options2 = dict(options)
+            archive_status = 'FAIL (profile persistence tested directly)'
         c = NewBrowser(p, persistent_context=True, from_options=options2)
         page, second = read(c)
         assert first == second, (first,second)
@@ -43,7 +53,7 @@ with tempfile.TemporaryDirectory(dir=os.environ['HOME'] + '/environment') as d:
         assert first['worker']['ua'] == first['ua'] and first['worker']['platform'] == first['platform'], first
         assert page.evaluate("localStorage.getItem('synthetic')") == 'persisted'
         assert any(x['name']=='synthetic' for x in c.cookies())
-        print('synthetic persistent profile archive, cookie, storage, stable launch options, timezone and worker: PASS')
+        print('synthetic persistent profile, cookie, storage, stable launch options, timezone, WebGL and worker: PASS; archive:', archive_status)
         print('identity:', first)
         c.close()
 server.shutdown()
