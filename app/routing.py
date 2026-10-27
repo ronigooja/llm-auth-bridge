@@ -127,12 +127,13 @@ def account_route(account: dict):
             else:
                 raise RouteError("Account proxy did not become ready")
             endpoint = f"http://127.0.0.1:{local_port}"
+        except OSError:
+            raise RouteError("Account proxy could not start") from None
+        try:
             with httpx.Client(
                 proxy=endpoint, trust_env=False, timeout=30, follow_redirects=False
             ) as session:
                 yield Route({"server": endpoint}, session)
-        except OSError:
-            raise RouteError("Account proxy could not start") from None
         finally:
             if process is not None:
                 process.terminate()

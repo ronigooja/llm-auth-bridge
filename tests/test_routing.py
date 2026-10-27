@@ -28,6 +28,28 @@ def test_direct_disables_ambient_proxy(monkeypatch):
         assert route.session._trust_env is False
 
 
+def test_route_consumer_oserror_is_not_mislabeled_as_proxy_failure(monkeypatch):
+    monkeypatch.setattr(routing.shutil, "which", lambda _: "/synthetic/gost")
+
+    class Process:
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(routing.subprocess, "Popen", lambda *a, **k: Process())
+    monkeypatch.setattr(routing.socket, "create_connection", lambda *a, **k: None)
+    with pytest.raises(OSError, match="consumer failure"):
+        with routing.account_route(
+            {"route_type": "proxy", "proxy": {"server": "socks5://proxy.example:1080"}}
+        ):
+            raise OSError("consumer failure")
+
+
 def test_proxy_never_falls_back_when_gost_missing(monkeypatch):
     monkeypatch.setattr(routing.shutil, "which", lambda _: None)
     with pytest.raises(routing.RouteError, match="GOST"):

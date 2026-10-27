@@ -46,7 +46,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends tigervnc-standa
     && mkdir -p /opt/playwright /opt/cache \
     && uv pip install --python /app/.venv/bin/python --no-cache camoufox==0.5.8 playwright==1.56.0 \
     && XDG_CACHE_HOME=/opt/cache /app/.venv/bin/python -m camoufox fetch \
-    && chmod -R a+rX /opt/playwright /opt/cache \
+    && chown -R bridge:bridge /opt/playwright /opt/cache \
+    && chmod -R u+rwX,go+rX /opt/playwright /opt/cache \
     && rm -rf /var/lib/apt/lists/*
 # The uv environment also installs the exact browser API version for runtime imports.
 RUN uv sync --frozen --no-dev --no-install-project --extra browser
