@@ -29,9 +29,10 @@ with tempfile.TemporaryDirectory(dir=os.environ['HOME'] + '/environment') as d:
         c.add_cookies([{'name':'synthetic','value':'value','url':url,'expires':2000000000}])
         try:
             c.new_cdp_session(page)
-            raise AssertionError('CDP unexpectedly accepted on Firefox')
         except Exception as e:
             print('Firefox CDP unavailable:', type(e).__name__)
+        else:
+            raise AssertionError('CDP unexpectedly accepted on Firefox')
         c.close()
         data = _snapshot(root/'a'); (root/'restored').mkdir(); _restore(data, root/'restored')
         options2 = dict(options); options2['user_data_dir'] = str(root/'restored')

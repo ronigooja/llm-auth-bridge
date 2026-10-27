@@ -7,26 +7,22 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Prepare synthetic environment
+      - name: Install pinned Python package
         run: |
-          set -e
           mkdir -p "$HOME/environment"
           python -m venv "$HOME/environment/camoufox-venv"
-          "$HOME/environment/camoufox-venv/bin/pip" install 'git+https://github.com/daijro/camoufox.git@39940c849a561534b315a225b2753cd4fa4bacf4#subdirectory=python' > "$HOME/environment/install.log" 2>&1 || { tail -n 60 "$HOME/environment/install.log"; exit 1; }
-          "$HOME/environment/camoufox-venv/bin/camoufox" fetch > "$HOME/environment/fetch.log" 2>&1 || { tail -n 60 "$HOME/environment/fetch.log"; exit 1; }
-          "$HOME/environment/camoufox-venv/bin/python" -m playwright install-deps firefox > "$HOME/environment/deps.log" 2>&1 || { tail -n 60 "$HOME/environment/deps.log"; exit 1; }
+          timeout 180 "$HOME/environment/camoufox-venv/bin/pip" install 'git+https://github.com/daijro/camoufox.git@39940c849a561534b315a225b2753cd4fa4bacf4#subdirectory=python' > "$HOME/environment/install.log" 2>&1 || { status=$?; tail -n 50 "$HOME/environment/install.log"; exit "$status"; }
+      - name: Fetch paired browser
+        run: timeout 120 "$HOME/environment/camoufox-venv/bin/camoufox" fetch > "$HOME/environment/fetch.log" 2>&1 || { status=$?; tail -n 50 "$HOME/environment/fetch.log"; exit "$status"; }
+      - name: Install system libraries
+        run: timeout 180 "$HOME/environment/camoufox-venv/bin/python" -m playwright install-deps firefox > "$HOME/environment/deps.log" 2>&1 || { status=$?; tail -n 50 "$HOME/environment/deps.log"; exit "$status"; }
       - name: Run synthetic probe
-        run: |
-          "$HOME/environment/camoufox-venv/bin/python" .github/camoufox-probe.py > "$HOME/environment/probe.log" 2>&1 || { tail -n 100 "$HOME/environment/probe.log"; exit 1; }
-          cat "$HOME/environment/probe.log"
+        run: timeout 120 "$HOME/environment/camoufox-venv/bin/python" .github/camoufox-probe.py > "$HOME/environment/probe.log" 2>&1 || { status=$?; tail -n 100 "$HOME/environment/probe.log"; exit "$status"; }
         env:
           PYTHONPATH: ${{ github.workspace }}
-      - name: Install probe
-        if: false
-        run: true
