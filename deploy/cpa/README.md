@@ -14,14 +14,15 @@ checks out the exact public upstream commit, verifies the patch checksum, checks
 and applies the patch, installs the toolchain requested by the pinned `go.mod`,
 runs `go test ./...`, then compiles `go build ./cmd/server`. Keep module downloads,
 build caches and executables on the runner; retrieve only required evidence and
-artifacts. The workflow does not build or deploy a container image. Successful
+artifacts. The workflow does not deploy a running service. Successful
 synthetic tests do not establish live account, runtime reload or deployment health.
 Do not run compilation or executable test suites on the controller.
 
 The general bridge image build does not implicitly modify a running CLIProxyAPI
-installation. Apply this source overlay in the authorized remote build environment,
-then deploy the resulting native executable or image through the existing
-CLIProxyAPI deployment process. Preserve the current native configuration,
+installation. The [CPA native image workflow](../../.github/workflows/cpa-native-image.yml)
+runs the overlay build on GitHub-hosted runners and publishes an immutable GHCR
+tag plus its digest. Deployments must consume that digest; production hosts must
+not compile the source or pull the upstream `latest` image. Preserve the current native configuration,
 auth-directory volume and management bearer authentication. Keep credentials and
 session state outside source control; never copy real auth files into a build.
 
