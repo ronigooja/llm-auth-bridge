@@ -1,6 +1,6 @@
 # Source-only fallback for a previously verified, unchanged worker runtime.
 # Tag the exact immutable runtime image locally and verify its ID before building.
-# See docs/deployment.md for the required source/dependency checks.
+# See docs/guides/deployment.md for the required source/dependency checks.
 FROM node:22.14.0-bookworm-slim AS frontend
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./

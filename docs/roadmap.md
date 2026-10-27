@@ -1,50 +1,92 @@
-# Verification and remaining work
+# Capabilities and remaining acceptance
 
-## Current implementation
+This is the authority for capability status and outstanding verification. Status
+was consolidated on 2026-10-27 against source baseline
+[`d22cdb8`](https://github.com/ronigooja/llm-auth-bridge/tree/d22cdb8034f736aa4deca6a08de87dbc64f30435).
+Implementation, synthetic acceptance, assisted real-account observations and
+unattended operation are distinct. A management connection or stored credential
+readback does not prove provider usability, runtime reload, or actual egress.
 
-The authenticated Chinese console, offline initialization/versioned migration, encrypted CRUD/import, global serial queue, fencing/leases/recovery, manual inputs/takeover tunnel, OpenAI browser/OAuth/session adapter, GOST account routes, CPA auth-files client, opt-in native CPA OAuth extension client, stable encrypted per-account browser identity/session reuse, voice compatibility client, session maintenance, pending-sync recovery, backup/restore, multi-stage build definitions and CI are implemented.
+## Capability matrix
 
-Synthetic acceptance on the ARM64 host uses Python 3.12, real local HTTP/WebSocket services, system Chromium and checksum-checked GOST 3.3.1. Frontend interaction tests and production build pass. Test-only root Chromium is unsandboxed; a separate ARM64 Compose acceptance check passed with headed Chromium sandboxing enabled as UID 10001. See development for prerequisites and coverage, and the final delivery record below.
+| Capability | Established evidence | Remaining acceptance |
+| --- | --- | --- |
+| Administrator sessions, CSRF, encrypted CRUD/import, explicit migration, backup/restore | Implemented; synthetic suites cover these paths | Production restore with the matching key remains an operator acceptance task |
+| Serial queue, leases/fencing, recovery, manual inputs, SSE, pending-sync retry | Implemented; synthetic suites cover cancellation and uncertain writes | Provider-specific timeout/recovery behavior remains unverified |
+| OpenAI password, TOTP, browser session and legacy OAuth adapter | Synthetic fixtures; assisted ChatGPT login and assisted Codex authorization observed on 2026-10-25 | Fully unattended login, all real challenge branches, Codex inference remain unverified |
+| Per-account encrypted Chromium device and Voice-to-Codex session reuse | Hosted persistence/isolation tests and ARM64 sandbox acceptance; assisted reuse observed | Unattended chooser/consent continuation in the current source remains unverified with real accounts |
+| Account OS preference and UA/UA-CH alignment | Native page-scoped platform override and synthetic headed checks for Windows/macOS | Worker globals, out-of-process frames, additional pages and host/hardware signals remain unverified; reduced Cloudflare challenges unverified |
+| Account windows, monitor/takeover, adaptive desktop | Hosted synthetic RFB/noVNC checks; ARM64 TigerVNC/Openbox resizing and packaged Chromium/WebKit popup checks | Physical Safari/Retina visual confirmation and current real-provider window behavior remain unverified |
+| HTTP/HTTPS/SOCKS5 routing with no direct fallback | Synthetic proxy isolation and production sandbox checks | Provider-observed egress and downstream runtime routing remain unverified |
+| CLIProxyAPI auth-files synchronization | Mock contracts, deployed management access, assisted Codex synchronization observed | Codex inference, refresh rotation and full runtime egress acceptance remain unverified |
+| CLIProxyAPI native OAuth (`cpa-native-oauth-v1`) | Client implemented; focused patched native API tests and server compilation passed | Requires patched target; deployed native authorization, commit/recovery, runtime reload and real-account usability remain unverified |
+| Voice `bridge-v1` client and patched gateway | Mock/disposable HTTP contract checks, ARM64 overlay deployment, assisted ChatGPT credential synchronization observed | Voice audio, actual egress, token expiry/renewal and unattended maintenance remain unverified |
+| Native unpatched Voice administrator CRUD synchronization | Unsupported: reviewed native APIs cannot attest exact credentials and explicit route | Requires a compatible server layer; native CRUD alone is insufficient |
+| Automatic webmail | Freshness/security primitives only; manual code/takeover available | No site-specific reader; automatic retrieval remains unsupported until a site contract and adapter are accepted |
+| Linux containers | ARM64 app/worker build and nonroot sandbox/runtime checks passed | amd64 runtime acceptance remains unverified; Docker build definitions do not establish runtime acceptance |
 
-Native CPA authorization and stable browser identities are new implementation paths pending integrated CI and deployed acceptance. Native authorization requires the patched target extension and remains opt-in; existing auth-files targets retain their protocol. Browser identities use supported native context settings and do not guarantee complete fingerprint isolation.
+## Evidence supporting current judgments
+
+- **Assisted account observations, 2026-10-25:** source
+  [`0b1c48e`](https://github.com/ronigooja/llm-auth-bridge/tree/0b1c48e26c2722514d3b8786234b459cf2ac7a1f)
+  reused one persistent device and configured proxy. After operator human verification,
+  stored TOTP completed ChatGPT login and Voice storage readback succeeded. Later
+  Codex tasks reused the provider session without new email/password/TOTP; operator
+  account selection and consent completed OAuth and downstream synchronization.
+  The [original observation in Git history](https://github.com/ronigooja/llm-auth-bridge/blob/d22cdb8034f736aa4deca6a08de87dbc64f30435/docs/verification-persistent-devices-20261025.md#subsequent-serial-real-account-verification)
+  preserves provenance. These observations establish assisted authorization and
+  session reuse, not unattended flow or inference/audio usability. Later chooser
+  and consent automation has synthetic coverage, not renewed real-account acceptance.
+- **Adaptive desktop, 2026-10-26:** source
+  [`e55ae99`](https://github.com/ronigooja/llm-auth-bridge/tree/e55ae999dfc821eb41aee3818285dace0830779e),
+  [deployment run 40304619566](https://github.com/ronigooja/llm-auth-bridge/actions/runs/40304619566),
+  passed partitioned backend/frontend checks, selected browser acceptance, native
+  ARM64 builds and nonroot worker-image resizing. This was not a full pytest run.
+  [Retina viewer run 40305857158](https://github.com/ronigooja/llm-auth-bridge/actions/runs/40305857158)
+  at `b51eb0469917f2483e0ea10bd9af19cf4d02f391` added synthetic WebKit DPR 2 checks;
+  production files were unchanged. Neither run establishes physical Safari or
+  real-account visual acceptance.
+- **Native extension, 2026-10-25:** bridge
+  [`bf744aa`](https://github.com/ronigooja/llm-auth-bridge/tree/bf744aa5a3c7f867d9e57ab392af9933cbf3c280),
+  [validation run 40218832546](https://github.com/ronigooja/llm-auth-bridge/actions/runs/40218832546),
+  passed the full synthetic bridge suite, frontend checks, focused native API
+  tests and native server compilation. The overall run failed: both untouched and
+  patched upstream Go suites failed heartbeat/store-corruption tests, and only the
+  patched full run timed out in `TestResponsesLateInterruptDoesNotPoisonNextCreate`.
+  The failure sets did not match. [Diagnostic run 40219551648](https://github.com/ronigooja/llm-auth-bridge/actions/runs/40219551648)
+  at `a843bb362e2efcf192957f6699a6960a28fcd47b` passed isolated repetitions on both
+  inputs but did not establish the cause or turn the full run into a pass.
+  Exact native inputs are pinned in [source metadata](../deploy/cpa/source.json).
+- **Voice overlay:** [pinned source](../deploy/voice/source.json), fork `32d696a`,
+  passed synthetic Go and disposable HTTP acceptance before ARM64 deployment.
+  [The original deployment record in Git history](https://github.com/ronigooja/llm-auth-bridge/blob/d22cdb8034f736aa4deca6a08de87dbc64f30435/docs/roadmap.md#voice-overlay-deployment-record-2026-10-24)
+  records management acceptance; the later assisted observation above establishes
+  storage synchronization only. The [Voice contract](contracts/integrations/voice.md)
+  describes the disposable harness and its limits.
 
 ## Required before full product acceptance
 
-- Deploy and synthetically accept the patched native CPA extension before enabling `cpa-native-oauth-v1`; verify staging/commit recovery, route use and token ownership. Complete serial real-account native authorization and Voice/Codex saved-session reuse acceptance. These remain unverified.
-- Supply a serially usable test account and deployed CPA/voice configurations securely outside Git. No real-account login, TOTP/email branch, downstream usability or voice session has been verified.
-- Complete serial real-account acceptance for the deployed voice `bridge-v1` overlay; authenticated management and the configured bridge target connection test have passed. The reviewed fork and isolated synthetic HTTP acceptance now pass; the ARM64 native gateway has been replaced with the patched image while preserving its existing runtime configuration. Synthetic persistence, credential digest, explicit route readback and unauthenticated rejection do not establish provider usability or actual account egress. Native voice synchronization remains unverified with real accounts.
-- Supply the actual mailbox site. Implement and accept its isolated list/detail reader, pre-request baseline, bounded polling, redirect/egress protection and fresh-message matching. Current code provides only conservative primitives and manual provider challenges.
-- Build and run amd64 containers before claiming amd64 architecture acceptance. ARM64 app/worker builds, health checks, nonroot headed Chromium sandbox, private VNC/WebSocket transport and authenticated noVNC assets passed local deployment checks. Full real-provider remote desktop takeover remains unverified; the authenticated binary WebSocket tunnel is synthetically tested.
-- Confirm real provider selectors, proxy egress and failure behavior, CPA identity/proxy/live account usability, voice token renewal/expiry/actual voice session, restart, and production backup/restore using the matching key.
+1. Synthetically accept a deployed native CPA target's staging/commit recovery,
+   immutable binding, route use and credential ownership. Resolve or diagnose the
+   recorded full upstream Go failures without suppressing their verdicts.
+2. Verify current unattended ChatGPT-to-Codex continuation serially with a securely
+   supplied test account. Exercise password, TOTP/email/manual challenge branches,
+   proxy failure behavior, session reuse and account-window recovery. Do not infer
+   current automation acceptance from earlier assisted observations.
+3. Confirm CPA runtime reload, actual egress, refresh ownership and Codex inference;
+   confirm Voice audio, actual egress, expiry/renewal, saved-session maintenance
+   and restart behavior with the compatible deployed service.
+4. Accept amd64 container runtime, the production Chromium sandbox on each target
+   host, physical client visual behavior, and production backup/restore using the
+   matching key. Preserve database/image rollback compatibility during upgrades.
+5. Obtain the actual mailbox site's contract before adding an isolated reader with
+   pinned public egress, redirect controls, pre-request baseline, bounded polling,
+   freshness and ambiguity checks.
 
-Until these pass, advertise implementation/synthetic verification separately from **unverified** real integrations. No evidence in this delivery permits marking the full product accepted.
+Real credential acceptance is serial and main-agent owned under [AGENTS.md](../AGENTS.md).
+No real-account login or deployment is part of this documentation refactor.
 
-## Later versions
+## Later scope
 
-Other vendors, IMAP, concurrent browser scheduling, multi-user authorization, multi-host queues and automated CAPTCHA handling are outside v1 scope.
-
-## Delivery verification record (2026-10-23)
-
-- ARM64 native host, Python 3.12.14: 144 pytest cases passed, including local Chromium UI acceptance, authenticated binary WebSocket revocation, and real GOST HTTP/HTTPS/SOCKS5 fixture proxies. No real-account tests ran.
-- Frontend: eight interaction tests, type check and production build passed; npm audit reported zero vulnerabilities at installation.
-- Compose configuration and Git whitespace checks passed.
-- Docker app build failed before image steps because registry-1.docker.io HEAD timed out while resolving docker/dockerfile:1.7. Worker/multiarchitecture images and nonroot sandbox remain unverified.
-- Independent review covered auth, migration, fencing, cancellation and downstream uncertainty; its concrete findings were fixed and covered by regression tests.
-
-## Local deployment verification record (2026-10-24)
-
-- ARM64 app and worker images built and started through Docker Compose, running as UID 10001 with persistent SQLite storage and `unless-stopped` restart policies. The app publishes only `127.0.0.1:8000`; the worker publishes no host ports.
-- Both container health checks passed. Local HTTP administrator login, built UI target display/logout, readiness, unauthenticated API rejection, worker heartbeat, and authenticated noVNC asset delivery passed.
-- Headed Chromium launched with `chromium_sandbox=True` under the vendored Playwright seccomp profile. Private VNC and app-to-worker WebSocket/RFB handshakes passed.
-- A deployed CLIProxyAPI management connection returned HTTP 200 using its dedicated management key, saved encrypted in the bridge database. No remote credential files were written and no real provider logins ran.
-- All 144 pytest cases passed using the worker image's checksum-verified GOST binary; eight frontend interaction tests and the production frontend build passed.
-- The initial images include Playwright's default Headless Shell download. Subsequent builds use `--no-shell` to omit that unused artifact; option support was checked against Playwright 1.56.0. The optimized image build has not been repeated.
-- Real-account authorization/synchronization, voice compatibility, amd64 runtime and full provider takeover remain unverified.
-
-## Voice overlay deployment record (2026-10-24)
-
-- Reviewed upstream fork `32d696a` passed `go test ./...`; its exact upstream diff matches the checksum-pinned patch in `deploy/voice`. The disposable synthetic HTTP harness passed twice against a separate fresh-data gateway on loopback port 18991, without production account writes or provider access.
-- The COPY-only ARM64 overlay was built from the immutable original native runtime. Its patch label, static Linux ARM64 binary metadata, and installed binary SHA-256 were verified. The deployed image is `llm-auth-bridge/voice:bridge-v1-32d696a`, pinned in the durable operational override to `sha256:525104f25a8d475a504d09449139b2887ecf285105b0183192081657fb3f15f3`.
-- The native `cylo-voice-gateway` replacement preserves the original environment file, data mount, encryption key, `voice:voice` identity, hardening, `cylo` network, and existing loopback/LAN port bindings. A stopped-service SQLite API backup and matched database/image rollback instructions are stored privately outside Git; see deployment documentation.
-- Live `/login` returned 200; unauthenticated bridge capabilities and account GET/PUT returned 401. Gateway, app and worker health checks passed after replacement. The main operator verified authenticated capabilities (HTTP 200 with `bridge-v1`, explicit-route and credential-digest support), configured encrypted local voice target ID 2, and passed its connection test (HTTP 200). Worker-side internal DNS/network access returned the expected unauthenticated 401. Real-account synchronization, provider egress, renewal and voice sessions remain **unverified**.
-- Deployment worktree verification: `pytest -q` passed 141 tests with five expected opt-in/environment-dependent skips; `git diff --check` passed. The separately audited disposable HTTP acceptance passed twice before deployment.
+Other vendors, IMAP, concurrent browser scheduling, multi-user authorization,
+multi-host queues and automated CAPTCHA handling are outside v1 scope.
