@@ -42,7 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && tar -xzf /tmp/gost.tar.gz -C /usr/local/bin gost \
     && rm /tmp/gost.tar.gz
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright XDG_CACHE_HOME=/opt/cache DISPLAY=:99
-RUN apt-get update && apt-get install -y --no-install-recommends tigervnc-standalone-server openbox x11-utils websockify \
+RUN apt-get update && apt-get install -y --no-install-recommends tigervnc-standalone-server openbox x11-utils websockify libgtk-3-0 \
     && mkdir -p /opt/playwright /opt/cache \
     && uv pip install --python /app/.venv/bin/python --no-cache camoufox==0.5.8 playwright==1.56.0 \
     && XDG_CACHE_HOME=/opt/cache /app/.venv/bin/python -m camoufox fetch \
