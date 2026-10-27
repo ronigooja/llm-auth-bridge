@@ -3,7 +3,7 @@
 Provider markup and downstream credentials remain unverified until serial real
 account acceptance. Unknown pages pause the same browser for human takeover.
 No traces, HAR, videos, or screenshots are created. Temporary native device
-files are archived through the encrypted worker control after Chromium closes.
+files are archived through the encrypted worker control after Firefox closes.
 """
 
 import base64
@@ -26,17 +26,7 @@ from .totp import generate_code, seconds_remaining
 
 AUTH_ORIGIN = "https://auth.openai.com"
 CHATGPT_ORIGIN = "https://chatgpt.com"
-BROWSER_ARGS = [
-    "--disable-dev-shm-usage",
-    "--disable-background-networking",
-    "--disable-component-update",
-    "--disable-domain-reliability",
-    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
-    "--webrtc-ip-handling-policy=disable_non_proxied_udp",
-    # Keep Blink's automation-controlled runtime disabled. This is measured
-    # in synthetic CI; it does not alter UA, platform, fonts, graphics or TLS.
-    "--disable-blink-features=AutomationControlled",
-]
+FIREFOX_ARGS = ["-private"]
 # Unknown/loading pages and submitted navigation controls need a longer window
 # than a password/code form that remains available for review.
 TRANSITION_WAIT_SECONDS = 30
@@ -523,21 +513,11 @@ def _native_result(client, session, control):
 
 def fit_browser_window(context, page) -> None:
     """Fill the real desktop, including browser chrome, without viewport emulation."""
-    bounds = page.evaluate("({left: screen.availLeft || 0, top: screen.availTop || 0, width: screen.availWidth, height: screen.availHeight})")
-    session = context.new_cdp_session(page)
-    try:
-        window_id = session.send("Browser.getWindowForTarget")["windowId"]
-        # Restored profiles can contain maximized/minimized or stale bounds.
-        session.send("Browser.setWindowBounds", {
-            "windowId": window_id, "bounds": {"windowState": "normal"},
-        })
-        session.send("Browser.setWindowBounds", {"windowId": window_id, "bounds": bounds})
-        # With the worker window manager, maximize follows RandR desktop changes.
-        session.send("Browser.setWindowBounds", {
-            "windowId": window_id, "bounds": {"windowState": "maximized"},
-        })
-    finally:
-        session.detach()
+    # Firefox has no CDP Browser.* window endpoint.  The headed desktop owns
+    # placement; this best-effort DOM call requests the available dimensions
+    # without coupling the adapter to Chromium's remote debugging protocol.
+    del context
+    page.evaluate("window.moveTo(screen.availLeft || 0, screen.availTop || 0); window.resizeTo(screen.availWidth, screen.availHeight)")
 
 
 def run_browser_window(account, control, saved_state=None) -> None:
@@ -574,8 +554,8 @@ def _run_login(
     The worker encrypts device archives, save_state, and results.
     Cancellation and takeover are checked between each bounded browser action.
     """
-    from playwright.sync_api import sync_playwright
     from playwright.sync_api import Error as PlaywrightError
+    from camoufox.sync_api import Camoufox
     import httpx
 
     kind = target.get("kind")
@@ -591,31 +571,31 @@ def _run_login(
             control.update_timezone(zone)
             account["_browser_profile"]["context"]["timezone_id"] = zone
         # Snapshot only after context.close(), including exception paths.
-        with device_directory(account, control) as device, sync_playwright() as playwright:
+        with device_directory(account, control) as device:
             context = None
+            camoufox_runtime = None
             try:
                 from .browser_identity import context_options
-                context = playwright.chromium.launch_persistent_context(
+                options = context_options(account["_browser_profile"], native_window=True)
+                camoufox_runtime = Camoufox(
                     user_data_dir=str(device.path),
                     headless=False,
-                    chromium_sandbox=True,
+                    persistent_context=True,
                     proxy=route.playwright_proxy,
                     env={**os.environ, "DISPLAY": os.getenv("DISPLAY", ":99")},
-                    args=BROWSER_ARGS
-                    + (
-                        ["--no-proxy-server"]
-                        if route.playwright_proxy is None
-                        else ["--proxy-bypass-list=<-loopback>"]
-                    ),
-                    **context_options(account["_browser_profile"], native_window=True),
+                    args=FIREFOX_ARGS,
+                    os=account["_browser_profile"]["browser"]["platform"],
+                    **options,
                     accept_downloads=False,
                     service_workers="block",
                 )
+                context = camoufox_runtime.__enter__()
                 initialized = (device.path / DEVICE_READY_FILE).is_file()
                 if initialized:
                     _restore_session_cookies(context, device.path)
-                elif saved_state is not None:
-                    _restore_legacy_state(context, saved_state)
+                # Chromium storage_state is intentionally not imported.  The
+                # Camoufox profile starts a new Firefox session and requires
+                # account reauthorization after migration.
                 if not initialized:
                     fd = os.open(device.path / DEVICE_READY_FILE,
                                  os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -884,6 +864,12 @@ def _run_login(
                         except Exception:
                             device.abort_snapshot()
                             cleanup_failure = BrowserError("Browser device could not close")
+                        if camoufox_runtime is not None:
+                            try:
+                                camoufox_runtime.__exit__(None, None, None)
+                            except Exception:
+                                device.abort_snapshot()
+                                cleanup_failure = BrowserError("Browser runtime could not close")
                 if hasattr(control, "browser_closed"):
                     try:
                         control.browser_closed()

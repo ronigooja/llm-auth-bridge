@@ -1,14 +1,14 @@
-"""Encrypted account identity preferences; not a complete fingerprint engine."""
+"""Encrypted, account-scoped Camoufox identity preferences."""
 
 import json
 import secrets
-import re
+import hashlib
 
 from .crypto import decrypt, encrypt
 from .db import database
 from .queue import Cancelled
 
-PROFILE_VERSION = 3
+PROFILE_VERSION = 4
 VIEWPORT = {"width": 1760, "height": 900}
 SCREEN = {"width": 1920, "height": 1080}
 
@@ -20,10 +20,16 @@ def generate_profile(used_dimensions: set[tuple[int, int]] | None = None) -> dic
     Device separation comes from each account's persistent browser directory;
     unique window dimensions are not a device identity mechanism.
     """
+    seed = secrets.token_hex(32)
     return {
         "version": PROFILE_VERSION,
-        "identity_seed": secrets.token_hex(32),
+        "identity_seed": seed,
         "browser": {"platform": "windows"},
+        # Camoufox consumes this configuration at launch.  Keep it encrypted
+        # with the profile and replay it verbatim for every subsequent window.
+        # Values are deliberately stable per account; they are not regenerated
+        # from the Firefox profile directory.
+        "camoufox": _camoufox_config(seed, "windows"),
         "context": {
             "viewport": dict(VIEWPORT),
             "screen": dict(SCREEN),
@@ -41,15 +47,29 @@ def generate_profile(used_dimensions: set[tuple[int, int]] | None = None) -> dic
 
 def _upgrade_profile(profile: dict) -> dict:
     """Normalize legacy geometry without changing the account seed or prefs."""
-    if profile.get("version") in (1, 2):
+    if profile.get("version") in (1, 2, 3):
         profile = json.loads(json.dumps(profile))
         if profile["version"] == 1:
             profile["context"].update(viewport=dict(VIEWPORT), screen=dict(SCREEN))
         profile["version"] = PROFILE_VERSION
-        profile["browser"] = {"platform": "windows"}
+        profile["browser"] = {"platform": profile.get("browser", {}).get("platform", "windows")}
+        profile["camoufox"] = _camoufox_config(profile["identity_seed"], profile["browser"]["platform"])
     context_options(profile)
     browser_preferences(profile)
     return profile
+
+
+def _camoufox_config(seed: str, platform: str) -> dict:
+    digest = hashlib.sha256(seed.encode("ascii")).digest()
+    width = 1760 + digest[0] % 161
+    height = 900 + digest[1] % 81
+    return {
+        "screen.width": 1920,
+        "screen.height": 1080,
+        "window.outerWidth": width,
+        "window.outerHeight": height,
+        "navigator.hardwareConcurrency": 8 + digest[2] % 9,
+    }
 
 
 def browser_preferences(profile: dict) -> dict:
@@ -60,65 +80,21 @@ def browser_preferences(profile: dict) -> dict:
     return dict(browser)
 
 
-def user_agent_override(profile: dict, version: str) -> dict:
-    """Build matching UA / UA-CH / navigator.platform for the running engine.
-
-    OS preferences are stable per account. Browser version follows the actual
-    executable; it is never randomized or pinned to a fictitious Chrome build.
-    This deliberately makes no claim about fonts, graphics, workers or TLS.
-    """
-    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){3}", version):
-        raise ValueError("Unsupported Chromium version")
-    platform = browser_preferences(profile)["platform"]
-    major = version.split(".")[0]
-    if platform == "windows":
-        os_token, navigator_platform, ch_platform, os_version = (
-            "Windows NT 10.0; Win64; x64", "Win32", "Windows", "10.0.0")
-    else:
-        os_token, navigator_platform, ch_platform, os_version = (
-            "Macintosh; Intel Mac OS X 10_15_7", "MacIntel", "macOS", "15.0.0")
-    return {
-        "userAgent": (f"Mozilla/5.0 ({os_token}) AppleWebKit/537.36 "
-                      f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36"),
-        "acceptLanguage": profile["context"]["locale"],
-        "platform": navigator_platform,
-        "userAgentMetadata": {
-            "brands": [{"brand": "Chromium", "version": major},
-                       {"brand": "Not_A Brand", "version": "99"}],
-            "fullVersionList": [{"brand": "Chromium", "version": version},
-                                {"brand": "Not_A Brand", "version": "99.0.0.0"}],
-            "fullVersion": version,
-            "platform": ch_platform, "platformVersion": os_version,
-            "architecture": "x86", "bitness": "64", "model": "",
-            "mobile": False, "wow64": False,
-        },
-    }
-
-
 def configure_page_identity(context, page, profile: dict):
-    """Apply native CDP emulation to the managed page before navigation.
+    """Validate the persisted identity; Camoufox applies it at launch.
 
-    Keep the session attached for the page lifetime; the browser context owns
-    its cleanup. Exceptions must stop navigation rather than silently exposing
-    a partial identity. No JavaScript property replacement is installed.
+    Firefox has no Chromium CDP endpoint.  Identity must therefore be passed
+    to Camoufox before the first page is created, rather than patched with
+    page-scoped JavaScript after startup.
     """
-    session = context.new_cdp_session(page)
-    product = session.send("Browser.getVersion")["product"]
-    version = product.split("/", 1)[-1]
-    override = user_agent_override(profile, version)
-    session.send("Emulation.setUserAgentOverride", override)
-    # CDP UA emulation does not change legacy navigator.platform. Keep that
-    # property coherent for documents and ordinary frames. Dedicated Worker
-    # globals are intentionally not rewritten by this page-scoped hook.
-    platform = override["platform"]
-    context.add_init_script(
-        "Object.defineProperty(Navigator.prototype, 'platform', "
-        + "{get: () => " + json.dumps(platform) + ", configurable: true});"
-    )
+    del context, page
+    browser_preferences(profile)
+    if not isinstance(profile.get("camoufox"), dict):
+        raise ValueError("Invalid Camoufox identity configuration")
 
 
 def context_options(profile: dict, *, native_window: bool = False) -> dict:
-    """Return only the supported native Chromium context options, never the seed."""
+    """Return supported Firefox context options plus persisted Camoufox config."""
     if profile.get("version") != PROFILE_VERSION:
         raise ValueError("Unsupported browser profile version")
     # JSON round-trip provides independent nested dictionaries for each context.
@@ -135,6 +111,7 @@ def context_options(profile: dict, *, native_window: bool = False) -> dict:
         for key in ("viewport", "screen", "device_scale_factor"):
             options.pop(key)
         options["no_viewport"] = True
+    options["config"] = json.loads(json.dumps(profile["camoufox"]))
     return options
 
 

@@ -212,12 +212,10 @@ class Worker:
     def heartbeat(self):
         browser_available = bool(os.getenv("DISPLAY"))
         try:
-            from playwright.sync_api import sync_playwright
-
-            with sync_playwright() as p:
-                browser_available = (
-                    browser_available and Path(p.chromium.executable_path).exists()
-                )
+            from camoufox import launch_options
+            browser_available = browser_available and Path(
+                launch_options(headless=True).get("executable_path", "")
+            ).exists()
         except Exception:
             browser_available = False
         while not self.stopping.is_set():
