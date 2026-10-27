@@ -1,4 +1,4 @@
-name: CLIProxyAPI native OAuth image
+name: CLIProxyAPI Bridge OAuth image
 
 on:
   workflow_dispatch:
@@ -53,7 +53,7 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: |
-            ghcr.io/${{ github.repository_owner }}/cliproxyapi-native:${{ steps.source.outputs.revision }}-${{ steps.source.outputs.patch_sha }}
+            ghcr.io/${{ github.repository_owner }}/cliproxyapi-bridge:${{ steps.source.outputs.revision }}-${{ steps.source.outputs.patch_sha }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.source.outputs.revision }}
@@ -70,6 +70,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: cpa-native-image-${{ github.sha }}
+          name: cpa-bridge-image-${{ github.sha }}
           path: cpa-native-release/
           retention-days: 14

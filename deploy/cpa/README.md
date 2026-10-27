@@ -19,7 +19,7 @@ synthetic tests do not establish live account, runtime reload or deployment heal
 Do not run compilation or executable test suites on the controller.
 
 The general bridge image build does not implicitly modify a running CLIProxyAPI
-installation. The [CPA native image workflow](../../.github/workflows/cpa-native-image.yml)
+installation. The [CPA Bridge OAuth image workflow](../../.github/workflows/cpa-native-image.yml)
 runs the overlay build on GitHub-hosted runners and publishes an immutable GHCR
 tag plus its digest. Deployments must consume that digest; production hosts must
 not compile the source or pull the upstream `latest` image. Preserve the current native configuration,
