@@ -67,25 +67,25 @@ jobs:
           cache-dependency-glob: uv.lock
       - if: ${{ needs.changes.outputs.backend == 'true' }}
         run: uv sync --frozen --extra test --extra browser
-      - name: Restore Playwright browser binaries
+      - name: Restore Camoufox browser binaries
         if: ${{ needs.changes.outputs.backend == 'true' }}
         id: playwright_cache
         uses: actions/cache/restore@v4
         with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ hashFiles('uv.lock') }}
-      - name: Install Chromium and required OS packages
+          path: ~/.cache/camoufox
+          key: ${{ runner.os }}-${{ runner.arch }}-camoufox-${{ hashFiles('uv.lock') }}
+      - name: Install Camoufox and required OS packages
         if: ${{ needs.changes.outputs.backend == 'true' }}
         id: playwright_install
         timeout-minutes: 5
-        run: uv run playwright install --with-deps chromium
-      - name: Save installed Playwright browser binaries before tests
+        run: uv run python -m camoufox fetch
+      - name: Save installed Camoufox browser binaries before tests
         if: ${{ needs.changes.outputs.backend == 'true' && steps.playwright_cache.outputs.cache-hit != 'true' && steps.playwright_install.outcome == 'success' }}
         uses: actions/cache/save@v4
         with:
-          path: ~/.cache/ms-playwright
+          path: ~/.cache/camoufox
           key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
-      - name: Enable Chromium sandbox namespaces on ephemeral runner
+      - name: Enable browser sandbox namespaces on ephemeral runner
         if: ${{ needs.changes.outputs.backend == 'true' }}
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Install checksum-verified synthetic proxy test executable

@@ -4,7 +4,7 @@ Single-administrator Linux console for account import, serial browser authorizat
 human takeover, and typed credential synchronization to CLIProxyAPI and compatible
 Voice gateways. Product screens are Chinese; execution events and project
 documentation are English. Built with Python 3.12, FastAPI, SQLite, React,
-Playwright, and Docker Compose.
+Playwright, Camoufox, and Docker Compose.
 
 ## Start
 
@@ -14,7 +14,7 @@ existing installation offline, and start the app and worker. The default listene
 is `127.0.0.1:8000`; use HTTPS and keep browser transport ports private.
 
 The console provides separate ChatGPT and Codex login actions and an account
-window backed by each account's persistent encrypted Chromium device. Codex uses
+window backed by each account's persistent encrypted Camoufox/Firefox device. Codex uses
 a Web-before-Codex task dependency. Follow the [account workflow](docs/guides/account-workflow.md)
 for setup, manual challenges, takeover, and synchronization recovery.
 

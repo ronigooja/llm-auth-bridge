@@ -12,7 +12,7 @@ cd frontend && npm ci && npm test && npm run build
 cd .. && uv run pytest
 ```
 
-CI provisions Chromium and the checksum-verified GOST executable for browser and proxy coverage. To use a system browser, set `BRIDGE_TEST_CHROMIUM`; set `BRIDGE_TEST_GOST` to a checksum-verified GOST 3.3.1 executable for all proxy protocol tests. Synthetic suites use temporary databases, loopback servers, and synthetic accounts; they do not contact provider accounts. Tracing, HAR, video, and screenshots are disabled by default.
+CI provisions Camoufox and its paired Firefox and the checksum-verified GOST executable for browser and proxy coverage. To use a system browser, set `BRIDGE_TEST_GOST` to a checksum-verified GOST 3.3.1 executable for all proxy protocol tests. Synthetic suites use temporary databases, loopback servers, and synthetic accounts; they do not contact provider accounts. Tracing, HAR, video, and screenshots are disabled by default.
 
 For local development, set `LLM_AUTH_DB` and `LLM_AUTH_MASTER_KEY_FILE` to temporary paths. `python -m app.cli init` prompts for a password; never put passwords in command arguments. Set `LLM_AUTH_SECURE_COOKIE=false` only for local HTTP. Vite development requires an explicitly configured same-origin API proxy; production acceptance serves the built assets through FastAPI.
 

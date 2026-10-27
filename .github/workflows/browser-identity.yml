@@ -25,7 +25,7 @@ jobs:
           cache-dependency-glob: uv.lock
       - run: uv sync --frozen --extra test --extra browser
       - if: inputs.mode == 'browser'
-        run: uv run playwright install --with-deps chromium
+        run: uv run python -m camoufox fetch
       - name: Provision headed sandboxed synthetic runtime
         if: inputs.mode == 'browser'
         run: |

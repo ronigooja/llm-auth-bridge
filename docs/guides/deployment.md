@@ -58,7 +58,7 @@ New CLIProxyAPI targets default to `cpa-native-oauth-v1`, which requires the rev
 
 ## Runtime constraints
 
-The worker uses headed Chromium in a TigerVNC desktop with Openbox and dynamic dimensions. The browser follows desktop resize events; fixed-size Xvfb/x11vnc runtimes are incompatible with account-window resizing. VNC and websockify remain private to the Compose network. Temporary profiles, display sockets, and GOST configuration live on a private `/tmp` mount; containers run as UID/GID 10001.
+The worker uses headed Camoufox/Firefox in a TigerVNC desktop with Openbox and dynamic dimensions. The browser follows desktop resize events; fixed-size Xvfb/x11vnc runtimes are incompatible with account-window resizing. VNC and websockify remain private to the Compose network. Temporary profiles, display sockets, and GOST configuration live on a private `/tmp` mount; containers run as UID/GID 10001.
 
 
 The worker uses the vendored [Playwright seccomp profile](../../deploy/playwright-seccomp.json)

@@ -37,14 +37,14 @@ jobs:
         id: viewer_cache
         uses: actions/cache/restore@v4
         with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-${{ runner.arch }}-viewer-playwright-${{ hashFiles('uv.lock') }}
+          path: ~/.cache/camoufox
+          key: ${{ runner.os }}-${{ runner.arch }}-viewer-camoufox-${{ hashFiles('uv.lock') }}
       - name: Install browsers and production Debian noVNC
         timeout-minutes: 6
         run: |
           set -euo pipefail
           uv sync --frozen --extra test --extra browser
-          uv run playwright install --with-deps chromium webkit
+          uv run python -m camoufox fetch
           sudo apt-get install -y xvfb xauth x11vnc websockify tigervnc-standalone-server openbox x11-utils
           curl -fsSL https://deb.debian.org/debian/pool/main/n/novnc/novnc_1.3.0-1_all.deb -o /tmp/novnc.deb
           echo '5ff8b8c93c1c6cc911e01bfa77d12d4098e1904f738a996040c8095e02492ebb  /tmp/novnc.deb' | sha256sum -c -
@@ -52,11 +52,11 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           echo '127.0.0.1 bridge.test' | sudo tee -a /etc/hosts
           npm ci --ignore-scripts --prefix frontend
-      - name: Save installed viewer browsers
+      - name: Save installed Camoufox browser
         if: ${{ steps.viewer_cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
-          path: ~/.cache/ms-playwright
+          path: ~/.cache/camoufox
           key: ${{ steps.viewer_cache.outputs.cache-primary-key }}
       - name: Frontend and backend regression
         timeout-minutes: 5
@@ -67,7 +67,7 @@ jobs:
           npm test --prefix frontend
           npm run build --prefix frontend
           uv run pytest -v -ra tests/test_api.py tests/test_account_workflow.py --junitxml=viewer-logs/api.xml
-      - name: LAN HTTP Chromium and WebKit noVNC acceptance
+      - name: LAN HTTP Camoufox noVNC acceptance
         timeout-minutes: 4
         env:
           BRIDGE_TEST_WEBKIT: "1"

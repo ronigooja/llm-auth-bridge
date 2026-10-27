@@ -26,7 +26,7 @@ from .totp import generate_code, seconds_remaining
 
 AUTH_ORIGIN = "https://auth.openai.com"
 CHATGPT_ORIGIN = "https://chatgpt.com"
-FIREFOX_ARGS = ["-private"]
+FIREFOX_ARGS = []
 # Unknown/loading pages and submitted navigation controls need a longer window
 # than a password/code form that remains available for review.
 TRANSITION_WAIT_SECONDS = 30

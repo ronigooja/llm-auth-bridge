@@ -43,8 +43,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm /tmp/gost.tar.gz
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright DISPLAY=:99
 RUN apt-get update && apt-get install -y --no-install-recommends tigervnc-standalone-server openbox x11-utils websockify \
-    && pip install --no-cache-dir playwright==1.56.0 \
-    && /usr/local/bin/playwright install --with-deps --no-shell chromium \
+    && pip install --no-cache-dir camoufox==0.5.8 playwright==1.56.0 \
+    && python -m camoufox fetch \
     && chmod -R a+rX /opt/playwright \
     && rm -rf /var/lib/apt/lists/*
 # The uv environment also installs the exact browser API version for runtime imports.

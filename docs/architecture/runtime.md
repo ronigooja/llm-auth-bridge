@@ -18,7 +18,7 @@ for authorization and RFB filtering.
 
 The production desktop starts at 1920×1080 with remote resizing enabled. The
 viewer requests a desktop matching its iframe's CSS dimensions and renders at
-1:1 CSS scale. Openbox keeps the Chromium window maximized as the desktop changes.
+1:1 CSS scale. Openbox keeps the Firefox window maximized as the desktop changes.
 `fit_browser_window` first clears stale restored window bounds, then fits and
 maximizes the native window. Browser chrome remains visible. A fixed framebuffer
 smaller than the browser loses pixels, which client scaling cannot recover; the
@@ -38,10 +38,13 @@ An account has three related forms of state:
 
 - An encrypted profile stores stable preferences, including platform and locale,
   and a private identity seed. The seed is not injected into websites.
-- An encrypted device archive stores a restricted native Chromium user-data
+- An encrypted device archive stores a restricted native Firefox profile
   directory. Each task restores it into a private temporary directory and launches
-  a persistent Chromium context. The same account device is reused for browser
+  a persistent Camoufox context. The same account device is reused for browser
   windows, Voice and Codex tasks; other accounts use separate directories.
+- Device archives carry a `firefox-profile`/Camoufox format marker. Legacy
+  unmarked Chromium archives are retained for rollback but are never restored;
+  the account must authenticate again in its new Firefox profile.
 - Encrypted browser session state supports legacy import and session checkpoints.
   The device archive also explicitly checkpoints session cookies across restarts.
 
@@ -51,7 +54,7 @@ checkpoint, even after cancellation. Failed initialization or unconfirmed browse
 shutdown preserves the previous archive. A hard crash before checkpointing can
 lose current-task changes. Archives exclude caches, crash material and process
 locks; native sessionStorage remains tab scoped. This is persistent account
-storage, not a byte-for-byte archive of every Chromium artifact.
+storage, not a byte-for-byte archive of every Firefox artifact.
 
 Restoration validates paths, file types and size budgets before extracting.
 Authenticated encryption binds each archive to its account ID, preventing
@@ -68,20 +71,15 @@ it does not automatically follow IP geolocation. See
 
 ## Platform identity and limits
 
-Profile format v3 stores `windows` (default) or `macos`. Older profile formats
+Profile format v4 stores `windows` (default) or `macos`. Older profile formats
 upgrade while preserving the account seed and preferences. Platform changes keep
 the existing device archive and sessions and apply on the next task; API mutation
 constraints belong to the [HTTP contract](../contracts/http-api.md).
 
-Before the managed page navigates, CDP `Emulation.setUserAgentOverride` supplies
-matching desktop UA and UA Client Hints using the running Chromium's version from
-`Browser.getVersion`. Windows advertises Windows 10 x64; macOS advertises Intel
-macOS 15. The macOS reduced UA retains Chromium's compatibility token `10_15_7`
-while UA-CH uses `15.0.0`. A page initialization script aligns legacy
-`navigator.platform` for documents and ordinary frames. Arbitrary user agents and
-invented browser versions are not accepted. Different accounts may share the same
-UA, as ordinary Chromium users do. The managed browser disables Blink's
-`AutomationControlled` feature, but this does not establish general stealth.
+Camoufox receives the persisted account fingerprint/config at launch. The adapter
+uses the actual Firefox user agent and does not inject Chromium UA-CH or CDP
+overrides. Camoufox fingerprinting covers the values supported by its pinned
+release; it does not establish general stealth or transport equivalence.
 
 These controls do not change the Linux host, fonts, Canvas, Audio, GPU/WebGL,
 TLS implementation or physical hardware. Dedicated Worker globals are not

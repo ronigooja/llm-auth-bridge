@@ -214,12 +214,15 @@ def test_profile_v1_upgrade_preserves_seed_preferences_and_cipher_once(settings,
     key, queue, task = claimed(settings, *resources)
     legacy, old_cipher = legacy_profile(settings, resources[0], key)
     upgraded = profile_for(settings, key, queue, task)
-    assert upgraded['version'] == 3
+    assert upgraded['version'] == 4
     assert upgraded['browser'] == {'platform': 'windows'}
     assert upgraded['identity_seed'] == legacy['identity_seed']
+    assert upgraded['camoufox']
     expected = dict(legacy['context'])
     expected.update(viewport={'width': 1760, 'height': 900}, screen={'width': 1920, 'height': 1080})
-    assert context_options(upgraded) == expected
+    options = context_options(upgraded)
+    assert {k: v for k, v in options.items() if k != 'config'} == expected
+    assert options['config'] == upgraded['camoufox']
     with database(settings.db_path) as conn:
         row = conn.execute('SELECT * FROM browser_profiles').fetchone()
     assert row['account_id'] == resources[0]
@@ -285,14 +288,14 @@ def test_version_two_upgrade_preserves_device_preferences(settings, resources):
         conn.execute('INSERT INTO browser_profiles(account_id,profile_cipher) VALUES(?,?)',
                      (resources[0], encrypt(json.dumps(old), key)))
     upgraded = profile_for(settings, key, queue, task)
-    assert upgraded['version'] == 3
+    assert upgraded['version'] == 4
     assert upgraded['browser'] == {'platform': 'windows'}
     assert upgraded['identity_seed'] == old['identity_seed']
     assert upgraded['context'] == old['context']
 
 
-@pytest.mark.parametrize('version', ['148', 'Chrome/148.0.0.0', '', '148.0.0.0\r\nInjected: yes'])
-def test_identity_rejects_invalid_engine_version(version):
-    from app.browser_identity import user_agent_override
-    with pytest.raises(ValueError, match='Unsupported Chromium version'):
-        user_agent_override(generate_profile(), version)
+def test_camoufox_config_is_stable_and_replayed():
+    first = generate_profile()
+    second = json.loads(json.dumps(first))
+    assert context_options(first)['config'] == context_options(second)['config']
+    assert 'user_agent' not in context_options(first)

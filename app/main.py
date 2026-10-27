@@ -372,7 +372,7 @@ def create_app(settings: Settings | None = None):
 
     @app.put("/api/v1/accounts/{account_id}/browser-identity")
     def update_account_browser_identity(account_id: int, body: BrowserIdentityBody):
-        from .browser_identity import _upgrade_profile, generate_profile
+        from .browser_identity import _upgrade_profile, generate_profile, _camoufox_config
         with database(settings.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
             get_row(conn, "accounts", account_id)
@@ -382,6 +382,7 @@ def create_app(settings: Settings | None = None):
             profile = (_upgrade_profile(json.loads(decrypt(row[0], app.state.key)))
                        if row else generate_profile())
             profile["browser"] = body.model_dump()
+            profile["camoufox"] = _camoufox_config(profile["identity_seed"], profile["browser"]["platform"])
             conn.execute(
                 "INSERT INTO browser_profiles(account_id,profile_cipher) VALUES(?,?) "
                 "ON CONFLICT(account_id) DO UPDATE SET profile_cipher=excluded.profile_cipher",
