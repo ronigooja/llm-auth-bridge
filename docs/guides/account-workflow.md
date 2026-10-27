@@ -1,38 +1,21 @@
-# Account login flow and browser window
+# Account workflow
 
-`POST /api/v1/accounts/{account_id}/login-flow` accepts
-`{voice_target_id, cli_target_id?, idempotency_key?}`. Voice is required; omit
-`cli_target_id` or send `null` for Voice only, returning `{tasks: [voice]}`.
-Selecting a CLI target opts into the second step and returns `{tasks: [voice, cli]}`.
-Each selected target must exist, have its respective `chatgpt-web-voice` or
-`cliproxyapi` kind, and be bound to an account with a selected route. Creation
-validates and inserts the selected tasks in one transaction. The optional key
-identifies the complete request; reusing it with different inputs, including
-changing whether CLI is selected, returns a conflict.
+The request and response shapes are defined in the [HTTP API contract](../contracts/http-api.md). This guide describes operator sequencing and recovery.
 
-Public tasks include nullable `depends_on_task_id`. CLI stays queued until the
-voice task succeeds with phase `verified`, after downstream synchronization has
-been verified. A pending or failed synchronization waits for explicit retry or
-resolution; it does not release CLI. Failed, cancelled, interrupted or missing
-prerequisites interrupt the blocked task. Recovery preserves this ordering after
-worker restart. Existing per-target task creation remains available.
+## Start login
 
-`POST /api/v1/accounts/{account_id}/browser` accepts an optional
-`{idempotency_key?}` and returns `{task}`. It returns a live same-account task or
-an eligible queued task. Otherwise it creates a `browser_window` task with no
-target. A CLI task blocked on an incomplete prerequisite does not count as an
-eligible browser. An idle synchronization does not prevent a browser window.
-The shared worker lock still serializes every browser across accounts.
+From an account row, choose **登录 ChatGPT** to run the Voice login, or **登录 Codex** to run Voice followed by the dependent CLIProxyAPI authorization. Select only targets bound to the account and confirm the route before submitting. The UI disables a mode when its required target is missing; edit account bindings first. Repeated clicks with the same request identity are safe, while changing the selected mode requires a new request.
 
-Browser windows reopen that account's saved device and proxy at ChatGPT. Continue
-closes the window and saves it; cancellation also preserves the device through
-the browser adapter. Closing succeeds without extracting credentials or syncing
-a target. Account windows and login tasks use the same takeover transport.
-Real-account browser reopening and ordered authorization remain **unverified**.
+The Codex task remains blocked until Voice reaches `verified` after synchronization. A pending or failed synchronization requires an explicit retry or resolution. Failed, cancelled, interrupted, or missing prerequisites interrupt the blocked task. This ordering survives worker restart.
 
-Schema v4 adds the dependency column/index and request records. Stop services
-and run explicit offline `python -m app.cli migrate` with the existing key.
-Restore accepts initialized v1–v3 backups and migrates only the restored copy.
-Dependency IDs intentionally survive deletion of an old prerequisite so recovery
-can interrupt an orphaned queued task. Retention preserves prerequisites while
-dependent tasks remain active. Account/target deletion still rejects active tasks.
+## Open an account window
+
+Choose **账号窗口** to reopen the account's encrypted persistent browser device at ChatGPT. The console reuses a live same-account task or queues an idle browser window. A task blocked on an incomplete prerequisite is not eligible, while idle synchronization does not prevent opening a browser. The shared worker lock serializes browsers across accounts.
+
+The window first shows a read-only monitor. Choose **接管** only after the worker reports `waiting_human`; the task page then offers **继续任务** or **取消任务**. Continue closes the browser and saves state; cancellation also preserves the device through the browser adapter. Closing the viewer does not extract credentials or synchronize a target. See the [account-window contract](../contracts/account-window.md).
+
+## Recovery and compatibility
+
+Schema v4 migration and backup/restore procedures are documented in the [deployment guide](deployment.md). Dependency IDs survive deletion of an old prerequisite so recovery can interrupt an orphaned queued task; retention preserves prerequisites while dependent tasks remain active. Account and target deletion still rejects active tasks.
+
+Assisted real-account login and reuse are verified only when the main operator records serial acceptance. Unattended continuation, real-account browser reopening, and ordered authorization remain **unverified**; see [the roadmap](../roadmap.md).

@@ -1,41 +1,15 @@
 # Development
 
-Python 3.12 is the supported runtime; app imports have no initialization side effects. Run executable checks on GitHub-hosted runners, not on the controller or local Mac. The committed locks and CI use these commands:
+Python 3.12 is the supported runtime. App imports are side-effect free; schema changes run explicitly through the CLI. Use the committed locks and run executable checks on GitHub-hosted runners:
 
 ```sh
 uv sync --frozen --extra test --extra browser --python 3.12
-cd frontend
-npm ci
-npm test
-npm run build
-cd ..
-uv run pytest
+cd frontend && npm ci && npm test && npm run build
+cd .. && uv run pytest
 ```
 
-The synthetic browser job installs Chromium (`uv run playwright install --with-deps chromium`) or set `BRIDGE_TEST_CHROMIUM` to a system Chromium. Test-only root launches disable the sandbox; production `run_login` requires it. Set `BRIDGE_TEST_GOST` to a checksum-verified GOST 3.3.1 release executable to run all three proxy protocol tests. Missing browser/GOST or frontend build causes the corresponding acceptance tests to skip; CI explicitly provisions those prerequisites. No test contacts a provider account. Live test HTTP servers use loopback and synthetic data; no traces, HAR, video or screenshots are collected.
+CI provisions Chromium and the checksum-verified GOST executable for browser and proxy coverage. To use a system browser, set `BRIDGE_TEST_CHROMIUM`; set `BRIDGE_TEST_GOST` to a checksum-verified GOST 3.3.1 executable for all proxy protocol tests. Synthetic suites use temporary databases, loopback servers, and synthetic accounts; they do not contact provider accounts. Tracing, HAR, video, and screenshots are disabled by default.
 
-`tests/test_ui_live.py` exercises built UI -> real FastAPI -> serial synthetic worker -> human code -> synchronization -> refresh. Other suites cover migrations/rollback, wrong/missing keys, backup/restore, auth/CSRF/login concurrency, durable queue locks/leases, cancellation boundaries, human timeout, sync uncertainty and correction, adapter contracts, fresh-mail selection, TOTP, route isolation, and authenticated WebSocket logout revocation.
+For local development, set `LLM_AUTH_DB` and `LLM_AUTH_MASTER_KEY_FILE` to temporary paths. `python -m app.cli init` prompts for a password; never put passwords in command arguments. Set `LLM_AUTH_SECURE_COOKIE=false` only for local HTTP. Vite development requires an explicitly configured same-origin API proxy; production acceptance serves the built assets through FastAPI.
 
-Use `LLM_AUTH_DB` and `LLM_AUTH_MASTER_KEY_FILE` pointing at temporary local paths for development. `python -m app.cli init` prompts for a password; never pass one on the command line. Set `LLM_AUTH_SECURE_COOKIE=false` only for local HTTP. Vite development requires an explicitly configured same-origin API proxy; the supported acceptance path builds assets and serves them through FastAPI.
-
-## Git baseline and cleanup
-
-GitHub's default branch and the integration target are `main`. Start each task with `git fetch origin --prune` and a new branch from `origin/main`; record `git rev-parse origin/main` as the task baseline. Preserve existing local changes before changing branches. A completed branch is historical evidence, not a starting point for new development.
-
-Fetch again before integration, incorporate any new main commits, and run the required hosted CI checks on the resulting revision before merging. Remove clean completed worktrees and integrated task branches after acceptance. Keep deployment and validation milestones as tags; never delete dirty worktrees. Branch protection is not configured as of the [initial audit](branch-audit-20261026.md), so these are working agreements rather than a server-enforced merge gate.
-
-## Collaboration and extensions
-
-Main owns architecture, contracts, migrations, scheduling, integration and serial real-account acceptance. Per AGENTS.md, file-changing delegates use isolated worktrees under `$HOME/subagents/llm-auth-bridge/<task>` after a main commit. Bounded work uses gpt-6-luna at medium effort; UI, complex code and independent review use gpt-6.1-sol at medium effort. Each handoff includes its commit, changed files, pytest result and unresolved issues. Integrate sequentially and rerun affected checks.
-
-Never read real `auth.txt` in an agent task. Use synthetic fixtures; credentials and browser/database/mail data stay out of Git. Real account logins are main-only and serial. Record unverified capabilities as unverified.
-
-Browser adapters implement `run_login(account,target,control,saved_state)`, typed credential result/identity/expiry, and safe fixed error messages. Control checkpoints enforce cancellation/leases and manual pauses. Downstream adapters implement `sync_credential` with stable remote IDs, explicit routes, identity/type validation, and write-uncertainty classification. Unknown exceptions must preserve uncertainty. Future mailbox adapters need pinned public egress, redirect enforcement, baseline/freshness/ambiguity tests and their exact site contract before activation. Update English documentation for every interface change.
-
-## Remote validation evidence
-
-The `Native OAuth validation` workflow (`.github/workflows/validation.yml`) runs on pushes to `validation/**` and supports manual dispatch after the workflow exists on the default branch. Push an integrated commit to a validation branch to exercise the full Python synthetic suite, including browser/proxy acceptance prerequisites, frontend tests/build, the pinned CLIProxyAPI extension's focused management/API tests, its full Go suite and independent executable compilation, plus the full untouched upstream Go baseline. Full-suite failures remain failures; a baseline comparison documents inherited failures without masking them. General `Checks` ignores validation branches to avoid duplicate checks and multiarchitecture Docker builds. Other push and pull request checks retain their existing behavior.
-
-Validation uploads `bridge-validation-<revision>`, `cpa-validation-<revision>` and `cpa-baseline-<revision>` artifacts even on failure, retained for seven days. They contain the bridge source revision, uncommitted input state, run/job/runner environment, traced commands, command exit statuses, pytest JUnit output, upstream revision, patch checksum, and upstream changed-file summary. Download required artifacts before expiry and record the run URL and actual job outcomes in the handoff. Successful synthetic checks do not establish real-account verification, deployment, or Apple platform success. No local executable-suite fallback is permitted when CI is blocked.
-
-The dated [native OAuth and browser identity validation record](verification-native-oauth-browser-identity.md) records tested revisions, collected results and remaining upstream failures. The bounded `Upstream late interrupt diagnostics` workflow runs only on `validation/upstream-late-interrupt`; the main validation jobs skip that exact branch so diagnostic repeats do not rerun the bridge or full Go suites.
+See [AGENTS.md](../../AGENTS.md) for repository workflow, security, baseline, delegation, and handoff rules. Update the relevant English architecture or contract document whenever an interface changes. Runtime behavior is summarized in [architecture](../architecture/overview.md); HTTP and adapter contracts are under [contracts](../contracts/).
