@@ -1,0 +1,75 @@
+name: CLIProxyAPI native OAuth image
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "deploy/cpa/**"
+      - ".github/workflows/cpa-native-image.yml"
+    tags: ["cpa-native-v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch and patch the pinned upstream source
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(cat deploy/cpa/UPSTREAM_REVISION)"
+          patch_sha="$(jq -r .patch_sha256 deploy/cpa/source.json)"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$patch_sha" =~ ^[0-9a-f]{64}$ ]]
+          git init /tmp/cpa-source
+          git -C /tmp/cpa-source remote add origin https://github.com/router-for-me/CLIProxyAPI.git
+          git -C /tmp/cpa-source fetch --depth=1 origin "$revision"
+          git -C /tmp/cpa-source checkout --detach FETCH_HEAD
+          sha256sum -c deploy/cpa/upstream.patch.sha256
+          git -C /tmp/cpa-source apply --check "$GITHUB_WORKSPACE/deploy/cpa/upstream.patch"
+          git -C /tmp/cpa-source apply "$GITHUB_WORKSPACE/deploy/cpa/upstream.patch"
+          printf 'revision=%s\npatch_sha=%s\n' "$revision" "$patch_sha" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish the pinned image
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: /tmp/cpa-source
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/cliproxyapi-native:${{ steps.source.outputs.revision }}-${{ steps.source.outputs.patch_sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.revision }}
+            org.llm-auth-bridge.native-oauth-patch-sha256=${{ steps.source.outputs.patch_sha }}
+          provenance: true
+          sbom: true
+
+      - name: Publish immutable build metadata
+        run: |
+          mkdir -p cpa-native-release
+          printf '%s\n' '${{ steps.source.outputs.revision }}' > cpa-native-release/upstream-revision.txt
+          printf '%s\n' '${{ steps.source.outputs.patch_sha }}' > cpa-native-release/patch-sha256.txt
+          printf '%s\n' '${{ steps.image.outputs.digest }}' > cpa-native-release/image-digest.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cpa-native-image-${{ github.sha }}
+          path: cpa-native-release/
+          retention-days: 14
