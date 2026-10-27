@@ -43,6 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm /tmp/gost.tar.gz
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright XDG_CACHE_HOME=/opt/cache DISPLAY=:99
 RUN apt-get update && apt-get install -y --no-install-recommends tigervnc-standalone-server openbox x11-utils websockify \
+    && mkdir -p /opt/playwright /opt/cache \
     && uv pip install --python /app/.venv/bin/python --no-cache camoufox==0.5.8 playwright==1.56.0 \
     && XDG_CACHE_HOME=/opt/cache /app/.venv/bin/python -m camoufox fetch \
     && chmod -R a+rX /opt/playwright /opt/cache \
