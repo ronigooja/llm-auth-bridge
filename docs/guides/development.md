@@ -23,8 +23,12 @@ See [AGENTS.md](../../AGENTS.md) for repository workflow, security, baseline, de
 
 - [Checks](../../.github/workflows/checks.yml) runs frontend tests/build, bounded
   Codex continuation preflight, full pytest, then app/worker multiarchitecture
-  builds. It runs for normal task pushes and pull requests and supports manual
-  dispatch: `gh workflow run checks.yml --ref <task-branch>`.
+  builds when the corresponding source paths change. Documentation-only pushes
+  and pull requests are ignored. Frontend-only changes run the frontend checks;
+  backend changes run the browser preflight and full pytest; image builds run
+  only when application, frontend, deployment, or image/dependency files
+  change. It supports manual dispatch: `gh workflow run checks.yml --ref
+  <task-branch>`.
 - [Native OAuth validation](../../.github/workflows/validation.yml) runs the bridge
   suite plus focused/full patched CPA Go tests, native compilation, and an
   untouched upstream comparison. Push to `validation/**` or dispatch manually.
