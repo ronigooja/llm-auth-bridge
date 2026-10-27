@@ -32,7 +32,7 @@ jobs:
           git -C /tmp/cpa-source remote add origin https://github.com/router-for-me/CLIProxyAPI.git
           git -C /tmp/cpa-source fetch --depth=1 origin "$revision"
           git -C /tmp/cpa-source checkout --detach FETCH_HEAD
-          sha256sum -c deploy/cpa/upstream.patch.sha256
+          (cd deploy/cpa && sha256sum -c upstream.patch.sha256)
           git -C /tmp/cpa-source apply --check "$GITHUB_WORKSPACE/deploy/cpa/upstream.patch"
           git -C /tmp/cpa-source apply "$GITHUB_WORKSPACE/deploy/cpa/upstream.patch"
           printf 'revision=%s\npatch_sha=%s\n' "$revision" "$patch_sha" >> "$GITHUB_OUTPUT"
