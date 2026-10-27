@@ -1,31 +1,48 @@
-# Architecture
+# Architecture overview
 
-`create_app(Settings)` is a side-effect-free HTTP factory. Lifespan reads the existing key and validates the initialized schema and encrypted key check. `python -m app.cli init` alone can generate a new key and password hash; `migrate` alone performs versioned schema changes. app and worker never migrate concurrently on startup. SQLite uses WAL, foreign keys, and a ten-second busy timeout. The unversioned scaffold is migrated transactionally, preserving IDs and records, encrypting and removing `proxy_json`, and interrupting legacy tasks that lack a valid frozen execution contract. Case-distinct legacy identities are retained; new operations check case-insensitive duplicates.
+The bridge coordinates account authorization and verified credential handoff to
+external services. It owns administrator access, account configuration, a serial
+browser queue and durable recovery. Provider authentication remains a website
+interaction; downstream services own credentials after verified handoff.
 
-The app serves the production React assets and authenticated noVNC static client. A separate persistent worker owns Playwright, Chromium, Xvfb, x11vnc, websockify and GOST. Both share SQLite and the same `LLM_AUTH_LOCK_FILE` on one host. Multiple hosts with independent locks or network filesystems are unsupported. Compose keeps one worker replica. Internal VNC and websockify ports are not published.
+## Components and ownership
 
-## Durable execution
+| Component | Responsibility | Implementation |
+| --- | --- | --- |
+| HTTP application | Administrator sessions, account/target management, task commands, event history and browser transport authorization | [main.py](../../app/main.py) |
+| React frontend and account viewer | Task workflow, live progress and authenticated access to the current account browser | [frontend](../../frontend/), [account-viewer.js](../../app/static/account-viewer.js) |
+| Worker | Queue ownership, browser lifecycle, human waits, credential synchronization and maintenance | [worker.py](../../app/worker.py), [queue.py](../../app/queue.py) |
+| Browser runtime | Account device restoration, routed Chromium, provider interaction and private remote desktop | [browser.py](../../app/browser.py), [Dockerfile](../../Dockerfile) |
+| Integration adapters | Downstream capability checks, writes, readback and reconciliation | [integrations.py](../../app/integrations.py), [cpa_oauth.py](../../app/cpa_oauth.py) |
+| SQLite and mounted key | Durable state and encrypted material shared by app and worker | [db.py](../../app/db.py), [crypto.py](../../app/crypto.py) |
 
-Tasks follow `queued -> running -> waiting_human -> running -> sync_pending -> succeeded`, with `failed`, `cancelled`, and `interrupted` outcomes. `phase` refines progress. Account/target versions freeze at enqueue; changes before claim interrupt the old task. Every mutation of an owned result checks the random execution ID and live lease. Claiming is a SQLite immediate transaction, supplemented by the shared process file lock. An independent thread renews worker/task heartbeats. Expired browser ownership becomes interrupted, never an automatic authorization-code replay. Expired sync ownership becomes a reconciliation retry. Graceful shutdown cooperates at bounded browser action checkpoints.
+The application and one persistent worker run on one host, share the same SQLite
+volume and process lock, and communicate with the browser through private
+websockify transport. Independent locks on multiple hosts and network filesystem
+deployments are unsupported. Compose publishes the app port only. The worker
+owns Chromium and the desktop; the application never launches a second browser
+for monitoring or takeover.
 
-Browser work normally has a ten-minute active deadline; human waiting has a separate thirty-minute deadline. Human time extends the active deadline on continuation. Input commands are encrypted and submission IDs are idempotent. Takeover pauses automation in the same browser session; continuation rechecks the page. Cancellation is cooperative and releases browser resources. Takeover availability is revoked on cancellation, session logout, lease expiry, browser close, or task termination.
+`create_app(Settings)` constructs the HTTP application without initializing keys
+or migrating data. Startup validates the existing schema and encrypted key check.
+Explicit CLI initialization and offline migration keep destructive setup separate
+from serving requests; see the [deployment guide](../guides/deployment.md).
 
-After auth-files or Voice login, credentials are encrypted into `pending_credentials`; browser teardown completes before another task is claimed. Sync failures retain credentials and allow retry without browser login. A first-write boundary atomically checks cancellation and persists the attempt counter. Once a write may have started, ordinary cancellation is rejected because its remote outcome may be unknown. Adapters distinguish preflight failures from possible writes. Retries reconcile first and never overwrite a mismatched, potentially rotated CPA credential. Operator-confirmed discard removes local pending material, retains the remote ID in task audit, marks the outcome unresolved, and allows fresh authorization; it does not delete remote accounts.
+## Read by concern
 
-For native CPA authorization, the downstream extension owns PKCE, exchange and staging. The worker persists an encrypted native-session reference and callback submission marker in `native_sessions`, then enters the same fenced `sync_pending` commit boundary. Staging is distinct from installing a usable downstream credential. Readback after commit must confirm identity, explicit route, stable remote ID and persisted credential digest; uncertain callbacks are not replayed. Native OAuth is the default for new CPA targets; existing protocols, including legacy absent/null auth-files configurations, are preserved.
+- [Runtime and account identity](runtime.md) describes process topology, dynamic
+  desktop geometry, persistent devices and platform emulation limits.
+- [Data and task lifecycle](data-and-tasks.md) describes schema ownership,
+  execution fencing, cancellation, recovery and retention.
+- [Security boundaries](security.md) describes administrator access, secret
+  storage, network routes and the live desktop trust boundary.
+- [Architecture decisions](decisions/) records why routing, encryption and serial
+  handoff work this way.
 
-Schema v2 adds encrypted `browser_profiles` keyed by account and encrypted `native_sessions` keyed by task. One browser profile and saved session are reused by Voice and Codex tasks for an account; schema v3 additionally stores an authenticated, encrypted full Chromium device archive per account. Tasks restore the same account device into tmpfs and use a persistent context; different account devices have separate user-data directories. Device archive ciphertext is authenticated against its account ID to reject cross-account blob substitution. Profile creation is fenced by task ownership before navigation. Native context settings control viewport/screen, locale and timezone without JavaScript fingerprint spoofing; they do not establish full browser/hardware fingerprint isolation. Explicit offline migration preserves existing accounts, tasks and saved sessions.
-
-A failed idle non-native sync permits target administrator-secret/name corrections, while retaining its destination/kind/compatibility binding. Browser-active accounts/targets cannot be edited. Active native sessions block account edits and target binding changes during queued recovery, cancellation and pending commit. Idle queued recovery or idle pending sync permits only target management-key/name repair, atomically rebinding the frozen target version; terminal task remnants do not lock resources. Deleting resources with active tasks conflicts. Local deletion never deletes downstream accounts.
-
-## Events, sessions, and maintenance
-
-Task events are transactionally persisted alongside state changes. SSE has monotonic event IDs, Last-Event-ID replay, periodic session checks, and no proxy buffering. Data contains task ID plus event_id and takeover availability. Authenticated history supports refresh recovery; the frontend remembers navigation and selected task in its URL hash.
-
-Administrator passwords use Argon2id. Random session cookies are HttpOnly, SameSite Strict, Secure by default, bounded to twelve hours; only SHA-256 token hashes are stored. Writes require a per-session CSRF header. Login has a five-attempt/five-minute client limit; password change revokes every session and concurrent old-password login is fenced by rechecking the hash at insertion. WebSockets validate Origin, session, active waiting task and lease on connection and continuously thereafter.
-
-Secrets, account routes, browser identities/state, native-session references, commands and pending credentials use AES-GCM under the separately mounted key. Public responses expose presence flags, safe target URL/compatibility, and safe events. Profile seeds, native provider state and native-session material are not public API fields. Validation errors omit input values. Browser traces, HAR, recordings and screenshots are disabled. Backups use SQLite's consistent backup API; the matching key is restored separately.
-
-Every fifteen minutes the worker checks known voice expiry and queues maintenance within one hour of expiry; unknown expiry is checked every six hours. Maintenance uses the saved browser session and never resubmits the password. Invalid sessions become `reauth_required`; transient failure is retried on the next six-hour schedule. Manual tasks have priority and active task deduplication applies. CPA refresh is exclusively downstream-owned. `maintenance_enabled` controls automatic session maintenance, not manual task admission. Retention removes final task events after configured days and never removes pending sync results.
-
-Adapter interfaces and HTTP bodies are recorded in [implementation contract](implementation-contract.md). Real provider, mailbox site, image and voice compatibility acceptance remain as listed in [roadmap](roadmap.md).
+Interface details have one home: [HTTP API](../contracts/http-api.md),
+[worker adapters](../contracts/worker-adapters.md) and
+[account window transport](../contracts/account-window.md). Downstream protocol
+requirements belong to [CLIProxyAPI](../integrations/cliproxyapi.md) and
+[Voice](../integrations/voice.md). The [capability matrix](../roadmap.md) is the
+authority for tested behavior, acceptance gaps and future work; the architectural
+boundaries here do not establish real-account acceptance.

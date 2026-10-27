@@ -1,70 +1,93 @@
-# Account browser identity, phase one
+# Runtime and account browser identity
 
-Each account has an encrypted browser identity preference alongside its existing
-Chromium device archive. Supported platform preferences are `windows` (default)
-and `macos`. They remain stable across login, idle account windows, retries and
-Voice-to-Codex transitions. Different accounts can intentionally share the same
-UA: a unique UA string per account would not represent ordinary Chromium usage.
-The existing identity seed remains private; it is not injected into websites.
+## Process topology
 
-Before the managed page navigates, the worker uses Chromium's native CDP
-`Emulation.setUserAgentOverride` to set a matching desktop User-Agent,
-`navigator.platform`, UA Client Hints platform/version/architecture/bitness and
-browser brand versions. Chrome's full version comes from `Browser.getVersion`
-on the running executable, while the reduced UA uses its actual major version.
-Windows uses a Windows 10 x64 identity; macOS uses an Intel macOS 15 identity.
-The macOS reduced UA retains Chromium's compatibility token `10_15_7`, while
-UA-CH reports `15.0.0`; these fields intentionally follow different version
-formats.
-No arbitrary UA string or random version is accepted. Browser updates naturally
-change the browser version, while the account's OS preference stays unchanged.
-Locale follows the saved account preference; proxy timezone resolution, fixed
-account routing, sandboxing, private VNC and encrypted device storage are retained.
-The page and ordinary frames also receive a read-only `navigator.platform`
-override (`Win32` or `MacIntel`). Blink's automation-controlled feature is
-disabled for the managed browser and measured in synthetic CI; this does not
-change the host OS or provide a general stealth browser.
+The [worker image](../../Dockerfile) runs `bridge-worker` under `tini` as the
+unprivileged bridge user. Its entrypoint starts TigerVNC's `Xtigervnc` X display,
+waits for the display socket, starts Openbox, waits for window-manager readiness,
+then starts websockify and the Python worker. Shutdown waits for the worker to
+close its browser before stopping the desktop processes. The app and worker use
+the shared data volume and lock defined in [Compose](../../docker-compose.yml).
 
-## Configuration API
+TigerVNC binds its RFB listener to localhost with internal None security;
+websockify is reachable only inside the private service network. Administrator
+access passes through the application's authorized WebSockets. Monitor and
+interactive takeover reuse the task's current browser; opening a monitor does
+not pause automation. See the [account window contract](../contracts/account-window.md)
+for authorization and RFB filtering.
 
-These administrator endpoints require the existing authenticated session and,
-for writes, same-origin CSRF validation:
+The production desktop starts at 1920×1080 with remote resizing enabled. The
+viewer requests a desktop matching its iframe's CSS dimensions and renders at
+1:1 CSS scale. Openbox keeps the Chromium window maximized as the desktop changes.
+`fit_browser_window` first clears stale restored window bounds, then fits and
+maximizes the native window. Browser chrome remains visible. A fixed framebuffer
+smaller than the browser loses pixels, which client scaling cannot recover; the
+runtime therefore coordinates desktop and window geometry instead of relying on
+local scaling. Production uses TigerVNC/Openbox rather than Xvfb/x11vnc.
 
-- `GET /api/v1/accounts/{id}/browser-identity` returns `{"platform":"windows"}`
-  or `{"platform":"macos"}`. Reading an unused account does not allocate a profile.
-- `PUT /api/v1/accounts/{id}/browser-identity` accepts exactly one `platform`
-  value from that set. It rejects queued, running, waiting or pending-sync tasks
-  with HTTP 409. An unsupported platform or extra UA field returns HTTP 422.
+The managed browser uses `no_viewport=True`, so content follows the actual window.
+Saved profile viewport/screen values are defaults for other context consumers,
+not a fixed production framebuffer or a promise of unique account dimensions.
+Runtime source: [browser.py](../../app/browser.py),
+[browser_identity.py](../../app/browser_identity.py),
+[account-viewer.js](../../app/static/account-viewer.js).
 
-Changing this preference preserves the account seed, credentials, proxy, saved
-sessions and device archive. It changes the website-visible OS on the next task;
-choose it before initial login and avoid changing it unnecessarily. Existing v1
-and v2 encrypted profiles upgrade once to v3 with the Windows default, preserving
-seed and account preferences. This is a profile-format upgrade, not a database
-schema migration. The management UI does not yet expose a platform selector.
+## Persistent devices and preferences
 
-## Scope and limits
+An account has three related forms of state:
 
-This phase emulates the identity of the bridge-managed page and its ordinary
-same-process frames. Dedicated Worker globals are intentionally not rewritten:
-generic Worker rewriting changes script URL/base semantics and can break provider
-code. Worker `navigator.platform` and platform-specific runtime values therefore
-remain unverified and may expose Linux. It does not change the host OS, TLS
-implementation, fonts, Canvas, Audio or GPU/WebGL renderer. Out-of-process
-frames and manually opened additional tabs/popups are not covered by this
-page-scoped override and remain unverified. APIRequestContext and downstream HTTP
-clients are separate transports; their headers are not covered by this override.
-This is not a complete anti-detect browser or AdsPower equivalent. The
-`AutomationControlled` Blink feature is disabled, but other automation and
-runtime signals remain unverified.
+- An encrypted profile stores stable preferences, including platform and locale,
+  and a private identity seed. The seed is not injected into websites.
+- An encrypted device archive stores a restricted native Chromium user-data
+  directory. Each task restores it into a private temporary directory and launches
+  a persistent Chromium context. The same account device is reused for browser
+  windows, Voice and Codex tasks; other accounts use separate directories.
+- Encrypted browser session state supports legacy import and session checkpoints.
+  The device archive also explicitly checkpoints session cookies across restarts.
 
-Synthetic headed CI checks cover the first navigation's UA and low-entropy
-UA-CH headers, high-entropy negotiated headers, JavaScript properties, an iframe
-and browser restarts for both platforms. No real account state is used.
-`Browser identity diagnostics` additionally opens `https://browserleaks.com/ip`
-with a fresh synthetic profile using public GitHub runner egress. It checks page
-availability and basic identity properties without saving IPs, cookies, HTML,
-screenshots or recordings. It does not verify a production account's proxy,
-Cloudflare acceptance or complete absence of host-OS leaks.
+Chromium closes before device snapshotting, including ordinary failure and
+cancellation paths. A valid execution lease is required to publish a device
+checkpoint, even after cancellation. Failed initialization or unconfirmed browser
+shutdown preserves the previous archive. A hard crash before checkpointing can
+lose current-task changes. Archives exclude caches, crash material and process
+locks; native sessionStorage remains tab scoped. This is persistent account
+storage, not a byte-for-byte archive of every Chromium artifact.
 
-Real-account behavior and reduction in Cloudflare challenges remain **unverified**.
+Restoration validates paths, file types and size budgets before extracting.
+Authenticated encryption binds each archive to its account ID, preventing
+cross-account ciphertext substitution. See [browser_device.py](../../app/browser_device.py)
+and device controls in [worker.py](../../app/worker.py). Profile allocation and
+upgrades are committed under task ownership before navigation. Device archive
+format, profile format and database schema have independent version lifecycles.
+
+Proxy tasks resolve the route's exit timezone before navigation and persist the
+verified IANA timezone in the profile. Lookup failure stops the task rather than
+switching routes or silently selecting UTC. Locale remains an account preference;
+it does not automatically follow IP geolocation. See
+[route_timezone.py](../../app/route_timezone.py).
+
+## Platform identity and limits
+
+Profile format v3 stores `windows` (default) or `macos`. Older profile formats
+upgrade while preserving the account seed and preferences. Platform changes keep
+the existing device archive and sessions and apply on the next task; API mutation
+constraints belong to the [HTTP contract](../contracts/http-api.md).
+
+Before the managed page navigates, CDP `Emulation.setUserAgentOverride` supplies
+matching desktop UA and UA Client Hints using the running Chromium's version from
+`Browser.getVersion`. Windows advertises Windows 10 x64; macOS advertises Intel
+macOS 15. The macOS reduced UA retains Chromium's compatibility token `10_15_7`
+while UA-CH uses `15.0.0`. A page initialization script aligns legacy
+`navigator.platform` for documents and ordinary frames. Arbitrary user agents and
+invented browser versions are not accepted. Different accounts may share the same
+UA, as ordinary Chromium users do. The managed browser disables Blink's
+`AutomationControlled` feature, but this does not establish general stealth.
+
+These controls do not change the Linux host, fonts, Canvas, Audio, GPU/WebGL,
+TLS implementation or physical hardware. Dedicated Worker globals are not
+rewritten. Out-of-process frames, extra tabs/popups and platform-specific runtime
+signals remain outside the verified page identity scope. Playwright request
+contexts and downstream HTTP clients are separate transports. Persistent storage
+and a coherent configured platform do not establish complete fingerprint
+isolation, anti-detect equivalence or provider challenge avoidance. Current
+acceptance evidence and gaps belong to the [capability matrix](../roadmap.md).
