@@ -37,14 +37,14 @@ See [AGENTS.md](../../AGENTS.md) for repository workflow, security, baseline, de
   validation, selected headed acceptance and ARM64 image export. Its success is
   not a complete pytest verdict and does not deploy a running service.
 - [Account viewer regression](../../.github/workflows/novnc.yml) checks packaged
-  noVNC in Chromium and opt-in WebKit, including synthetic Retina DPR 2 behavior.
+  noVNC in Camoufox/Firefox, including synthetic Retina DPR 2 behavior.
 
 Workflows are the source of exact provisioning steps, deadlines and artifact
-names. Missing Chromium, GOST or built frontend assets can skip corresponding
+names. Missing Camoufox, GOST or built frontend assets can skip corresponding
 acceptance cases; inspect skip reasons before claiming coverage. Install the
-pinned Playwright browser with `uv run playwright install --with-deps chromium`
-on the runner when needed. Production Chromium requires its sandbox; test-only
-root fixtures may disable it.
+pinned Camoufox browser with `uv run python -m camoufox fetch` on the runner
+when needed. Production Camoufox runs headed in the desktop worker; test-only
+headless fixtures may use Xvfb.
 
 Collect the source revision, run URL, job outcomes and relevant artifacts before
 their seven-day expiry. Inspect failed steps rather than reading successful logs.

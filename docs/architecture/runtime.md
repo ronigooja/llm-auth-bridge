@@ -48,7 +48,7 @@ An account has three related forms of state:
 - Encrypted browser session state supports legacy import and session checkpoints.
   The device archive also explicitly checkpoints session cookies across restarts.
 
-Chromium closes before device snapshotting, including ordinary failure and
+Camoufox closes before device snapshotting, including ordinary failure and
 cancellation paths. A valid execution lease is required to publish a device
 checkpoint, even after cancellation. Failed initialization or unconfirmed browser
 shutdown preserves the previous archive. A hard crash before checkpointing can

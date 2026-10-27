@@ -12,7 +12,7 @@ interaction; downstream services own credentials after verified handoff.
 | HTTP application | Administrator sessions, account/target management, task commands, event history and browser transport authorization | [main.py](../../app/main.py) |
 | React frontend and account viewer | Task workflow, live progress and authenticated access to the current account browser | [frontend](../../frontend/), [account-viewer.js](../../app/static/account-viewer.js) |
 | Worker | Queue ownership, browser lifecycle, human waits, credential synchronization and maintenance | [worker.py](../../app/worker.py), [queue.py](../../app/queue.py) |
-| Browser runtime | Account device restoration, routed Chromium, provider interaction and private remote desktop | [browser.py](../../app/browser.py), [Dockerfile](../../Dockerfile) |
+| Browser runtime | Account device restoration, routed Camoufox/Firefox, provider interaction and private remote desktop | [browser.py](../../app/browser.py), [Dockerfile](../../Dockerfile) |
 | Integration adapters | Downstream capability checks, writes, readback and reconciliation | [integrations.py](../../app/integrations.py), [cpa_oauth.py](../../app/cpa_oauth.py) |
 | SQLite and mounted key | Durable state and encrypted material shared by app and worker | [db.py](../../app/db.py), [crypto.py](../../app/crypto.py) |
 
@@ -20,7 +20,7 @@ The application and one persistent worker run on one host, share the same SQLite
 volume and process lock, and communicate with the browser through private
 websockify transport. Independent locks on multiple hosts and network filesystem
 deployments are unsupported. Compose publishes the app port only. The worker
-owns Chromium and the desktop; the application never launches a second browser
+owns Camoufox/Firefox and the desktop; the application never launches a second browser
 for monitoring or takeover.
 
 `create_app(Settings)` constructs the HTTP application without initializing keys

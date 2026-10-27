@@ -14,9 +14,9 @@ readback does not prove provider usability, runtime reload, or actual egress.
 | Administrator sessions, CSRF, encrypted CRUD/import, explicit migration, backup/restore | Implemented; synthetic suites cover these paths | Production restore with the matching key remains an operator acceptance task |
 | Serial queue, leases/fencing, recovery, manual inputs, SSE, pending-sync retry | Implemented; synthetic suites cover cancellation and uncertain writes | Provider-specific timeout/recovery behavior remains unverified |
 | OpenAI password, TOTP, browser session and legacy OAuth adapter | Synthetic fixtures; assisted ChatGPT login and assisted Codex authorization observed on 2026-10-25 | Fully unattended login, all real challenge branches, Codex inference remain unverified |
-| Per-account encrypted Chromium device and Voice-to-Codex session reuse | Hosted persistence/isolation tests and ARM64 sandbox acceptance; assisted reuse observed | Unattended chooser/consent continuation in the current source remains unverified with real accounts |
-| Account OS preference and UA/UA-CH alignment | Native page-scoped platform override and synthetic headed checks for Windows/macOS | Worker globals, out-of-process frames, additional pages and host/hardware signals remain unverified; reduced Cloudflare challenges unverified |
-| Account windows, monitor/takeover, adaptive desktop | Hosted synthetic RFB/noVNC checks; ARM64 TigerVNC/Openbox resizing and packaged Chromium/WebKit popup checks | Physical Safari/Retina visual confirmation and current real-provider window behavior remain unverified |
+| Per-account encrypted Camoufox/Firefox device and Voice-to-Codex session reuse | Hosted persistence/isolation tests and ARM64 sandbox acceptance; assisted reuse observed | Unattended chooser/consent continuation in the current source remains unverified with real accounts |
+| Account OS preference and Camoufox fingerprint configuration | Native page-scoped platform override and synthetic headed checks for Windows/macOS | Worker globals, out-of-process frames, additional pages and host/hardware signals remain unverified; reduced Cloudflare challenges unverified |
+| Account windows, monitor/takeover, adaptive desktop | Hosted synthetic RFB/noVNC checks; ARM64 TigerVNC/Openbox resizing and packaged Camoufox/Firefox popup checks | Physical Safari/Retina visual confirmation and current real-provider window behavior remain unverified |
 | HTTP/HTTPS/SOCKS5 routing with no direct fallback | Synthetic proxy isolation and production sandbox checks | Provider-observed egress and downstream runtime routing remain unverified |
 | CLIProxyAPI auth-files synchronization | Mock contracts, deployed management access, assisted Codex synchronization observed | Codex inference, refresh rotation and full runtime egress acceptance remain unverified |
 | CLIProxyAPI native OAuth (`cpa-native-oauth-v1`) | Client implemented; focused patched native API tests and server compilation passed | Requires patched target; deployed native authorization, commit/recovery, runtime reload and real-account usability remain unverified |
@@ -88,7 +88,7 @@ check is green. This documentation change does not alter application or test cod
 3. Confirm CPA runtime reload, actual egress, refresh ownership and Codex inference;
    confirm Voice audio, actual egress, expiry/renewal, saved-session maintenance
    and restart behavior with the compatible deployed service.
-4. Accept amd64 container runtime, the production Chromium sandbox on each target
+4. Accept amd64 container runtime, the production Camoufox sandbox on each target
    host, physical client visual behavior, and production backup/restore using the
    matching key. Preserve database/image rollback compatibility during upgrades.
 5. Obtain the actual mailbox site's contract before adding an isolated reader with
