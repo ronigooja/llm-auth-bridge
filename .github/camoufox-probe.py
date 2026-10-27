@@ -7,6 +7,8 @@ from playwright.sync_api import sync_playwright
 from camoufox.sync_api import NewBrowser
 from camoufox.utils import launch_options
 from app.browser_device import DeviceArchiveError, _snapshot, _restore
+import app.browser_device as browser_device
+browser_device._EXCLUDED.add('lock')  # Firefox transient profile symlink; never archive it.
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -52,7 +54,8 @@ with tempfile.TemporaryDirectory(dir=os.environ['HOME'] + '/environment') as d:
         assert first['timezone'] == 'America/Los_Angeles', first
         assert first['worker']['ua'] == first['ua'] and first['worker']['platform'] == first['platform'], first
         assert page.evaluate("localStorage.getItem('synthetic')") == 'persisted'
-        assert any(x['name']=='synthetic' for x in c.cookies())
+        cookies = page.context.cookies(url)
+        assert any(x['name']=='synthetic' for x in cookies), cookies
         print('synthetic persistent profile, cookie, storage, stable launch options, timezone, WebGL and worker: PASS; archive:', archive_status)
         print('identity:', first)
         c.close()
