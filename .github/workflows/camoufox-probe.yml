@@ -7,7 +7,7 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,7 +21,7 @@ jobs:
       - name: Fetch paired browser
         run: timeout 120 "$HOME/environment/camoufox-venv/bin/camoufox" fetch > "$HOME/environment/fetch.log" 2>&1 || { status=$?; tail -n 50 "$HOME/environment/fetch.log"; exit "$status"; }
       - name: Install system libraries
-        run: timeout 180 "$HOME/environment/camoufox-venv/bin/python" -m playwright install-deps firefox > "$HOME/environment/deps.log" 2>&1 || { status=$?; tail -n 50 "$HOME/environment/deps.log"; exit "$status"; }
+        run: timeout 600 "$HOME/environment/camoufox-venv/bin/python" -m playwright install-deps firefox > "$HOME/environment/deps.log" 2>&1 || { status=$?; tail -n 50 "$HOME/environment/deps.log"; exit "$status"; }
       - name: Run synthetic probe
         run: timeout 120 "$HOME/environment/camoufox-venv/bin/python" .github/camoufox-probe.py > "$HOME/environment/probe.log" 2>&1 || { status=$?; tail -n 100 "$HOME/environment/probe.log"; exit "$status"; }
         env:
