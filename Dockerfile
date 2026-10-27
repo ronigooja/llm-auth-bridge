@@ -41,11 +41,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && echo "$GOST_SHA  /tmp/gost.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/gost.tar.gz -C /usr/local/bin gost \
     && rm /tmp/gost.tar.gz
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright DISPLAY=:99
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright XDG_CACHE_HOME=/opt/cache DISPLAY=:99
 RUN apt-get update && apt-get install -y --no-install-recommends tigervnc-standalone-server openbox x11-utils websockify \
     && pip install --no-cache-dir camoufox==0.5.8 playwright==1.56.0 \
-    && python -m camoufox fetch \
-    && chmod -R a+rX /opt/playwright \
+    && XDG_CACHE_HOME=/opt/cache python -m camoufox fetch \
+    && chmod -R a+rX /opt/playwright /opt/cache \
     && rm -rf /var/lib/apt/lists/*
 # The uv environment also installs the exact browser API version for runtime imports.
 RUN uv sync --frozen --no-dev --no-install-project --extra browser
