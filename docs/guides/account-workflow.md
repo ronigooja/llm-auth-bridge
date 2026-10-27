@@ -12,10 +12,10 @@ The Codex task remains blocked until Voice reaches `verified` after synchronizat
 
 Choose **账号窗口** to reopen the account's encrypted persistent browser device at ChatGPT. The console reuses a live same-account task or queues an idle browser window. A task blocked on an incomplete prerequisite is not eligible, while idle synchronization does not prevent opening a browser. The shared worker lock serializes browsers across accounts.
 
-The window first shows a read-only monitor. Choose **接管** only after the worker reports `waiting_human`; the task page then offers **继续任务** or **取消任务**. Continue closes the browser and saves state; cancellation also preserves the device through the browser adapter. Closing the viewer does not extract credentials or synchronize a target. See the [account-window contract](../contracts/account-window.md).
+The window first shows a read-only monitor. For interactive control, request takeover and wait until automation is paused (`waiting_human`); the task page then offers **继续任务** or **取消任务**. For login tasks, Continue resumes automation in that same browser and closing the viewer leaves the task running. For idle browser-window tasks, Continue (also requested when closing the popup) saves the device and releases the browser without credential extraction or target sync. Cancellation also preserves the device while the worker retains its lease. See the [account-window contract](../contracts/account-window.md).
 
 ## Recovery and compatibility
 
 Schema v4 migration and backup/restore procedures are documented in the [deployment guide](deployment.md). Dependency IDs survive deletion of an old prerequisite so recovery can interrupt an orphaned queued task; retention preserves prerequisites while dependent tasks remain active. Account and target deletion still rejects active tasks.
 
-Assisted real-account login and reuse are verified only when the main operator records serial acceptance. Unattended continuation, real-account browser reopening, and ordered authorization remain **unverified**; see [the roadmap](../roadmap.md).
+See [the roadmap](../roadmap.md) for the recorded assisted-login observations and remaining real-account acceptance.

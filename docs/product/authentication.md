@@ -6,7 +6,10 @@ The worker runs headed Chromium in a private TigerVNC/Openbox desktop. The adapt
 
 Auth-files and native OAuth targets use the account's explicit route. Native OAuth requires the patched CLIProxyAPI extension; the bridge submits the callback once and stores only an encrypted native-session reference. It does not silently fall back or replay uncertain exchanges. ChatGPT Web sessions are reused only while authenticated; expired sessions require an administrator-triggered login.
 
-Each account owns an encrypted Chromium device archive shared by its Voice and Codex tasks. The worker restores it into a restricted temporary directory, launches a persistent context, then re-encrypts and removes plaintext state. Accounts never share a user-data directory. Stable native identity settings include platform preference, locale, timezone, viewport, and desktop mode; browser version follows the installed Chromium. These settings do not provide complete Canvas, WebGL, font, audio, or hardware isolation. Real-account login, cross-target reuse, and provider egress remain **unverified** unless recorded in [the roadmap](../roadmap.md).
+Account devices preserve provider sessions between tasks. Their persistence,
+platform preferences and identity limits are defined in [runtime architecture](../architecture/runtime.md).
+Acceptance of assisted login, reuse and unattended flow is recorded in
+[the roadmap](../roadmap.md).
 
 No generic webmail reader is enabled. Mailbox URLs are validated and encrypted; code entry or same-session takeover is required. Ambiguous or stale messages are not selected automatically.
 

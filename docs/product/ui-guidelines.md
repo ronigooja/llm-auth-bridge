@@ -1,5 +1,7 @@
 # UI guidelines
 
+When designing or updating management-console screens, apply these guidelines.
+
 Use the domain nouns **Accounts**, **Targets**, **Tasks**, and **Settings**. Name actions with a verb and object: **Import accounts**, **Start login**, **Retry sync**, **Enter code**, **Take over browser**, **Continue**, and **Cancel task**. Status labels describe the next required action: **Queued**, **Logging in**, **Waiting for code**, **Waiting for takeover**, **Sync pending**, **Completed**, **Failed**, and **Cancelled**.
 
 Keep navigation stable. Pair each account's identity, status, and next action. Keep progress, code entry, takeover, continuation, cancellation, and retry in one task view. Mask secrets and never place passwords, TOTP seeds, mailbox URLs, or tokens in URLs, tables, ordinary responses, or logs.
