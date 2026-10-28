@@ -20,7 +20,7 @@ workflow's OCI digest in the release record before installation.
 
 ```sh
 ./deploy/voice/build.sh /tmp/voice-bridge-build \
-  llm-auth-bridge/voice:bridge-v1-6338ac4
+  llm-auth-bridge/voice:bridge-v1-e6001bc
 ```
 
 The script creates a fresh output directory, checks out the exact fork revision,

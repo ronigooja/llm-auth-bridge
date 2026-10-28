@@ -5,7 +5,7 @@
 Voice targets must explicitly select `compatibility: "bridge-v1"` and supply
 `base_url`, `admin_username`, and `admin_password`. Management uses HTTP Basic
 without browser cookies. The server contract is `docs/BRIDGE_V1.md` in the
-[pinned ronigooja fork](https://github.com/ronigooja/chatgpt-web-voice/tree/6338ac478070aaa34bfe7a3c0469caf9e9174c02).
+[pinned ronigooja fork](https://github.com/ronigooja/chatgpt-web-voice/tree/e6001bc98fabdfc2a8a14478ed426b90e1107c89).
 [Source metadata](../../../deploy/voice/source.json) pins the fork revision and
 release image. Refer to that contract for endpoints, body limits, canonical
 encoding, idempotency, errors and persistence. The [fork build entry point](../../../deploy/voice/README.md)
