@@ -57,7 +57,7 @@ jobs:
           set -Eeuo pipefail
           set +e
           timeout --signal=TERM --kill-after=20s 18m xvfb-run -a -s '-screen 0 1920x1080x24' \
-            uv run pytest -p tools.pytest_deadline -v -ra -o faulthandler_timeout=120 \
+            uv run python -m pytest -p tools.pytest_deadline -v -ra -o faulthandler_timeout=120 \
             --junitxml=regression-logs/pytest.xml 2>&1 | tee regression-logs/pytest.log
           result=${PIPESTATUS[0]}
           printf '%s\n' "$result" > regression-logs/pytest.exit

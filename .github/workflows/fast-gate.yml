@@ -82,7 +82,7 @@ jobs:
           set -Eeuo pipefail
           set +e
           timeout --signal=TERM --kill-after=15s 5m bash -o pipefail -c \
-            'uv run pytest -p tools.pytest_deadline -v -ra -o faulthandler_timeout=60 \
+            'uv run python -m pytest -p tools.pytest_deadline -v -ra -o faulthandler_timeout=60 \
               --ignore-glob="tests/*_live.py" \
               --junitxml=fast-gate-logs/pytest-nonbrowser.xml 2>&1 | tee fast-gate-logs/pytest-nonbrowser.log'
           result=$?
@@ -128,7 +128,7 @@ jobs:
           set -Eeuo pipefail
           set +e
           timeout --signal=TERM --kill-after=15s 3m xvfb-run -a -s '-screen 0 1280x720x24' \
-            uv run pytest -p tools.pytest_deadline -v -ra tests/test_browser_live.py -k 'real_camoufox_detects_and_submits_synthetic_login or codex_existing' \
+            uv run python -m pytest -p tools.pytest_deadline -v -ra tests/test_browser_live.py -k 'real_camoufox_detects_and_submits_synthetic_login or codex_existing' \
             --junitxml=fast-gate-logs/browser.xml 2>&1 | tee fast-gate-logs/browser.log
           result=${PIPESTATUS[0]}
           printf '%s\n' "$result" > fast-gate-logs/browser.exit
