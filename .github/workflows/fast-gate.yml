@@ -85,9 +85,7 @@ jobs:
           set +e
           timeout --signal=TERM --kill-after=15s 5m bash -o pipefail -c \
             'uv run pytest -p tools.pytest_deadline -v -ra -o faulthandler_timeout=60 \
-              --ignore=tests/test_browser_live.py --ignore=tests/test_monitor_live.py \
-              --ignore=tests/test_novnc_live.py --ignore=tests/test_takeover_live.py \
-              --ignore=tests/test_ui_live.py --ignore=tests/test_proxy_live.py \
+              --ignore-glob="tests/*_live.py" \
               --junitxml=fast-gate-logs/pytest-nonbrowser.xml 2>&1 | tee fast-gate-logs/pytest-nonbrowser.log'
           result=$?
           printf '%s\n' "$result" > fast-gate-logs/pytest-nonbrowser.exit
