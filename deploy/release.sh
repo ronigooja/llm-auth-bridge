@@ -33,13 +33,14 @@ compose=(docker compose -p "$RELEASE_PROJECT" -f "$script_dir/release.compose.ym
 changed=0
 switched=0
 accepted=0
+candidate_started=0
 finish() {
   rc=$?
   trap - EXIT
   if (( rc != 0 && accepted == 0 )); then
     if (( switched )); then timeout -k 10s 60s "$ROLLBACK_HOOK" >>"$record/rollback.log" 2>&1 || echo 'Traffic rollback failed; operator action required' >&2; fi
     "${compose[@]}" logs --no-color --tail 100 app worker >"$record/containers.log" 2>&1 || true
-    "${compose[@]}" stop >>"$record/rollback.log" 2>&1 || true
+    if (( candidate_started )); then "${compose[@]}" stop >>"$record/rollback.log" 2>&1 || true; fi
     if (( changed )); then timeout -k 10s 60s "$RESUME_OLD_HOOK" >>"$record/rollback.log" 2>&1 || echo 'Old service resume failed; operator action required' >&2; fi
     echo 'failed' >"$record/result"
   fi
@@ -78,6 +79,7 @@ chmod 644 "$RELEASE_BACKUP_DIR/bridge.sqlite3"
 timeout -k 10s 120s "${compose[@]}" run --rm --no-deps -v "$RELEASE_BACKUP_DIR:/import:ro" app python -m app.cli restore /import/bridge.sqlite3
 timeout -k 10s 120s "${compose[@]}" run --rm --no-deps app python -m app.cli migrate
 timeout -k 15s 180s "${compose[@]}" up -d --wait --wait-timeout 150
+candidate_started=1
 curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:$CANDIDATE_PORT/readyz" >"$record/readyz.json"
 # A switch may fail after partially changing traffic, so arm rollback first.
 switched=1
