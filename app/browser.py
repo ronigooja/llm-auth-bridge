@@ -853,6 +853,14 @@ def _run_login(
                                 "password_required",
                                 "The password page is still open; review the password or provider error in the browser, then continue",
                             ),
+                            "account_chooser": (
+                                "waiting_human",
+                                "Review the browser and continue after completing the login step",
+                            ),
+                            "consent": (
+                                "waiting_human",
+                                "Review the browser and continue after completing the login step",
+                            ),
                         }.get(
                             stage,
                             (
