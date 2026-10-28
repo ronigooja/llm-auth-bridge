@@ -21,7 +21,7 @@ if name=='awk':
 if name=='df': print('Filesystem 1024-blocks Used Available Capacity Mounted on\nx 1 1 '+('1' if os.environ.get('LOW_DISK') else '99999999')+' 1% /'); sys.exit(0)
 if name=='curl':
  if args[-1].startswith('https://api.github.com/'):
-  print(json.dumps(dict(status='completed',conclusion='success',head_sha='a'*40,path='.github/workflows/fast-gate.yml'))); sys.exit(0)
+  print(json.dumps(dict(status='completed',conclusion='failure' if fail=='gate' else 'success',head_sha='a'*40,path='.github/workflows/fast-gate.yml'))); sys.exit(0)
  if fail=='curl' and args[-1].endswith('/app.js'): sys.exit(22)
  if args[-1].startswith('http://bridge.example'): print('301 https://bridge.example/')
  else: print('<html><script src="/app.js"></script><link rel="stylesheet" href="/app.css"></html>')
@@ -59,6 +59,7 @@ def test_migrate_failure_resumes_before_switch(tmp_path):
  r,l=run(tmp_path,fail='migrate'); c=calls(l); assert r.returncode and c.index('resume')>c.index('snapshot') and 'switch' not in c
 def test_unhealthy_failure_resumes(tmp_path):
  r,l=run(tmp_path,fail='up'); assert r.returncode and 'resume' in calls(l) and 'switch' not in calls(l)
+ assert any(row[0]=='docker' and 'stop' in row for row in map(json.loads,l.read_text().splitlines()))
 def test_low_disk_before_snapshot(tmp_path):
  r,l=run(tmp_path,low=True); assert r.returncode and 'snapshot' not in calls(l)
 def test_existing_candidate_refused_without_stop(tmp_path):
@@ -68,3 +69,7 @@ def test_success_switches_then_probes_and_stops(tmp_path):
 def test_static_asset_failure_rolls_back(tmp_path):
  # A failed public asset request is represented by a failed curl after switch.
  env,log=setup(tmp_path); env['FAIL']='curl'; r=subprocess.run([str(SCRIPT)],env=env,text=True); c=calls(log); assert r.returncode and 'rollback' in c and 'resume' in c
+
+def test_failed_gate_prevents_pull(tmp_path):
+ r,l=run(tmp_path,fail='gate'); assert r.returncode and 'snapshot' not in calls(l)
+ assert not any(row[0]=='docker' and 'pull' in row for row in map(json.loads,l.read_text().splitlines()))

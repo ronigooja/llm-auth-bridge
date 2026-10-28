@@ -90,8 +90,8 @@ timeout -k 10s 120s "$SNAPSHOT_HOOK"
 chmod 644 "$RELEASE_BACKUP_DIR/bridge.sqlite3"
 timeout -k 10s 120s "${compose[@]}" run --rm --no-deps -v "$RELEASE_BACKUP_DIR:/import:ro" app python -m app.cli restore /import/bridge.sqlite3
 timeout -k 10s 120s "${compose[@]}" run --rm --no-deps app python -m app.cli migrate
+candidate_started=1 # up can fail after creating running containers.
 timeout -k 15s 180s "${compose[@]}" up -d --wait --wait-timeout 150
-candidate_started=1
 curl --fail --silent --show-error --max-time 10 "http://127.0.0.1:$CANDIDATE_PORT/readyz" >"$record/readyz.json"
 # A switch may fail after partially changing traffic, so arm rollback first.
 switched=1
