@@ -354,9 +354,6 @@ export function App() {
       document.removeEventListener("visibilitychange", visible);
     };
   }, [session]);
-  useEffect(() => {
-    if (session === "yes" && accountWindow.task) void refresh();
-  }, [session, accountWindow.task?.id, accountWindow.task?.state]);
   const close = () => setModal(null);
   const saved = async () => {
     await refresh();

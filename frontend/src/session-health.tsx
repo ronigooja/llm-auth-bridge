@@ -47,7 +47,7 @@ export function SessionHealth({ session, syncs = [], targets, openTask }: {
       {session && session.activity !== "idle" && <span className="badge running">{session.activity === "queued" ? "检查排队中" : "正在检查会话"}</span>}
       {session?.task_id != null && session.activity !== "idle" && <button className="health-task" onClick={() => openTask(session.task_id!)}>查看任务 #{session.task_id}</button>}
     </div>
-    <p className="muted">最近检查：<HealthTime value={session?.checked_at ?? null} /> · 最近成功：<HealthTime value={session?.last_success_at ?? null} /></p>
+    <p className="muted">最近检查：<span><HealthTime value={session?.checked_at ?? null} /></span> · 最近成功：<span><HealthTime value={session?.last_success_at ?? null} /></span></p>
     {session?.error_code && <p className="muted">检查错误：{session.error_code}</p>}
     {syncs.map((sync) => <div key={sync.target_id} className="target-health">
       <div className="health-row">
