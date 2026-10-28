@@ -21,8 +21,8 @@ if name=='docker':
  if args[:1]==['info']:
   print('/var/lib/docker' if '--format' in args and 'DockerRootDir' in args[-1] else 'amd64'); sys.exit(0)
  if args[:2]==['volume','inspect']: sys.exit(0 if os.environ.get('COLLISION') else 1)
- if args[:1]==['image']: print(SHA); sys.exit(0)
- if args[:1]==['inspect']: print('ghcr.io/x/y@'+DIGEST+' '+DIGEST+' healthy'); sys.exit(0)
+ if args[:1]==['image']: print('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'); sys.exit(0)
+ if args[:1]==['inspect']: print('ghcr.io/x/y@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb healthy'); sys.exit(0)
  if args[:1]==['compose']:
   text=' '.join(args)
   if fail and fail in text: sys.exit(1)
