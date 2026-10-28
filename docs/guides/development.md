@@ -21,44 +21,42 @@ See [AGENTS.md](../../AGENTS.md) for repository workflow, security, baseline, de
 
 ## CI entry points
 
-- [Checks](../../.github/workflows/checks.yml) runs frontend tests/build, bounded
-  Codex continuation preflight, full pytest, then app/worker multiarchitecture
-  builds when the corresponding source paths change. Documentation-only pushes
-  and pull requests are ignored. Frontend-only changes run the frontend checks;
-  backend changes run the browser preflight and full pytest; image builds run
-  only when application, frontend, deployment, or image/dependency files
-  change. It supports manual dispatch: `gh workflow run checks.yml --ref
-  <task-branch>`.
-- [Native OAuth validation](../../.github/workflows/validation.yml) runs the bridge
-  suite plus focused/full patched CPA Go tests, native compilation, and an
-  untouched upstream comparison. Push to `validation/**` or dispatch manually.
-  General Checks excludes those branches to avoid duplicate image builds.
-- [Deployment artifacts](../../.github/workflows/deployment.yml) runs partitioned
-  validation, selected headed acceptance and ARM64 image export. Its success is
-  not a complete pytest verdict and does not deploy a running service.
+- [Fast deployment gate](../../.github/workflows/fast-gate.yml) runs frontend
+  tests/build, non-browser pytest, a synthetic Camoufox preflight and amd64
+  app/worker startup checks in parallel. Every job must pass before publishing.
+  Pushes to main, validation and deployment branches validate without publishing.
+  Dispatch [deployment.yml](../../.github/workflows/deployment.yml) with
+  `publish=true` to validate and publish SHA-tagged GHCR images and digest records.
+- [Full pytest regression](../../.github/workflows/full-regression.yml) runs all
+  synthetic pytest nightly, manually or on validation branches. It is independent
+  of image publication. A release gate pass does not imply full regression passed.
+- [Checks](../../.github/workflows/checks.yml) retains path-based frontend,
+  browser preflight and multiarchitecture build checks. It does not run full pytest.
+- [Native OAuth validation](../../.github/workflows/validation.yml) retains native
+  CPA tests and upstream comparisons; bridge full pytest runs in Full pytest
+  regression. Upstream failures remain failures even if focused diagnostics pass.
 - [Account viewer regression](../../.github/workflows/novnc.yml) checks packaged
-  noVNC in Camoufox/Firefox, including synthetic Retina DPR 2 behavior.
+  noVNC behavior. Real accounts and physical client acceptance are separate.
 
-Workflows are the source of exact provisioning steps, deadlines and artifact
-names. Missing Camoufox, GOST or built frontend assets can skip corresponding
-acceptance cases; inspect skip reasons before claiming coverage. Install the
-pinned Camoufox browser with `uv run python -m camoufox fetch` on the runner
-when needed. Production Camoufox runs headed in the desktop worker; test-only
-headless fixtures may use Xvfb.
+When running release tests, the CI plugin bounds each test, including fixture
+setup and teardown, to 90 seconds. GNU timeout bounds non-browser pytest to five
+minutes, browser preflight to three minutes and full regression to 18 minutes,
+then kills the process group after a short grace period. Step/job limits reserve
+room to upload logs. Faulthandler emits diagnostics; it is not the timeout
+mechanism. If the full suite cannot finish writing JUnit, CI creates an explicit
+failed-process report. Interrupted or missing results never count as passed.
 
-Collect the source revision, run URL, job outcomes and relevant artifacts before
-their seven-day expiry. Inspect failed steps rather than reading successful logs.
-The native workflow's full upstream failures remain failures even if an isolated
-diagnostic passes; current conclusions are recorded in [the roadmap](../roadmap.md).
-The [late-interrupt diagnostic](../../.github/workflows/upstream-late-interrupt.yml)
-is restricted to `validation/upstream-late-interrupt`; it does not rerun full suites.
-For disposable Voice server verification, use the guarded
-[HTTP harness](../contracts/integrations/voice.md#disposable-synthetic-http-acceptance).
+The fast gate targets 10–15 minutes with warm caches; cold container builds can
+exceed that target and have a 20-minute job limit. uv/npm, Camoufox and pinned
+GOST caches reuse dependencies, while Docker layer caches retain system/browser
+installation layers. Browser OS packages are provisioned only for jobs needing
+them. GOST is checksum-verified from its pinned GitHub release into a temporary
+`/tmp/bridge-gost.*` directory, then installed under
+`$HOME/environment/gost/3.3.1-linux-amd64`; temporary archives are removed.
 
-## Release gates and regression evidence
-
-Deployment uses two independent conclusions. The fast gate is the blocking release check: frontend tests and build, non-browser pytest, a bounded synthetic Camoufox preflight, and app/worker image startup with non-root, seccomp and `/readyz` checks must all pass before an image is published. Each step has a short timeout and uploads its log and JUnit output on failure; a browser startup failure stops the release.
-
-The complete pytest suite runs separately from [validation.yml](../../.github/workflows/validation.yml), on a nightly, manual, or validation branch dispatch. It has a per-test faulthandler deadline and a process-group hard timeout. A timeout is a failed run with the pytest log and JUnit report attached; an interrupted or missing run is never reported as passed. CI reuses the committed uv, npm and Camoufox caches and installs system browser packages only in the browser job.
-
-Record each release's commit, fast-gate result, image digests, complete pytest state (`passed`, `failed`, `timed out`, or `not run`), online health result, and real-account status. Synthetic checks do not establish login, long-term renewal, or Voice audio acceptance.
+When assessing coverage, inspect skipped tests and job conclusions. Synthetic
+checks use temporary databases and loopback fixtures, with tracing, HAR and video
+disabled. They do not establish real login, long-term renewal or Voice audio.
+Retain the source revision, run URL and conclusions with release records; gate
+logs expire after seven days, full regression logs and image digest records after
+30 days. No image tarball is uploaded as an Actions artifact.

@@ -10,7 +10,8 @@ for image in "$APP_IMAGE" "$WORKER_IMAGE"; do
   [[ $image =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]] || { echo 'Images must use GHCR SHA256 digests' >&2; exit 2; }
 done
 [[ $RELEASE_COMMIT =~ ^[a-f0-9]{40}$ && $FAST_GATE_SHA = "$RELEASE_COMMIT" && $RELEASE_PROJECT =~ ^bridge-[a-z0-9-]+$ ]] || exit 2
-[[ $FAST_GATE_URL =~ ^https://[^[:space:]]+$ ]] || exit 2
+[[ $FAST_GATE_URL =~ ^https://github.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/actions/runs/([0-9]+)$ ]] || exit 2
+run_api="https://api.github.com/repos/${BASH_REMATCH[1]}/actions/runs/${BASH_REMATCH[2]}"
 [[ $PUBLIC_URL =~ ^https://[^/]+$ ]] || { echo 'PUBLIC_URL must be an HTTPS origin' >&2; exit 2; }
 for name in SNAPSHOT_HOOK SWITCH_HOOK ROLLBACK_HOOK RESUME_OLD_HOOK STOP_OLD_HOOK PROBE_HOOK CERT_CHECK_HOOK; do
   [[ ${!name} = /* && -x ${!name} ]] || { echo "$name must be an absolute executable path" >&2; exit 2; }
@@ -50,6 +51,17 @@ finish() {
 }
 trap finish EXIT
 exec >"$record/deployment.log" 2>&1
+# Verify the hosted gate at the supplied revision before trusting its release record.
+api_headers=(-H 'Accept: application/vnd.github+json')
+if [[ -n ${GH_TOKEN:-} ]]; then api_headers+=(-H "Authorization: Bearer $GH_TOKEN"); fi
+curl --fail --silent --show-error --max-time 30 "${api_headers[@]}" "$run_api" >"$record/gate.json"
+python3 - "$record/gate.json" "$RELEASE_COMMIT" <<'PY_GATE'
+import json, sys
+run = json.load(open(sys.argv[1]))
+assert run['status'] == 'completed' and run['conclusion'] == 'success', 'Gate did not pass'
+assert run['head_sha'] == sys.argv[2], 'Gate revision mismatch'
+assert run['path'] in {'.github/workflows/fast-gate.yml', '.github/workflows/deployment.yml', '.github/workflows/amd64-images.yml'}, 'Unexpected gate workflow'
+PY_GATE
 printf 'commit=%s\napp=%s\nworker=%s\nfast_gate=passed\nfast_gate_run=%s\nfull_pytest=not_run\nreal_account=unverified\nrenewal=unverified\nvoice_call=unverified\n' "$RELEASE_COMMIT" "$APP_IMAGE" "$WORKER_IMAGE" "$FAST_GATE_URL" >"$record/acceptance.txt"
 docker info >/dev/null
 docker compose version
@@ -58,7 +70,7 @@ docker compose version
 docker_root=$(docker info --format '{{.DockerRootDir}}')
 available_kb=$(df -Pk "$state_dir" | awk 'NR==2 {print $4}')
 docker_available_kb=$(df -Pk "$docker_root" | awk 'NR==2 {print $4}')
-(( available_kb >= ${MIN_FREE_KB:-10485760} && docker_available_kb >= ${MIN_FREE_KB:-10485760} ))
+(( available_kb >= ${MIN_FREE_KB:-10485760} && docker_available_kb >= ${MIN_FREE_KB:-10485760} )) || { echo "Insufficient free disk" >&2; exit 1; }
 awk -v minimum="${MIN_MEMORY_KB:-4194304}" '/MemTotal:/ {exit !($2 >= minimum)}' /proc/meminfo
 if ss -H -ltn "sport = :$CANDIDATE_PORT" | grep -q .; then echo "candidate port is already in use" >&2; exit 2; fi
 timeout -k 10s 60s "$CERT_CHECK_HOOK"

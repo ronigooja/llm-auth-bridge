@@ -187,10 +187,20 @@ jobs:
               image: llm-auth-bridge-worker:${GITHUB_SHA}
           EOF
           export COMPOSE_FILE="$PWD/docker-compose.yml:/tmp/fast-gate-compose.yml"
+          cleanup() {
+            result=$?
+            docker compose logs --no-color --tail 100 > fast-gate-logs/containers.log 2>&1 || true
+            docker compose ps --format json > fast-gate-logs/compose.json || true
+            docker compose down -v >> fast-gate-logs/containers.log 2>&1 || true
+            rm -f /tmp/fast-gate-master-key /tmp/fast-gate-compose.yml .secrets/master_key
+            exit "$result"
+          }
+          trap cleanup EXIT
+          exec > fast-gate-logs/startup.log 2>&1
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           docker compose run --rm --no-deps --entrypoint sh app -c \
-            'printf "%s\n" synthetic-password > /tmp/password; python -m app.cli init --password-file /tmp/password' 
+            'printf "%s\n" synthetic-password > /tmp/password; python -m app.cli init --password-file /tmp/password'
           docker compose up -d --no-build --wait --wait-timeout 120
-          trap 'docker compose down -v' EXIT
           timeout --signal=TERM --kill-after=15s 3m bash -c \
             'until curl -fsS http://127.0.0.1:8000/readyz; do sleep 2; done'
           docker run --rm --security-opt seccomp=deploy/playwright-seccomp.json \

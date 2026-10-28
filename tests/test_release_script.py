@@ -15,9 +15,17 @@ if name=='timeout': os.execvp(args[3],args[3:])
 if name=='flock': sys.exit(0)
 if name=='ss': sys.exit(0)
 if name=='awk':
- print('MemTotal:       8000000 kB' if '/proc/meminfo' in args else '99999999'); sys.exit(0)
+
+ if '/proc/meminfo' not in args: print('1' if os.environ.get('LOW_DISK') else '99999999')
+ sys.exit(0)
 if name=='df': print('Filesystem 1024-blocks Used Available Capacity Mounted on\nx 1 1 '+('1' if os.environ.get('LOW_DISK') else '99999999')+' 1% /'); sys.exit(0)
-if name=='curl': print('<html><script src="/app.js"></script><link rel="stylesheet" href="/app.css"></html>'); sys.exit(0)
+if name=='curl':
+ if args[-1].startswith('https://api.github.com/'):
+  print(json.dumps(dict(status='completed',conclusion='success',head_sha='a'*40,path='.github/workflows/fast-gate.yml'))); sys.exit(0)
+ if fail=='curl' and args[-1].endswith('/app.js'): sys.exit(22)
+ if args[-1].startswith('http://bridge.example'): print('301 https://bridge.example/')
+ else: print('<html><script src="/app.js"></script><link rel="stylesheet" href="/app.css"></html>')
+ sys.exit(0)
 if name=='docker':
  if args[:1]==['info']:
   print('/var/lib/docker' if '--format' in args and 'DockerRootDir' in args[-1] else 'amd64'); sys.exit(0)
@@ -40,7 +48,7 @@ def setup(tmp, fail='', low=False, collision=False):
  b=tmp/'bin'; b.mkdir(); log=tmp/'calls'; (tmp/'key').write_bytes(b'k')
  for n in ('docker','curl','awk','df','ss','flock','timeout','snapshot','switch','rollback','resume','stop','probe','cert'):
   p=b/n; p.write_text(DISPATCH); p.chmod(0o755)
- env=os.environ.copy(); env.update(PATH=str(b)+':'+env['PATH'],FAKE_LOG=str(log),FAIL=fail,LOW_DISK='1' if low else '',COLLISION='1' if collision else '',APP_IMAGE=f'ghcr.io/x/y@{DIGEST}',WORKER_IMAGE=f'ghcr.io/x/y@{DIGEST}',RELEASE_COMMIT=SHA,FAST_GATE_SHA=SHA,FAST_GATE_URL='https://ci/run',PUBLIC_URL='https://bridge.example',MASTER_KEY_FILE=str(tmp/'key'),RELEASE_PROJECT='bridge-test',RELEASE_STATE_DIR=str(tmp/'state'),SNAPSHOT_HOOK=str(b/'snapshot'),SWITCH_HOOK=str(b/'switch'),ROLLBACK_HOOK=str(b/'rollback'),RESUME_OLD_HOOK=str(b/'resume'),STOP_OLD_HOOK=str(b/'stop'),PROBE_HOOK=str(b/'probe'),CERT_CHECK_HOOK=str(b/'cert'))
+ env=os.environ.copy(); env.update(PATH=str(b)+':'+env['PATH'],FAKE_LOG=str(log),FAIL=fail,LOW_DISK='1' if low else '',COLLISION='1' if collision else '',APP_IMAGE=f'ghcr.io/x/y@{DIGEST}',WORKER_IMAGE=f'ghcr.io/x/y@{DIGEST}',RELEASE_COMMIT=SHA,FAST_GATE_SHA=SHA,FAST_GATE_URL='https://github.com/example/bridge/actions/runs/123',PUBLIC_URL='https://bridge.example',MASTER_KEY_FILE=str(tmp/'key'),RELEASE_PROJECT='bridge-test',RELEASE_STATE_DIR=str(tmp/'state'),SNAPSHOT_HOOK=str(b/'snapshot'),SWITCH_HOOK=str(b/'switch'),ROLLBACK_HOOK=str(b/'rollback'),RESUME_OLD_HOOK=str(b/'resume'),STOP_OLD_HOOK=str(b/'stop'),PROBE_HOOK=str(b/'probe'),CERT_CHECK_HOOK=str(b/'cert'))
  return env,log
 def run(tmp,**kw):
  env,log=setup(tmp,**kw); return subprocess.run([str(SCRIPT)],env=env,text=True,capture_output=True),log
@@ -56,7 +64,7 @@ def test_low_disk_before_snapshot(tmp_path):
 def test_existing_candidate_refused_without_stop(tmp_path):
  r,l=run(tmp_path,collision=True); assert r.returncode and 'stop' not in calls(l)
 def test_success_switches_then_probes_and_stops(tmp_path):
- r,l=run(tmp_path); c=calls(l); assert r.returncode, r.stderr; assert c.index('switch')<c.index('probe')<c.index('stop')
+ r,l=run(tmp_path); c=calls(l); assert r.returncode == 0, r.stderr; assert c.index('switch')<c.index('probe')<c.index('stop')
 def test_static_asset_failure_rolls_back(tmp_path):
  # A failed public asset request is represented by a failed curl after switch.
  env,log=setup(tmp_path); env['FAIL']='curl'; r=subprocess.run([str(SCRIPT)],env=env,text=True); c=calls(log); assert r.returncode and 'rollback' in c and 'resume' in c
