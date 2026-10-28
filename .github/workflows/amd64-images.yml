@@ -64,9 +64,7 @@ jobs:
           docker save "llm-auth-bridge-app:${GITHUB_SHA}" "llm-auth-bridge-worker:${GITHUB_SHA}" \
             | gzip -9 > deployment-images/images.tar.gz
           compressed_bytes=$(stat -c %s deployment-images/images.tar.gz)
-          uncompressed_bytes=$(gzip -dc deployment-images/images.tar.gz | wc -c)
-          printf 'compressed_archive_bytes=%s\nuncompressed_archive_bytes=%s\n' \
-            "$compressed_bytes" "$uncompressed_bytes" > deployment-images/image-sizes.txt
+          printf 'compressed_archive_bytes=%s\n' "$compressed_bytes" > deployment-images/image-sizes.txt
           {
             echo '### Deployment image sizes'
             echo 'Image identity records include virtual size in bytes (shared layers count in both images).'
