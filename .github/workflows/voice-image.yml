@@ -1,11 +1,8 @@
 name: ChatGPT Web Voice bridge image
 
 on:
+  # Publishing is deliberate and requires an operator to dispatch this workflow.
   workflow_dispatch:
-  push:
-    paths:
-      - "deploy/voice/source.json"
-      - ".github/workflows/voice-image.yml"
 
 permissions:
   contents: read
