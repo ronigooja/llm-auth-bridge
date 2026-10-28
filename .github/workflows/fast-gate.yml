@@ -178,7 +178,7 @@ jobs:
           docker run --rm --security-opt no-new-privileges:true \
             --security-opt seccomp=deploy/playwright-seccomp.json \
             --entrypoint sh llm-auth-bridge-worker:${GITHUB_SHA} -c 'test "$(id -u)" -eq 10001'
-          python -c 'from pathlib import Path; Path("/tmp/fast-gate-master-key").write_bytes(b"x" * 32)'
+          python3 -c 'from pathlib import Path; Path("/tmp/fast-gate-master-key").write_bytes(b"x" * 32)'
           mkdir -p .secrets
           cp /tmp/fast-gate-master-key .secrets/master_key
           cat > /tmp/fast-gate-compose.yml <<EOF
