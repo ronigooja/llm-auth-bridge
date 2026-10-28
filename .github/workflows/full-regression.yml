@@ -1,0 +1,75 @@
+name: Full pytest regression
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 2 * * *'
+  push:
+    branches: ["validation/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.22"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Restore Camoufox binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/camoufox
+          key: ${{ runner.os }}-${{ runner.arch }}-camoufox-${{ hashFiles('uv.lock') }}
+      - name: Provision test dependencies
+        timeout-minutes: 8
+        run: |
+          set -Eeuo pipefail
+          mkdir -p regression-logs
+          exec > >(tee regression-logs/provision.log) 2>&1
+          uv sync --frozen --extra test --extra browser
+          uv run python -m camoufox fetch
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth novnc x11vnc websockify tigervnc-standalone-server openbox x11-utils
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          npm ci --ignore-scripts --prefix frontend
+          timeout --signal=TERM --kill-after=15s 3m npm run build --prefix frontend
+          curl -fsSL https://github.com/go-gost/gost/releases/download/v3.3.1/gost_3.3.1_linux_amd64.tar.gz -o /tmp/gost.tar.gz
+          echo 'e0e3a2c9116e2f025e962bba340749f80696bda318613d45e5ae96dd0bcae37c  /tmp/gost.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/gost.tar.gz -C /tmp gost
+      - name: Run full pytest with hard timeout
+        timeout-minutes: 20
+        env:
+          BRIDGE_TEST_GOST: /tmp/gost
+        run: |
+          set -Eeuo pipefail
+          set +e
+          timeout --signal=TERM --kill-after=20s 18m xvfb-run -a -s '-screen 0 1920x1080x24' \
+            uv run pytest -p tools.pytest_deadline -v -ra -o faulthandler_timeout=120 \
+            --junitxml=regression-logs/pytest.xml 2>&1 | tee regression-logs/pytest.log
+          result=${PIPESTATUS[0]}
+          printf '%s\n' "$result" > regression-logs/pytest.exit
+          if [ "$result" -eq 124 ] || [ "$result" -eq 137 ]; then
+            echo 'pytest exceeded the hard timeout' >> regression-logs/pytest.log
+          fi
+          exit "$result"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-regression-${{ github.sha }}
+          path: regression-logs/
+          retention-days: 30

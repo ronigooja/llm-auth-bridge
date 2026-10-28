@@ -51,15 +51,6 @@ jobs:
           trap 'printf "%s\n" "$?" > validation-logs/frontend.exit' EXIT
           npm test --prefix frontend
           npm run build --prefix frontend
-      - name: Full synthetic pytest suite
-        if: ${{ !cancelled() && steps.provision.outcome != 'failure' }}
-        env:
-          BRIDGE_TEST_GOST: /tmp/gost
-        run: |
-          set -euxo pipefail
-          exec > >(tee validation-logs/pytest.log) 2>&1
-          trap 'printf "%s\n" "$?" > validation-logs/pytest.exit' EXIT
-          uv run pytest -ra --junitxml=validation-logs/pytest.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:

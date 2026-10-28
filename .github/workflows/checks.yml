@@ -129,18 +129,6 @@ jobs:
           name: codex-preflight-${{ github.sha }}
           path: check-logs/
           retention-days: 7
-      - name: Full pytest acceptance after Codex preflight
-        timeout-minutes: 8
-        if: ${{ needs.changes.outputs.backend == 'true' }}
-        env:
-          BRIDGE_TEST_GOST: /tmp/gost
-        run: |
-          set -euo pipefail
-          set +e
-          timeout --kill-after=10s 7m bash -o pipefail -c 'xvfb-run -a -s "-screen 0 1920x1080x24" uv run pytest -v -ra -o faulthandler_timeout=120 --junitxml=check-logs/pytest.xml 2>&1 | tee check-logs/pytest.log'
-          result=$?
-          printf '%s\n' "$result" > check-logs/pytest.exit
-          exit "$result"
       - uses: actions/upload-artifact@v4
         if: ${{ always() && needs.changes.outputs.backend == 'true' }}
         with:

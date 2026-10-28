@@ -1,83 +1,17 @@
-name: Build amd64 deployment images
-
+name: Publish verified amd64 images
 on:
   workflow_dispatch:
-
+    inputs:
+      publish:
+        description: Publish GHCR images after every fast gate passes
+        type: boolean
+        default: false
 permissions:
   contents: read
-
+  packages: write
 jobs:
-  images:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: Build amd64 app image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: app
-          platforms: linux/amd64
-          load: true
-          tags: llm-auth-bridge-app:${{ github.sha }}
-          labels: org.opencontainers.image.revision=${{ github.sha }}
-      - name: Build amd64 worker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: worker
-          platforms: linux/amd64
-          load: true
-          tags: llm-auth-bridge-worker:${{ github.sha }}
-          labels: org.opencontainers.image.revision=${{ github.sha }}
-      - name: Verify nonroot browser startup in production image
-        run: |
-          set -euo pipefail
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          docker run --rm --security-opt seccomp=deploy/playwright-seccomp.json \
-            --entrypoint sh "llm-auth-bridge-worker:${GITHUB_SHA}" -c '
-              set -e
-              test "$(id -u)" -eq 10001
-              Xtigervnc :99 -geometry 1920x1080 -depth 24 -localhost -SecurityTypes None -nolisten tcp > /tmp/display.log 2>&1 &
-              trap "kill $! 2>/dev/null || true" EXIT
-              for n in $(seq 1 100); do [ -S /tmp/.X11-unix/X99 ] && break; sleep 0.1; done
-              python -c '\''from camoufox.sync_api import Camoufox
-          with Camoufox(headless=False) as browser:
-              page = browser.new_page()
-              page.set_content("<p>Synthetic browser startup</p>")
-              assert page.locator("p").inner_text() == "Synthetic browser startup"
-              print("Nonroot Camoufox startup passed")'\''
-            ' > /tmp/browser-startup.log 2>&1 || { tail -n 80 /tmp/browser-startup.log; exit 1; }
-          rm /tmp/browser-startup.log
-      - name: Export images
-        run: |
-          set -Eeuo pipefail
-          mkdir -p deployment-images
-          docker image inspect "llm-auth-bridge-app:${GITHUB_SHA}" "llm-auth-bridge-worker:${GITHUB_SHA}" \
-            --format '{{.Id}} {{.Architecture}} {{index .Config.Labels "org.opencontainers.image.revision"}} {{.Size}}' \
-            > deployment-images/image-identities.txt
-          test "$(wc -l < deployment-images/image-identities.txt)" -eq 2
-          test "$(awk '$2 == "amd64" && $3 == ENVIRON["GITHUB_SHA"] {count++} END {print count+0}' deployment-images/image-identities.txt)" -eq 2
-          # Both tags share their base layers in one archive. Maximum gzip compression
-          # keeps the transfer file small while the server loads its uncompressed layers.
-          docker save "llm-auth-bridge-app:${GITHUB_SHA}" "llm-auth-bridge-worker:${GITHUB_SHA}" \
-            | gzip -9 > deployment-images/images.tar.gz
-          compressed_bytes=$(stat -c %s deployment-images/images.tar.gz)
-          printf 'compressed_archive_bytes=%s\n' "$compressed_bytes" > deployment-images/image-sizes.txt
-          {
-            echo '### Deployment image sizes'
-            echo 'Image identity records include virtual size in bytes (shared layers count in both images).'
-            cat deployment-images/image-identities.txt
-            cat deployment-images/image-sizes.txt
-          } >> "$GITHUB_STEP_SUMMARY"
-          # Apply this budget when exporting for the 4.9 GB free-space target:
-          # leave room for extraction, Docker metadata, and existing application data.
-                    sha256sum deployment-images/images.tar.gz > deployment-images/images.tar.gz.sha256
-          git rev-parse HEAD > deployment-images/source-revision.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: deployment-amd64-${{ github.sha }}
-          path: deployment-images/
-          compression-level: 0
-          retention-days: 2
+  release:
+    uses: ./.github/workflows/fast-gate.yml
+    with:
+      publish: ${{ inputs.publish }}
+    secrets: inherit
