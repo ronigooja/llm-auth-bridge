@@ -6,7 +6,7 @@ import os
 import threading
 
 import pytest
-from playwright.sync_api import sync_playwright
+from camoufox.sync_api import Camoufox
 
 from app.browser_identity import configure_page_identity, context_options, generate_profile
 
@@ -42,8 +42,7 @@ def identity_origin():
 PROBE = """async () => ({
     ua: navigator.userAgent, platform: navigator.platform,
     language: navigator.language, webdriver: navigator.webdriver,
-    ch: await navigator.userAgentData.getHighEntropyValues([
-        'platformVersion', 'architecture', 'bitness', 'fullVersionList']),
+    ch: typeof navigator.userAgentData,
     worker: await new Promise(resolve => {
         const url = URL.createObjectURL(new Blob([
             "postMessage({platform: navigator.platform, webdriver: navigator.webdriver})"
@@ -62,12 +61,13 @@ def test_headed_identity_first_request_headers_js_iframe_and_restart(tmp_path, p
     profile = generate_profile()
     profile['browser']['platform'] = platform
     snapshots = []
-    with identity_origin() as origin, sync_playwright() as playwright:
+    with identity_origin() as origin:
         for _ in range(2):
-            context = playwright.chromium.launch_persistent_context(
-                str(tmp_path / platform), headless=False, chromium_sandbox=True,
-                service_workers='block',
+            runtime = Camoufox(
+                user_data_dir=str(tmp_path / platform), persistent_context=True,
+                headless=False, os=platform, service_workers='block',
                 **context_options(profile, native_window=True))
+            context = runtime.__enter__()
             try:
                 page = context.new_page()
                 configure_page_identity(context, page, profile)
@@ -77,28 +77,22 @@ def test_headed_identity_first_request_headers_js_iframe_and_restart(tmp_path, p
                 assert 'Linux' not in observed['ua'] and 'HeadlessChrome' not in observed['ua']
                 assert observed['platform'] == nav
                 assert observed['webdriver'] is False
-                assert observed['worker'] and observed['worker']['platform'] == 'Linux x86_64'
+                assert observed['worker'] and observed['worker']['platform'] == nav
                 assert observed['language'] == 'en-US'
-                assert observed['ch']['platform'] == expected
-                assert observed['ch']['platformVersion'] == ('15.0.0' if platform == 'macos' else '10.0.0')
-                assert observed['ch']['architecture'] == 'x86'
-                assert observed['ch']['bitness'] == '64'
-                major = context.browser.version.split('.')[0]
-                assert f'Chrome/{major}.0.0.0' in observed['ua']
+                assert observed['ch'] == 'undefined'
+                assert 'Firefox/' in observed['ua']
                 assert headers['user-agent'] == observed['ua']
-                assert headers['sec-ch-ua-platform'] == json.dumps(expected)
-                assert headers['sec-ch-ua-mobile'] == '?0'
+                assert not any(name.startswith('sec-ch-ua') for name in headers)
                 echoed = page.evaluate("fetch('/headers').then(r => r.json())")
                 echoed = {k.lower(): v for k, v in echoed.items()}
                 assert echoed['user-agent'] == observed['ua']
-                assert echoed['sec-ch-ua-platform'] == json.dumps(expected)
-                assert context.browser.version in echoed['sec-ch-ua-full-version-list']
+                assert not any(name.startswith('sec-ch-ua') for name in echoed)
                 page.frame_locator('iframe').locator('body').wait_for()
                 frame = page.frames[1].evaluate(PROBE)
                 assert frame == observed
-                snapshots.append(observed)
+                snapshots.append(page.evaluate("({width: outerWidth, height: outerHeight, cores: navigator.hardwareConcurrency})"))
             finally:
-                context.close()
+                runtime.__exit__(None, None, None)
     assert snapshots[0] == snapshots[1]
 
 
@@ -106,20 +100,18 @@ def test_headed_identity_first_request_headers_js_iframe_and_restart(tmp_path, p
 def test_browserleaks_synthetic_windows_profile(tmp_path):
     """Only public CI egress is exposed; never record the page, IP or cookies."""
     profile = generate_profile()
-    with sync_playwright() as playwright:
-        context = playwright.chromium.launch_persistent_context(
-            str(tmp_path / 'synthetic-browserleaks'), headless=False, chromium_sandbox=True,
-            service_workers='block',
-            **context_options(profile, native_window=True))
-        try:
-            page = context.new_page()
-            configure_page_identity(context, page, profile)
-            response = page.goto('https://browserleaks.com/ip', wait_until='domcontentloaded', timeout=60000)
-            assert response.status == 200
-            assert 'BrowserLeaks' in page.title()
-            identity = page.evaluate(PROBE)
-            assert identity['platform'] == 'Win32'
-            assert identity['ch']['platform'] == 'Windows'
-            assert 'Linux' not in identity['ua']
-        finally:
-            context.close()
+    with Camoufox(
+        user_data_dir=str(tmp_path / 'synthetic-browserleaks'), persistent_context=True,
+        headless=False, os='windows', service_workers='block',
+        **context_options(profile, native_window=True),
+    ) as context:
+
+        page = context.new_page()
+        configure_page_identity(context, page, profile)
+        response = page.goto('https://browserleaks.com/ip', wait_until='domcontentloaded', timeout=60000)
+        assert response.status == 200
+        assert 'BrowserLeaks' in page.title()
+        identity = page.evaluate(PROBE)
+        assert identity['platform'] == 'Win32'
+        assert identity['ch'] == 'undefined'
+        assert 'Linux' not in identity['ua']

@@ -358,8 +358,8 @@ def test_native_browser_uses_saved_account_context_and_fences_callback(monkeypat
         def save_state(self, state): assert state is saved; events.append("saved")
 
     @contextmanager
-    def fake_playwright():
-        yield SimpleNamespace(chromium=Chromium())
+    def fake_camoufox(**kwargs):
+        yield Chromium().launch_persistent_context(**kwargs)
 
     @contextmanager
     def fake_route(account):
@@ -377,7 +377,7 @@ def test_native_browser_uses_saved_account_context_and_fences_callback(monkeypat
     monkeypatch.setattr(browser_module, "configure_page_identity", lambda *a: None)
     monkeypatch.setattr(browser_module, "device_directory", fake_device)
     monkeypatch.setattr(native_module, "NativeOAuth", Native)
-    monkeypatch.setattr(playwright.sync_api, "sync_playwright", fake_playwright)
+    monkeypatch.setattr("camoufox.sync_api.Camoufox", fake_camoufox)
     monkeypatch.setattr(browser_module, "account_route", fake_route)
     monkeypatch.setattr(browser_module, "pkce_pair", lambda: pytest.fail("native PKCE belongs to CLIProxyAPI"))
     assert run_login({**ACCOUNT, "_browser_profile": profile}, TARGET, Guard(), saved) == result

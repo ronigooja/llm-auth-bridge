@@ -168,8 +168,8 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path,
             events.append("device_snapshot")
 
     @contextmanager
-    def fake_playwright():
-        yield SimpleNamespace(chromium=Chromium())
+    def fake_camoufox(**kwargs):
+        yield Chromium().launch_persistent_context(**kwargs)
 
     @contextmanager
     def fake_route(account):
@@ -218,7 +218,7 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path,
             resumed = True
             return None
 
-    monkeypatch.setattr(playwright.sync_api, "sync_playwright", fake_playwright)
+    monkeypatch.setattr("camoufox.sync_api.Camoufox", fake_camoufox)
     monkeypatch.setattr(module, "account_route", fake_route)
     monkeypatch.setattr(module, "device_directory", fake_device)
     def timezone(session, *, checkpoint=None):
@@ -286,8 +286,10 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path,
     assert events.index("identity_configured") < events.index("window_fitted")
     assert "identity_seed" not in options
     assert events.index(next(e for e in events if isinstance(e, tuple) and e[0] == "launch")) < events.index("navigation")
-    assert migrations == ([] if restored is True else [{"cookies": [], "origins": []}])
-    assert ("--no-proxy-server" in launch["args"]) == (route_type == "direct")
+    assert migrations == [], "Legacy Chromium storage must not enter a Firefox device"
+    assert launch["proxy"] == (None if route_type == "direct" else {"server": "http://127.0.0.1:1234"})
+    assert launch["persistent_context"] is True
+    assert launch["os"] == profile["browser"]["platform"]
     if route_type == "proxy":
         assert events.index("timezone_lookup") < events.index("navigation")
         assert ("timezone", "Europe/Paris") in events
@@ -295,8 +297,8 @@ def test_manual_resume_reuses_browser_and_delegates_state(monkeypatch, tmp_path,
     else:
         assert "timezone_lookup" not in events
         assert options["timezone_id"] == "UTC"
-    assert launch["chromium_sandbox"] is True
-    assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in launch["args"]
+    assert "chromium_sandbox" not in launch
+    assert launch["args"] == module.FIREFOX_ARGS
 
 
 def test_cancellation_is_not_converted_to_login_error():

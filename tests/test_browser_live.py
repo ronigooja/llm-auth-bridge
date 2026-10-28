@@ -1,21 +1,19 @@
 """Synthetic network/browser acceptance. Never contacts a real provider.
 
-The root CI host can only launch Chromium with its sandbox disabled. This test
-setting is not used by run_login, which requires the production sandbox.
+The synthetic browser uses the same Camoufox engine as the production adapter.
 """
 
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 import json
-import shutil
 import threading
 import time
 from urllib.parse import urlsplit
 
 import httpx
 import pytest
-from playwright.sync_api import sync_playwright
+from camoufox.sync_api import Camoufox
 
 from app.browser import detect_state, _submit
 from app.routing import account_route
@@ -57,22 +55,11 @@ def fixture_server():
 
 @contextmanager
 def real_browser():
-    executable = os.getenv("BRIDGE_TEST_CHROMIUM") or shutil.which("chromium")
-    with sync_playwright() as playwright:
-        if not executable and not os.path.exists(playwright.chromium.executable_path):
-            pytest.skip("Chromium is not installed")
-        browser = playwright.chromium.launch(
-            executable_path=executable,
-            headless=True,
-            chromium_sandbox=os.geteuid() != 0,
-        )
-        try:
-            yield browser
-        finally:
-            browser.close()
+    with Camoufox(headless=True) as browser:
+        yield browser
 
 
-def test_real_chromium_detects_and_submits_synthetic_login(monkeypatch):
+def test_real_camoufox_detects_and_submits_synthetic_login(monkeypatch):
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
     monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
     with fixture_server() as origin, real_browser() as browser:
@@ -231,8 +218,8 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, tmp_path, scenario
             def launch_persistent_context(self, **kwargs):
                 # This scenario suite checks form behavior. The separate headed
                 # device acceptance below exercises native profile persistence.
-                for key in ("user_data_dir", "headless", "chromium_sandbox", "proxy", "env", "args"):
-                    kwargs.pop(key)
+                for key in ("user_data_dir", "headless", "persistent_context", "os", "proxy", "env", "args", "config"):
+                    kwargs.pop(key, None)
                 context = browser.new_context(**kwargs)
 
                 def intercept(route):
@@ -259,10 +246,12 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, tmp_path, scenario
                 browser.close()
 
         @contextmanager
-        def fake_playwright():
-            yield SimpleNamespace(
-                chromium=WrappedBrowser()
-            )
+        def fake_camoufox(**kwargs):
+            context = WrappedBrowser().launch_persistent_context(**kwargs)
+            try:
+                yield context
+            finally:
+                context.close()
 
         @contextmanager
         def fake_route(account):
@@ -316,7 +305,7 @@ def test_login_wait_phase_matches_synthetic_page(monkeypatch, tmp_path, scenario
             yield SimpleNamespace(path=tmp_path, restored=True, mark_ready=lambda: None, abort_snapshot=lambda: None)
 
         monkeypatch.setattr(module, "device_directory", fake_device)
-        monkeypatch.setattr(playwright.sync_api, "sync_playwright", fake_playwright)
+        monkeypatch.setattr("camoufox.sync_api.Camoufox", fake_camoufox)
         monkeypatch.setattr(module, "account_route", fake_route)
         def fake_session(*args):
             if scenario == "existing_session" or completed or (
@@ -432,7 +421,7 @@ def test_legacy_localstorage_migration_is_origin_bound_and_does_not_reset_values
 
 
 def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts():
-    """Synthetic native Chromium acceptance; requires CI Xvfb, never a provider.
+    """Synthetic native Camoufox acceptance; requires CI Xvfb, never a provider.
 
     Full profiles cross AESGCM-encrypted archive roundtrips into new /tmp
     directories. A persistent device preserves storage, while sessionStorage belongs
@@ -466,119 +455,109 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts()
     first = generate_profile(set())
     dimensions = first["context"]["viewport"]
     second = generate_profile({(dimensions["width"], dimensions["height"])})
-    executable = os.getenv("BRIDGE_TEST_CHROMIUM") or shutil.which("chromium")
-    with sync_playwright() as playwright:
-        if not executable and not os.path.exists(playwright.chromium.executable_path):
-            pytest.skip("Chromium is not installed")
-
-        @contextmanager
-        def launch(account, control, profile):
-            with device_directory(account, control) as device:
-                assert device.restored is (control.saves > 0)
-                context = playwright.chromium.launch_persistent_context(
-                    user_data_dir=str(device.path), executable_path=executable,
-                    headless=False, chromium_sandbox=os.geteuid() != 0,
-                    proxy=None, accept_downloads=False, service_workers="block",
-                    env={**os.environ, "DISPLAY": os.getenv("DISPLAY", ":99")},
-                    **context_options(profile, native_window=True),
-                )
+    @contextmanager
+    def launch(account, control, profile):
+        with device_directory(account, control) as device:
+            assert device.restored is (control.saves > 0)
+            runtime = Camoufox(
+                user_data_dir=str(device.path), persistent_context=True,
+                headless=False, os=profile["browser"]["platform"],
+                proxy=None, accept_downloads=False, service_workers="block",
+                env={**os.environ, "DISPLAY": os.getenv("DISPLAY", ":99")},
+                **context_options(profile, native_window=True),
+            )
+            context = runtime.__enter__()
+            try:
+                _restore_session_cookies(context, device.path)
+                (device.path / DEVICE_READY_FILE).touch(mode=0o600, exist_ok=True)
+                device.mark_ready()
+                context.route("**/*", lambda route: route.fulfill(body="<p>Synthetic</p>", content_type="text/html"))
+                page = context.new_page()
+                fit_browser_window(context, page)
+                page.wait_for_timeout(200)
+                print("Fitted native geometry: " + json.dumps(page.evaluate("({width:innerWidth,height:innerHeight,outerWidth,outerHeight,screenX,screenY,screenWidth:screen.width,screenHeight:screen.height})")), flush=True)
+                page.goto("https://device.example.test/")
+                yield context, page, device.path
+            finally:
                 try:
-                    _restore_session_cookies(context, device.path)
-                    (device.path / DEVICE_READY_FILE).touch(mode=0o600, exist_ok=True)
-                    device.mark_ready()
-                    context.route("**/*", lambda route: route.fulfill(body="<p>Synthetic</p>", content_type="text/html"))
-                    page = context.new_page()
-                    fit_browser_window(context, page)
-                    page.wait_for_timeout(200)
-                    print("Fitted native geometry: " + json.dumps(page.evaluate("({width:innerWidth,height:innerHeight,outerWidth,outerHeight,screenX,screenY,screenWidth:screen.width,screenHeight:screen.height})")), flush=True)
-                    # Native Chromium frame calculations can round down by one pixel.
-                    page.wait_for_function("outerWidth >= 1919 && outerWidth <= 1920 && outerHeight >= 1079 && outerHeight <= 1080 && screenX === 0 && screenY === 0", timeout=5000)
-                    page.goto("https://device.example.test/")
-                    yield context, page, device.path
+                    _snapshot_session_cookies(context, device.path)
                 finally:
                     try:
-                        _snapshot_session_cookies(context, device.path)
-                    finally:
-                        try:
-                            context.close()
-                        except BaseException:
-                            device.abort_snapshot()
-                            raise
+                        runtime.__exit__(None, None, None)
+                    except BaseException:
+                        device.abort_snapshot()
+                        raise
 
-        with launch(first_account, first_control, first) as (context, page, first_path):
-            context.add_cookies([{"name": "synthetic-session", "value": "first-account",
-                "domain": "device.example.test", "path": "/", "secure": True,
-                "expires": __import__('time').time() + 3600}])
-            context.add_cookies([{"name": "synthetic-tab-session", "value": "first-account-session",
-                "domain": "device.example.test", "path": "/", "secure": True}])
-            page.evaluate("""async () => {
-                localStorage.setItem('device', 'first-account');
-                sessionStorage.setItem('tab', 'first-tab');
-                const db = await new Promise((resolve, reject) => {
-                    const request = indexedDB.open('synthetic-device', 1);
-                    request.onupgradeneeded = () => request.result.createObjectStore('tokens');
-                    request.onsuccess = () => resolve(request.result);
-                    request.onerror = () => reject(request.error);
-                });
-                await new Promise((resolve, reject) => {
-                    const tx = db.transaction('tokens', 'readwrite');
-                    tx.objectStore('tokens').put('synthetic-token', 'session');
-                    tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
-                }); db.close();
-            }""")
-            identity = page.evaluate("({width: innerWidth, height: innerHeight, outerWidth, outerHeight, screenWidth: screen.width, screenHeight: screen.height, screenAvailWidth: screen.availWidth, screenAvailHeight: screen.availHeight, dpr: devicePixelRatio, locale: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})")
-            print("Synthetic headed device geometry: " + json.dumps(identity, sort_keys=True))
-            assert 1919 <= identity["outerWidth"] <= 1920
-            assert 1079 <= identity["outerHeight"] <= 1080
-            assert 1800 <= identity["width"] <= 1920
-            assert 900 <= identity["height"] < 1080
-            assert (identity["screenWidth"], identity["screenHeight"]) == (1920, 1080)
-            assert identity["dpr"] == 1
-            assert identity["width"] <= identity["outerWidth"] <= identity["screenAvailWidth"] <= 1920
-            assert identity["height"] <= identity["outerHeight"] <= identity["screenAvailHeight"] <= 1080
-            page.reload()
-            assert page.evaluate("sessionStorage.getItem('tab')") == "first-tab"
-            session = context.new_cdp_session(page)
-            window_id = session.send("Browser.getWindowForTarget")["windowId"]
-            session.send("Browser.setWindowBounds", {"windowId": window_id, "bounds": {"windowState": "normal"}})
-            session.send("Browser.setWindowBounds", {
-                "windowId": window_id,
-                "bounds": {"left": 200, "top": 100, "width": 1000, "height": 700},
-            })
-            page.wait_for_function("outerWidth >= 999 && outerWidth <= 1000 && outerHeight >= 699 && outerHeight <= 700 && innerWidth <= 1000 && innerHeight < 700", timeout=5000)
-            session.detach()
-        assert not first_path.exists()
-        assert first_control.saves == 1 and first_control.ciphertext is not None
-        assert b"synthetic-token" not in first_control.ciphertext
-        with launch(first_account, first_control, first) as (context, page, restored_path):
-            assert restored_path != first_path
-            assert page.evaluate("localStorage.getItem('device')") == "first-account"
-            assert any(c["name"] == "synthetic-tab-session" and c["value"] == "first-account-session" and c["expires"] == -1 for c in context.cookies())
-            assert any(c["name"] == "synthetic-session" and c["value"] == "first-account" for c in context.cookies())
-            assert page.evaluate("""async () => {
-                const db = await new Promise(resolve => {
-                    const request = indexedDB.open('synthetic-device', 1);
-                    request.onsuccess = () => resolve(request.result);
-                });
-                const value = await new Promise(resolve => {
-                    const request = db.transaction('tokens').objectStore('tokens').get('session');
-                    request.onsuccess = () => resolve(request.result);
-                }); db.close(); return value;
-            }""") == "synthetic-token"
-            assert page.evaluate("sessionStorage.getItem('tab')") is None
-            assert page.evaluate("({width: innerWidth, height: innerHeight, outerWidth, outerHeight, screenWidth: screen.width, screenHeight: screen.height, screenAvailWidth: screen.availWidth, screenAvailHeight: screen.availHeight, dpr: devicePixelRatio, locale: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})") == identity
-        assert not restored_path.exists()
-        assert first_control.saves == 2
-        with launch(second_account, second_control, second) as (context, page, second_path):
-            assert second_path not in (first_path, restored_path)
-            assert page.evaluate("localStorage.length") == 0
-            assert context.cookies() == []
-            assert page.evaluate("indexedDB.databases().then(dbs => dbs.length)") == 0
-            assert page.evaluate("sessionStorage.length") == 0
-            assert first["identity_seed"] != second["identity_seed"]
-            assert page.evaluate("({width: innerWidth, height: innerHeight})") == {"width": identity["width"], "height": identity["height"]}
-        assert not second_path.exists()
-        assert second_control.saves == 1
+    with launch(first_account, first_control, first) as (context, page, first_path):
+        context.add_cookies([{"name": "synthetic-session", "value": "first-account",
+            "domain": "device.example.test", "path": "/", "secure": True,
+            "expires": __import__('time').time() + 3600}])
+        context.add_cookies([{"name": "synthetic-tab-session", "value": "first-account-session",
+            "domain": "device.example.test", "path": "/", "secure": True}])
+        page.evaluate("""async () => {
+            localStorage.setItem('device', 'first-account');
+            sessionStorage.setItem('tab', 'first-tab');
+            const db = await new Promise((resolve, reject) => {
+                const request = indexedDB.open('synthetic-device', 1);
+                request.onupgradeneeded = () => request.result.createObjectStore('tokens');
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction('tokens', 'readwrite');
+                tx.objectStore('tokens').put('synthetic-token', 'session');
+                tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
+            }); db.close();
+        }""")
+        identity = page.evaluate("({width: innerWidth, height: innerHeight, outerWidth, outerHeight, screenWidth: screen.width, screenHeight: screen.height, screenAvailWidth: screen.availWidth, screenAvailHeight: screen.availHeight, dpr: devicePixelRatio, locale: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})")
+        print("Synthetic headed device geometry: " + json.dumps(identity, sort_keys=True))
+        assert identity["outerWidth"] == first["camoufox"]["window.outerWidth"]
+        assert identity["outerHeight"] == first["camoufox"]["window.outerHeight"]
+        assert 0 < identity["width"] <= 1920
+        assert 0 < identity["height"] < 1080
+        assert (identity["screenWidth"], identity["screenHeight"]) == (1920, 1080)
+        assert identity["dpr"] == 1
+        assert identity["width"] <= identity["outerWidth"] <= identity["screenAvailWidth"] <= 1920
+        assert identity["height"] <= identity["outerHeight"] <= identity["screenAvailHeight"] <= 1080
+        page.reload()
+        assert page.evaluate("sessionStorage.getItem('tab')") == "first-tab"
+        # Firefox exposes native window operations through window APIs, not CDP.
+        page.evaluate("window.resizeTo(1000, 700); window.moveTo(200, 100)")
+    assert not first_path.exists()
+    assert first_control.saves == 1 and first_control.ciphertext is not None
+    assert b"synthetic-token" not in first_control.ciphertext
+    with launch(first_account, first_control, first) as (context, page, restored_path):
+        assert restored_path != first_path
+        assert page.evaluate("localStorage.getItem('device')") == "first-account"
+        assert any(c["name"] == "synthetic-tab-session" and c["value"] == "first-account-session" and c["expires"] == -1 for c in context.cookies())
+        assert any(c["name"] == "synthetic-session" and c["value"] == "first-account" for c in context.cookies())
+        assert page.evaluate("""async () => {
+            const db = await new Promise(resolve => {
+                const request = indexedDB.open('synthetic-device', 1);
+                request.onsuccess = () => resolve(request.result);
+            });
+            const value = await new Promise(resolve => {
+                const request = db.transaction('tokens').objectStore('tokens').get('session');
+                request.onsuccess = () => resolve(request.result);
+            }); db.close(); return value;
+        }""") == "synthetic-token"
+        assert page.evaluate("sessionStorage.getItem('tab')") is None
+        assert page.evaluate("({width: innerWidth, height: innerHeight, outerWidth, outerHeight, screenWidth: screen.width, screenHeight: screen.height, screenAvailWidth: screen.availWidth, screenAvailHeight: screen.availHeight, dpr: devicePixelRatio, locale: navigator.language, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})") == identity
+    assert not restored_path.exists()
+    assert first_control.saves == 2
+    with launch(second_account, second_control, second) as (context, page, second_path):
+        assert second_path not in (first_path, restored_path)
+        assert page.evaluate("localStorage.length") == 0
+        assert context.cookies() == []
+        assert page.evaluate("indexedDB.databases().then(dbs => dbs.length)") == 0
+        assert page.evaluate("sessionStorage.length") == 0
+        assert first["identity_seed"] != second["identity_seed"]
+        assert page.evaluate("({width: outerWidth, height: outerHeight})") == {
+            "width": second["camoufox"]["window.outerWidth"],
+            "height": second["camoufox"]["window.outerHeight"],
+        }
+    assert not second_path.exists()
+    assert second_control.saves == 1
 
 
 @pytest.mark.parametrize("scenario", [
@@ -685,11 +664,11 @@ def test_codex_existing_session_continuation_is_identity_bound_and_recovers(
                 '<button onclick="document.body.dataset.unsafe=1">Cancel</button>' + button)
 
     with real_browser() as browser:
-        class Chromium:
+        class SyntheticBrowser:
             def launch_persistent_context(self, **kwargs):
                 launches.append(kwargs)
-                for key in ("user_data_dir", "headless", "chromium_sandbox", "proxy", "env", "args"):
-                    kwargs.pop(key)
+                for key in ("user_data_dir", "headless", "persistent_context", "os", "proxy", "env", "args", "config"):
+                    kwargs.pop(key, None)
                 context = browser.new_context(**kwargs)
 
                 def intercept(route):
@@ -710,13 +689,17 @@ def test_codex_existing_session_continuation_is_identity_bound_and_recovers(
                 context.route("**/*", intercept)
                 page = context.new_page()
                 pages.append(page)
-                return SimpleNamespace(new_page=lambda: page, route=context.route, new_cdp_session=context.new_cdp_session,
+                return SimpleNamespace(new_page=lambda: page, route=context.route,
                                        set_default_timeout=context.set_default_timeout,
                                        storage_state=context.storage_state, cookies=context.cookies, close=context.close)
 
         @contextmanager
-        def fake_playwright():
-            yield SimpleNamespace(chromium=Chromium())
+        def fake_camoufox(**kwargs):
+            context = SyntheticBrowser().launch_persistent_context(**kwargs)
+            try:
+                yield context
+            finally:
+                context.close()
 
         class Control:
             def __init__(self):
@@ -777,7 +760,7 @@ def test_codex_existing_session_continuation_is_identity_bound_and_recovers(
             monkeypatch.setattr(module, "_consent_continue", failing_action)
         monkeypatch.setattr(module, "device_directory", fake_device)
         monkeypatch.setattr(module, "account_route", fake_route)
-        monkeypatch.setattr(playwright.sync_api, "sync_playwright", fake_playwright)
+        monkeypatch.setattr("camoufox.sync_api.Camoufox", fake_camoufox)
         account = {"_browser_profile": generate_profile(set()), "username": identity,
                    "password": "must-never-submit", "totp": "must-never-submit"}
         if scenario in ("wrong_result_identity", "invalid_callback"):

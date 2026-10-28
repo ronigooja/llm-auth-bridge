@@ -14,6 +14,7 @@ import subprocess
 import time
 from urllib.parse import urlencode
 from playwright.sync_api import sync_playwright
+from camoufox.sync_api import Camoufox
 
 import pytest
 
@@ -99,7 +100,7 @@ def packaged_vnc(settings, tmp_path):
 @contextmanager
 def resizable_vnc(settings, tmp_path):
     """Real resizable desktop and maximized browser, with synthetic content only."""
-    from app.browser import BROWSER_ARGS, fit_browser_window
+    from app.browser import fit_browser_window
     from app.browser_identity import context_options, generate_profile
     for executable in ("Xtigervnc", "openbox", "xprop"):
         if not shutil.which(executable):
@@ -135,22 +136,17 @@ def resizable_vnc(settings, tmp_path):
                     time.sleep(0.1)
                 else:
                     pytest.fail("Native window manager did not become ready: " + log_path.read_text())
-        with sync_playwright() as playwright:
-            context = playwright.chromium.launch_persistent_context(
+        with Camoufox(
                 user_data_dir=str(tmp_path / "synthetic-native-profile"), headless=False,
-                chromium_sandbox=os.geteuid() != 0, env=env,
-                args=BROWSER_ARGS + ["--no-proxy-server"],
+                persistent_context=True, os="windows", env=env,
                 **context_options(generate_profile(), native_window=True),
-            )
-            try:
+            ) as context:
                 context.route("**/*", lambda route: route.fulfill(content_type="text/html", body=
                     '<body style="margin:0;font:16px sans-serif;background:white"><p id="glyph">Synthetic 16px text</p></body>'))
                 page = context.new_page()
                 fit_browser_window(context, page)
                 page.goto("https://synthetic.example.test/")
-                yield replace(settings, takeover_url=f"ws://127.0.0.1:{websocket_port}/websockify", lease_seconds=180), page, playwright
-            finally:
-                context.close()
+                yield replace(settings, takeover_url=f"ws://127.0.0.1:{websocket_port}/websockify", lease_seconds=180), page, context.browser
     finally:
         for process in reversed(processes):
             if process.poll() is None:
@@ -202,16 +198,11 @@ def assert_read_only_viewer(frame):
 
 @contextmanager
 def viewer_browser(engine, driver=None):
-    if driver is not None:
-        options = {"headless": True}
-        if engine == "chromium":
-            options["chromium_sandbox"] = os.geteuid() != 0
-        browser = getattr(driver, engine).launch(**options)
-        try:
-            yield browser
-        finally:
-            browser.close()
-    elif engine == "chromium":
+    if driver is not None and engine == "camoufox":
+        # Reuse the native runtime's Playwright connection; nested sync drivers
+        # cannot run on the same thread.
+        yield driver
+    elif engine == "camoufox":
         with real_browser() as browser:
             yield browser
     else:
@@ -224,7 +215,7 @@ def viewer_browser(engine, driver=None):
 
 
 @pytest.mark.parametrize("viewer", ["direct", "account-popup"])
-@pytest.mark.parametrize("engine", ["chromium", pytest.param("webkit", marks=pytest.mark.skipif(
+@pytest.mark.parametrize("engine", ["camoufox", pytest.param("webkit", marks=pytest.mark.skipif(
     not os.getenv("BRIDGE_TEST_WEBKIT"), reason="Enable installed WebKit acceptance explicitly",
 ))])
 def test_packaged_novnc_connects_read_only_without_pausing_task(settings, resources, tmp_path, viewer, engine):
