@@ -4,19 +4,17 @@
 
 Voice targets must explicitly select `compatibility: "bridge-v1"` and supply
 `base_url`, `admin_username`, and `admin_password`. Management uses HTTP Basic
-without browser cookies. The original server contract is `docs/BRIDGE_V1.md` in
-[the pinned overlay patch](https://github.com/ronigooja/llm-auth-bridge/blob/d22cdb8034f736aa4deca6a08de87dbc64f30435/deploy/voice/bridge-v1.patch#L7-L56).
-[Source metadata](../../../deploy/voice/source.json) pins the reviewed upstream
-and fork. Refer to that contract for endpoints, body limits, canonical encoding,
-idempotency, errors and persistence. The [overlay build entry point](../../../deploy/voice/README.md)
+without browser cookies. The server contract is `docs/BRIDGE_V1.md` in the
+[pinned ronigooja fork](https://github.com/ronigooja/chatgpt-web-voice/tree/6338ac478070aaa34bfe7a3c0469caf9e9174c02).
+[Source metadata](../../../deploy/voice/source.json) pins the fork revision and
+release image. Refer to that contract for endpoints, body limits, canonical
+encoding, idempotency, errors and persistence. The [fork build entry point](../../../deploy/voice/README.md)
 covers installation; [deployment](../../guides/deployment.md) covers recovery.
 
-Stock public gateways do not satisfy the required contract:
-[dyhhhhhh at 9eb6152](https://github.com/dyhhhhhh/chatgpt-web-voice/tree/9eb61526118d272beeb20ed18c0df071274d73e8)
-has no administrator CRUD surface, and
-[Space3044 at 6338ac4](https://github.com/Space3044/chatgpt-web-voice/tree/6338ac478070aaa34bfe7a3c0469caf9e9174c02)
-returns masked route/token previews. Native CRUD or a token probe cannot attest
-exact credentials and explicit routes. Unsupported targets fail closed.
+Only the pinned fork revision is supported. Other public gateway revisions may
+lack administrator CRUD or return masked route/token previews. Native CRUD or a
+token probe cannot attest exact credentials and explicit routes. Unsupported
+targets fail closed.
 Current acceptance and remaining real-account checks live in the [roadmap](../../roadmap.md).
 
 ## Bridge responsibilities

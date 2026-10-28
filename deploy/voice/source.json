@@ -1,8 +1,8 @@
 {
-  "repository": "https://github.com/Space3044/chatgpt-web-voice.git",
-  "upstream_revision": "6338ac478070aaa34bfe7a3c0469caf9e9174c02",
-  "fork_revision": "32d696a",
-  "fork_commits": ["64c35f3", "897c0a8", "59ba25b", "32d696a"],
-  "runtime_base_local_image": "sha256:209392ce7c4994b70334ef53aa81adebba904ab01dc1bb3ae8d0b0dd0601bd7a",
+  "repository": "https://github.com/ronigooja/chatgpt-web-voice.git",
+  "revision": "6338ac478070aaa34bfe7a3c0469caf9e9174c02",
+  "version": "bridge-v1-6338ac4",
+  "image_reference": "ghcr.io/ronigooja/chatgpt-web-voice:bridge-v1-6338ac4",
+  "image_digest": "published-by-voice-image-workflow",
   "real_provider_verification": "unverified"
 }

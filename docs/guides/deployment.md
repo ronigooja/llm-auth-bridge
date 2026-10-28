@@ -70,9 +70,12 @@ configuration. Verify the sandbox on the deployment host. `/readyz` checks the
 database/key; it does not attest provider or downstream availability. The named
 `app-data` volume must survive routine container replacement.
 
-## Voice overlay and recovery
+## Voice fork installation and recovery
 
-Build the compatible gateway through [deploy/voice](../../deploy/voice/README.md).
+Build or publish the compatible gateway from the pinned
+[ronigooja fork](../../deploy/voice/README.md). Deploy the immutable image digest
+produced by the voice image workflow; do not use a mutable `main` tag and do not
+apply the historical `deploy/voice/bridge-v1.patch` overlay.
 Before upgrading an existing gateway, stop it and create a consistent SQLite
 backup; preserve its encryption key, previous image and runtime configuration
 outside Git. Keep the data mount, runtime UID, network and hardening settings.

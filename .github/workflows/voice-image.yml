@@ -1,0 +1,62 @@
+name: ChatGPT Web Voice bridge image
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "deploy/voice/source.json"
+      - ".github/workflows/voice-image.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch and test the pinned fork source
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(jq -r .revision deploy/voice/source.json)"
+          version="$(jq -r .version deploy/voice/source.json)"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          git init /tmp/voice-source
+          git -C /tmp/voice-source remote add origin https://github.com/ronigooja/chatgpt-web-voice.git
+          git -C /tmp/voice-source fetch --depth=1 origin "$revision"
+          git -C /tmp/voice-source checkout --detach FETCH_HEAD
+          test "$(git -C /tmp/voice-source rev-parse HEAD)" = "$revision"
+          (cd /tmp/voice-source && go test ./...) 2>&1 | tee /tmp/voice-go-test.log
+          printf 'revision=%s\nversion=%s\n' "$revision" "$version" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        id: image
+        with:
+          context: /tmp/voice-source
+          push: true
+          platforms: linux/amd64
+          tags: ghcr.io/${{ github.repository_owner }}/chatgpt-web-voice:${{ steps.source.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/ronigooja/chatgpt-web-voice
+            org.opencontainers.image.revision=${{ steps.source.outputs.revision }}
+          provenance: true
+          sbom: true
+      - name: Publish immutable release metadata
+        run: |
+          mkdir -p voice-image-release
+          printf '%s\n' '${{ steps.source.outputs.revision }}' > voice-image-release/source-revision.txt
+          printf '%s\n' '${{ steps.image.outputs.digest }}' > voice-image-release/image-digest.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voice-bridge-image-${{ github.sha }}
+          path: voice-image-release/
+          retention-days: 14
