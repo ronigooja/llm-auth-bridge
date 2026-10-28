@@ -778,7 +778,7 @@ def test_codex_existing_session_continuation_is_identity_bound_and_recovers(
     if scenario in {"mismatch", "duplicate", "suffix", "remove", "other_account", "multiple_identities", "external_link", "unsupported_card", "chooser_replaced_remove", "chooser_replaced_external"}:
         assert waits == [("waiting_human", "account_chooser")]
     if scenario == "unknown":
-        assert waits == [("waiting_human", "unknown")]
+            assert waits == [("browser_review", "unknown")]
 
     if scenario in {"chooser_replaced_remove", "chooser_replaced_external"}:
         assert phases.count("account_chooser") == 1, "Detached choices must never be replayed"
