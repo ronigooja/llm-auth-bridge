@@ -5,6 +5,7 @@ from pathlib import Path
 SCRIPT = Path(__file__).parents[1] / 'deploy/release.sh'; SHA='a'*40; DIGEST='sha256:'+'b'*64
 DISPATCH = r'''#!/usr/bin/env python3
 import os,sys,json
+from pathlib import Path
 name=os.path.basename(sys.argv[0]); args=sys.argv[1:]; log=os.environ['FAKE_LOG']
 def rec(x):
  with open(log,'a') as f: f.write(json.dumps(x)+'\n')
