@@ -13,6 +13,8 @@ fail=os.environ.get('FAIL','')
 if name=='timeout': os.execvp(args[3],args[3:])
 if name=='flock': sys.exit(0)
 if name=='ss': sys.exit(0)
+if name=='awk':
+ print('MemTotal:       8000000 kB' if '/proc/meminfo' in args else '99999999'); sys.exit(0)
 if name=='df': print('Filesystem 1024-blocks Used Available Capacity Mounted on\nx 1 1 '+('1' if os.environ.get('LOW_DISK') else '99999999')+' 1% /'); sys.exit(0)
 if name=='curl': print('<html><script src="/app.js"></script><link rel="stylesheet" href="/app.css"></html>'); sys.exit(0)
 if name=='docker':
@@ -35,7 +37,7 @@ sys.exit(0)
 '''
 def setup(tmp, fail='', low=False, collision=False):
  b=tmp/'bin'; b.mkdir(); log=tmp/'calls'; (tmp/'key').write_bytes(b'k')
- for n in ('docker','curl','df','ss','flock','timeout','snapshot','switch','rollback','resume','stop','probe','cert'):
+ for n in ('docker','curl','awk','df','ss','flock','timeout','snapshot','switch','rollback','resume','stop','probe','cert'):
   p=b/n; p.write_text(DISPATCH); p.chmod(0o755)
  env=os.environ.copy(); env.update(PATH=str(b)+':'+env['PATH'],FAKE_LOG=str(log),FAIL=fail,LOW_DISK='1' if low else '',COLLISION='1' if collision else '',APP_IMAGE=f'ghcr.io/x/y@{DIGEST}',WORKER_IMAGE=f'ghcr.io/x/y@{DIGEST}',RELEASE_COMMIT=SHA,FAST_GATE_SHA=SHA,FAST_GATE_URL='https://ci/run',PUBLIC_URL='https://bridge.example',MASTER_KEY_FILE=str(tmp/'key'),RELEASE_PROJECT='bridge-test',RELEASE_STATE_DIR=str(tmp/'state'),SNAPSHOT_HOOK=str(b/'snapshot'),SWITCH_HOOK=str(b/'switch'),ROLLBACK_HOOK=str(b/'rollback'),RESUME_OLD_HOOK=str(b/'resume'),STOP_OLD_HOOK=str(b/'stop'),PROBE_HOOK=str(b/'probe'),CERT_CHECK_HOOK=str(b/'cert'))
  return env,log
