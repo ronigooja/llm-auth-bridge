@@ -17,7 +17,7 @@ import httpx
 import pytest
 from playwright.sync_api import sync_playwright
 
-from app.browser import BROWSER_ARGS, detect_state, _submit
+from app.browser import detect_state, _submit
 from app.routing import account_route
 
 
@@ -65,7 +65,6 @@ def real_browser():
             executable_path=executable,
             headless=True,
             chromium_sandbox=os.geteuid() != 0,
-            args=BROWSER_ARGS + ["--no-proxy-server"],
         )
         try:
             yield browser
@@ -481,7 +480,6 @@ def test_headed_native_device_relaunch_preserves_storage_and_isolates_accounts()
                     headless=False, chromium_sandbox=os.geteuid() != 0,
                     proxy=None, accept_downloads=False, service_workers="block",
                     env={**os.environ, "DISPLAY": os.getenv("DISPLAY", ":99")},
-                    args=BROWSER_ARGS + ["--no-proxy-server"],
                     **context_options(profile, native_window=True),
                 )
                 try:

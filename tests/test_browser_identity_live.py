@@ -8,7 +8,6 @@ import threading
 import pytest
 from playwright.sync_api import sync_playwright
 
-from app.browser import BROWSER_ARGS
 from app.browser_identity import configure_page_identity, context_options, generate_profile
 
 
@@ -67,7 +66,7 @@ def test_headed_identity_first_request_headers_js_iframe_and_restart(tmp_path, p
         for _ in range(2):
             context = playwright.chromium.launch_persistent_context(
                 str(tmp_path / platform), headless=False, chromium_sandbox=True,
-                args=BROWSER_ARGS + ['--no-proxy-server'], service_workers='block',
+                service_workers='block',
                 **context_options(profile, native_window=True))
             try:
                 page = context.new_page()
@@ -110,7 +109,7 @@ def test_browserleaks_synthetic_windows_profile(tmp_path):
     with sync_playwright() as playwright:
         context = playwright.chromium.launch_persistent_context(
             str(tmp_path / 'synthetic-browserleaks'), headless=False, chromium_sandbox=True,
-            args=BROWSER_ARGS + ['--no-proxy-server'], service_workers='block',
+            service_workers='block',
             **context_options(profile, native_window=True))
         try:
             page = context.new_page()
