@@ -12,6 +12,7 @@ import "./style.css";
 import { parseProxyUrl } from "./proxy";
 import { requestId } from "./id";
 import { useAccountWindow } from "./account-window";
+import { SessionHealth, type WebSession, type TargetSync } from "./session-health";
 
 type Account = {
   id: number;
@@ -22,6 +23,8 @@ type Account = {
   has_password: boolean;
   has_totp: boolean;
   has_mailbox: boolean;
+  web_session?: WebSession;
+  target_syncs?: TargetSync[];
 };
 type Target = {
   id: number;
@@ -69,7 +72,9 @@ const terminalStates = new Set([
 ]);
 const labels: Record<string, string> = {
   queued: "排队中",
-  running: "正在登录",
+  running: "执行中",
+  checking_session: "正在检查会话",
+  syncing: "正在同步",
   waiting_human: "等待操作",
   email_code_required: "等待邮箱验证码",
   authenticator_code_required: "等待验证器代码",
@@ -103,6 +108,8 @@ const labels: Record<string, string> = {
   verified: "已验证",
 };
 const label = (v: string) => labels[v] || v;
+const taskKinds: Record<string, string> = { maintenance: "自动维护", login: "登录", browser_window: "账号窗口" };
+const taskKind = (kind?: string) => taskKinds[kind || "login"] || "任务";
 const message = (e: unknown) =>
   e instanceof Error ? e.message : "操作失败，请重试";
 function Status({ value }: { value: string }) {
@@ -333,7 +340,19 @@ export function App() {
     }
   }
   useEffect(() => {
-    if (session === "yes") void refresh();
+    if (session !== "yes") return;
+    void refresh();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refresh();
+    }, 30000);
+    const visible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", visible);
+    };
   }, [session]);
   const close = () => setModal(null);
   const saved = async () => {
@@ -451,7 +470,7 @@ export function App() {
                     <article key={a.id} className="resource">
                       <div className="resource-heading">
                         <h2>{a.username}</h2>
-                        <Status value={a.status} />
+                        <span className="badge">{a.status === "ready" ? "历史同步成功" : "历史同步待验证"}</span>
                       </div>
                       <p className="muted">
                         网络：{label(a.route_type)} · 已绑定{" "}
@@ -462,6 +481,7 @@ export function App() {
                         {a.has_totp ? "验证器已设置" : "未设置验证器"} ·{" "}
                         {a.has_mailbox ? "邮箱已设置" : "未设置邮箱"}
                       </p>
+                      <SessionHealth session={a.web_session} syncs={a.target_syncs} targets={targets || []} openTask={openTask} />
                       <div className="actions">
                         {(["chatgpt", "codex"] as const).map((mode) => (
                           <button key={mode} className={mode === "chatgpt" ? "primary" : undefined}
@@ -616,7 +636,7 @@ export function App() {
                         onClick={() => setSelectedTask(t.id)}
                       >
                         <span>
-                          任务 #{t.id}
+                          {taskKind(t.kind)} · 任务 #{t.id}
                           <small>
                             {accounts?.find((a) => a.id === t.account_id)
                               ?.username || `账号 #${t.account_id}`}
@@ -1300,6 +1320,7 @@ function TaskDetail({ id, updated, openAccountWindow }: { id: number; updated: (
       )}
       {task && (
         <>
+          <p className="muted">任务类型：{taskKind(task.kind)}</p>
           <p className="phase">{label(task.phase || task.state)}</p>
           {task.message && <p>{task.message}</p>}
           {task.state === "waiting_human" && task.kind !== "browser_window" && task.phase !== "browser_window" && (

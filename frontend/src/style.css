@@ -559,3 +559,32 @@ dd {
   display: block;
   margin-top: 16px;
 }
+.account-health {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #e0e5dd;
+}
+.health-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.target-health {
+  margin-top: 14px;
+  padding-left: 12px;
+  border-left: 2px solid #e0e5dd;
+}
+.health-task {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+.badge.valid {
+  background: #e5f0e3;
+  color: #345c39;
+}
+.badge.signed_out,
+.badge.error {
+  background: #faeae5;
+  color: #a44935;
+}

@@ -404,6 +404,13 @@ class Worker:
                     runner = run_login
                 result = runner(account, target, control, saved)
                 control.checkpoint()
+                # Persist the validated web-session check while this task still owns its lease.
+                if target["kind"] == "chatgpt-web-voice":
+                    with database(self.settings.db_path) as conn:
+                        conn.execute("BEGIN IMMEDIATE")
+                        self.queue.owned(conn, task["id"], task["execution_id"])
+                        now = time.time()
+                        conn.execute("INSERT INTO web_session_health(account_id,status,checked_at,last_success_at,error_code) VALUES(?,?,?,?,NULL) ON CONFLICT(account_id) DO UPDATE SET status='valid',checked_at=excluded.checked_at,last_success_at=excluded.last_success_at,error_code=NULL", (task["account_id"], "valid", now, now))
                 expected = (
                     "codex_oauth" if target["kind"] == "cliproxyapi" else "chatgpt_web"
                 )
@@ -489,6 +496,8 @@ class Worker:
                 if reauth:
                     with database(self.settings.db_path) as conn:
                         self.queue.owned(conn, task["id"], task["execution_id"])
+                        now = time.time()
+                        conn.execute("INSERT INTO web_session_health(account_id,status,checked_at,last_success_at,error_code) VALUES(?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET status='signed_out',checked_at=excluded.checked_at,error_code=excluded.error_code", (task["account_id"], "signed_out", now, None, "signed_out"))
                         conn.execute(
                             "UPDATE accounts SET status='reauth_required' WHERE id=?",
                             (task["account_id"],),
@@ -497,6 +506,13 @@ class Worker:
                             "UPDATE syncs SET state='reauth_required',last_error='reauth_required',next_check=NULL WHERE account_id=? AND target_id=?",
                             (task["account_id"], task["target_id"]),
                         )
+                if not reauth and task.get("target_id"):
+                    with database(self.settings.db_path) as conn:
+                        target_row = conn.execute("SELECT kind FROM targets WHERE id=?", (task["target_id"],)).fetchone()
+                        if target_row and target_row["kind"] == "chatgpt-web-voice":
+                            self.queue.owned(conn, task["id"], task["execution_id"])
+                            error_code = "identity_mismatch" if "identity" in str(exc).lower() and "match" in str(exc).lower() else "check_failed"
+                            conn.execute("INSERT INTO web_session_health(account_id,status,checked_at,last_success_at,error_code) VALUES(?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET status='error',checked_at=excluded.checked_at,error_code=excluded.error_code", (task["account_id"], "error", time.time(), None, error_code))
                 self._finish(
                     task,
                     "failed",
@@ -582,13 +598,14 @@ class Worker:
         for s in due:
             try:
                 self.queue.create(s["account_id"], s["target_id"], kind="maintenance")
+            except Conflict:
+                # An active task owns the account; leave the due time unchanged.
+                continue
             except Exception:
-                pass
+                # Scheduling diagnostics are intentionally generic and do not move the plan.
+                continue
             with database(self.settings.db_path) as conn:
-                conn.execute(
-                    "UPDATE syncs SET next_check=? WHERE account_id=? AND target_id=?",
-                    (now + 21600, s["account_id"], s["target_id"]),
-                )
+                conn.execute("UPDATE syncs SET next_check=? WHERE account_id=? AND target_id=?", (now + 21600, s["account_id"], s["target_id"]))
 
     def run_once(self):
         self.settings.browser_lock.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
