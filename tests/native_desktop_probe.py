@@ -8,9 +8,9 @@ import subprocess
 import tempfile
 import time
 
-from playwright.sync_api import sync_playwright
+from camoufox.sync_api import Camoufox
 
-from app.browser import BROWSER_ARGS, fit_browser_window
+from app.browser import fit_browser_window
 from app.browser_identity import context_options, generate_profile
 
 
@@ -72,28 +72,24 @@ def main():
             while b"window id" not in subprocess.run(["xprop", "-root", "_NET_SUPPORTING_WM_CHECK"], env=env, capture_output=True).stdout:
                 assert time.monotonic() < deadline
                 time.sleep(0.1)
-            with sync_playwright() as playwright:
-                context = playwright.chromium.launch_persistent_context(
-                    user_data_dir=str(root / "synthetic-profile"), headless=False, chromium_sandbox=True,
-                    env=env, args=BROWSER_ARGS + ["--no-proxy-server"],
-                    **context_options(generate_profile(), native_window=True),
-                )
-                try:
-                    page = context.new_page()
-                    page.set_content('<p style="font:16px sans-serif">Synthetic native text</p>')
-                    fit_browser_window(context, page)
-                    stream, screen_id = connect_desktop()
-                    with stream:
-                        for width, height in ((1100, 820), (1400, 700), (900, 1000)):
-                            stream.sendall(struct.pack(">BBHHBBIHHHHI", 251, 0, width, height, 1, 0, screen_id, 0, 0, width, height, 0))
-                            page.wait_for_function("""size => screen.width === size.width && screen.height === size.height
-                                && Math.abs(outerWidth-size.width) <= 1 && Math.abs(outerHeight-size.height) <= 1""",
-                                arg={"width": width, "height": height}, timeout=15000)
-                            assert page.locator("p").evaluate("e => getComputedStyle(e).fontSize") == "16px"
-                            assert page.evaluate("devicePixelRatio") == 1
-                            print(f"Production native desktop {width}x{height}: browser fits, font 16px, DPR 1", flush=True)
-                finally:
-                    context.close()
+            with Camoufox(
+                user_data_dir=str(root / "synthetic-profile"), persistent_context=True,
+                headless=False, os="windows", env=env,
+                **context_options(generate_profile(), native_window=True),
+            ) as context:
+                page = context.new_page()
+                page.set_content('<p style="font:16px sans-serif">Synthetic native text</p>')
+                fit_browser_window(context, page)
+                stream, screen_id = connect_desktop()
+                with stream:
+                    for width, height in ((1100, 820), (1400, 700), (900, 1000)):
+                        stream.sendall(struct.pack(">BBHHBBIHHHHI", 251, 0, width, height, 1, 0, screen_id, 0, 0, width, height, 0))
+                        page.wait_for_function("""size => screen.width === size.width && screen.height === size.height
+                            && Math.abs(outerWidth-size.width) <= 1 && Math.abs(outerHeight-size.height) <= 1""",
+                            arg={"width": width, "height": height}, timeout=15000)
+                        assert page.locator("p").evaluate("e => getComputedStyle(e).fontSize") == "16px"
+                        assert page.evaluate("devicePixelRatio") == 1
+                        print(f"Production native desktop {width}x{height}: browser fits, font 16px, DPR 1", flush=True)
         except BaseException:
             log.flush()
             print((root / "display.log").read_text(), flush=True)
