@@ -66,7 +66,7 @@ def provider_rejection(page):
         return None
     text = re.sub(r"\s+", " ", text or "").strip().casefold()
     if not text:
-        return None
+        text = ""
     patterns = (
         ("account_deleted", ("account has been deleted", "account was deleted", "账号已删除", "账户已删除"),
          "OpenAI 已删除此账号，无法继续登录"),
@@ -78,6 +78,14 @@ def provider_rejection(page):
     for code, needles, message in patterns:
         if any(needle.casefold() in text for needle in needles):
             return code, message
+    try:
+        parsed = urlsplit(page.url)
+        if parsed.hostname in ("auth.openai.com", "auth0.openai.com") and re.search(
+            r"(?:error|deactivat|suspend|disable|blocked|denied)", parsed.path, re.I
+        ):
+            return "account_rejected", "OpenAI 拒绝了此账号登录，请接管浏览器查看页面"
+    except Exception:
+        pass
     return None
 
 

@@ -30,6 +30,7 @@ const errorLabels: Record<string, string> = {
   account_deleted: "账号已被 OpenAI 删除",
   account_deactivated: "账号已被 OpenAI 停用",
   account_suspended: "账号已被 OpenAI 暂停",
+  account_rejected: "账号登录被 OpenAI 拒绝",
   identity_mismatch: "账号身份不匹配",
   check_failed: "检查失败",
 };
