@@ -1,0 +1,47 @@
+# Use this file for server releases from immutable GHCR images.
+services:
+  app:
+    image: ${APP_IMAGE:?Set an immutable GHCR app digest}
+    init: true
+    restart: unless-stopped
+    ports: ["127.0.0.1:${CANDIDATE_PORT:-18000}:8000"]
+    environment: &runtime
+      LLM_AUTH_DB: /data/app.sqlite3
+      LLM_AUTH_MASTER_KEY_FILE: /run/secrets/master_key
+      LLM_AUTH_LOCK_FILE: /data/browser.lock
+      LLM_AUTH_SECURE_COOKIE: "true"
+      LLM_AUTH_TAKEOVER_URL: ws://worker:6080/websockify
+    volumes: ["app-data:/data"]
+    secrets: [master_key]
+    depends_on: [worker]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=5)"]
+      interval: 5s
+      timeout: 6s
+      retries: 12
+  worker:
+    image: ${WORKER_IMAGE:?Set an immutable GHCR worker digest}
+    init: true
+    restart: unless-stopped
+    shm_size: 1gb
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=512m,mode=1777"]
+    stop_grace_period: 60s
+    environment:
+      <<: *runtime
+      DISPLAY: :99
+    volumes: ["app-data:/data"]
+    secrets: [master_key]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./playwright-seccomp.json
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sqlite3,time; c=sqlite3.connect(os.environ['LLM_AUTH_DB']); assert c.execute('SELECT 1 FROM runtime WHERE heartbeat>?',(time.time()-45,)).fetchone()"]
+      interval: 5s
+      timeout: 6s
+      retries: 12
+secrets:
+  master_key:
+    file: ${MASTER_KEY_FILE:?Set the existing master key path}
+volumes:
+  app-data:

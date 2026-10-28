@@ -115,3 +115,44 @@ configuration, key, volumes and networks. Restore the previous maintenance setti
 after checking health, worker availability, source revision labels and served
 frontend/viewer assets. Restarting a worker closes its browser and may require a
 fresh authorization. Image integrity checks do not establish real-account acceptance.
+
+## Immutable GHCR release procedure
+
+A release is eligible for deployment only after the fast gate passes. The image workflow publishes separate amd64 app and worker images to GHCR with the commit SHA and emits their immutable `sha256` digests. The target server pulls those digests directly; Actions artifacts and a developer laptop are never used as an image transport. Authenticate on the server with `docker login ghcr.io` before running [`deploy/release.sh`](../../deploy/release.sh), and supply `APP_IMAGE` and `WORKER_IMAGE` as `ghcr.io/owner/repository@sha256:...` values.
+
+The server needs Docker Engine with Compose v2, amd64 Linux, at least 10 GiB free on the release filesystem and 4 GiB RAM, an existing UID-readable master key, a renewing HTTPS certificate, and ports 80/443 available to the reverse proxy. The release project uses [`deploy/release.compose.yml`](../../deploy/release.compose.yml), a private candidate port, the existing seccomp profile, non-root containers, and `/readyz` health checks. Configure the reverse proxy with the existing WebSocket upgrade routes and buffering disabled for task SSE; use timeouts long enough for account-window and SSE operations.
+
+The script requires executable operator hooks for the current bridge snapshot, traffic switch, synthetic HTTPS/API/WebSocket/SSE/CLIProxyAPI/Voice probes, certificate check, old-service resume, old-service stop, and traffic rollback. It first checks Docker, resources, certificate renewal, and port availability, pulls both digests, snapshots the current database, restores that snapshot into a new candidate volume, runs offline `migrate`, and waits for app and worker health. It then checks HTTPS redirect, the homepage and every same-origin JS/CSS asset, `/readyz`, and the synthetic probes before switching traffic.
+
+A failed pull, migration, startup, health check, asset check, or probe stops the candidate and resumes the old bridge. The old database, key, reverse-proxy configuration, Voice service, CLIProxyAPI service, and unrelated volumes remain untouched. After all checks pass, the script records running image digests, schema version, container state and health results, then stops the old bridge. Successful temporary imports are removed; failed imports remain under the release state directory for diagnosis. Keep the release record and rollback image until the next accepted release.
+
+## Acceptance record
+
+For every release, preserve a record containing the commit, app and worker digests, fast-gate result, complete pytest state, migration result and schema version, app/worker health, HTTPS and certificate result, synthetic endpoint result, and whether real login, long-term renewal, or Voice calls were verified. A release with `full_pytest=not run` is eligible only when the fast gate and online checks pass; it must not be described as a full regression pass.
+
+### Required release hook configuration
+
+The script intentionally delegates site-specific traffic and management details to executable hooks. Set `FAST_GATE_URL` to the successful fast-gate workflow URL and `FAST_GATE_SHA` to the same commit as `RELEASE_COMMIT`; the script rejects a missing or mismatched provenance record. Set `SNAPSHOT_HOOK` to stop/quiesce the old bridge and write the key-matched SQLite snapshot to `$RELEASE_BACKUP_DIR/bridge.sqlite3`. `SWITCH_HOOK` changes the reverse proxy upstream to the candidate port, `ROLLBACK_HOOK` restores the old upstream, `RESUME_OLD_HOOK` starts the old bridge after a failed candidate, and `STOP_OLD_HOOK` stops it after acceptance. `CERT_CHECK_HOOK` checks certificate validity and automatic renewal, while `PROBE_HOOK` runs authenticated synthetic checks for `/readyz`, task WebSocket/SSE, CLIProxyAPI management, and Voice management. Hooks must be absolute executable paths and should fail closed.
+
+The order is: pull and label verification; snapshot and offline restore/migrate; candidate app/worker health; switch traffic; public HTTPS redirect/homepage/static asset and synthetic endpoint checks; record digests/schema/health; stop the old bridge. Public checks run after the switch so they exercise the new site. A failed check after switching invokes `ROLLBACK_HOOK` before stopping the candidate.
+
+Example environment (values are placeholders and must be replaced on the target host):
+
+```sh
+export RELEASE_PROJECT=bridge-20261029
+export RELEASE_COMMIT=<40-hex-commit>
+export FAST_GATE_SHA="$RELEASE_COMMIT"
+export FAST_GATE_URL=https://github.com/<owner>/<repo>/actions/runs/<run-id>
+export APP_IMAGE=ghcr.io/<owner>/<repo>@sha256:<64-hex-digest>
+export WORKER_IMAGE=ghcr.io/<owner>/<repo>@sha256:<64-hex-digest>
+export MASTER_KEY_FILE=/var/lib/llm-auth-bridge/secrets/master_key
+export PUBLIC_URL=https://bridge.example.com
+export SNAPSHOT_HOOK=/usr/local/libexec/bridge-snapshot
+export SWITCH_HOOK=/usr/local/libexec/bridge-switch
+export ROLLBACK_HOOK=/usr/local/libexec/bridge-rollback
+export RESUME_OLD_HOOK=/usr/local/libexec/bridge-resume-old
+export STOP_OLD_HOOK=/usr/local/libexec/bridge-stop-old
+export PROBE_HOOK=/usr/local/libexec/bridge-probe
+export CERT_CHECK_HOOK=/usr/local/libexec/bridge-cert-check
+sudo --preserve-env=APP_IMAGE,WORKER_IMAGE,RELEASE_COMMIT,FAST_GATE_SHA,FAST_GATE_URL,MASTER_KEY_FILE,RELEASE_PROJECT,PUBLIC_URL,SNAPSHOT_HOOK,SWITCH_HOOK,ROLLBACK_HOOK,RESUME_OLD_HOOK,STOP_OLD_HOOK,PROBE_HOOK,CERT_CHECK_HOOK ./deploy/release.sh
+```

@@ -54,3 +54,11 @@ The [late-interrupt diagnostic](../../.github/workflows/upstream-late-interrupt.
 is restricted to `validation/upstream-late-interrupt`; it does not rerun full suites.
 For disposable Voice server verification, use the guarded
 [HTTP harness](../contracts/integrations/voice.md#disposable-synthetic-http-acceptance).
+
+## Release gates and regression evidence
+
+Deployment uses two independent conclusions. The fast gate is the blocking release check: frontend tests and build, non-browser pytest, a bounded synthetic Camoufox preflight, and app/worker image startup with non-root, seccomp and `/readyz` checks must all pass before an image is published. Each step has a short timeout and uploads its log and JUnit output on failure; a browser startup failure stops the release.
+
+The complete pytest suite runs separately from [validation.yml](../../.github/workflows/validation.yml), on a nightly, manual, or validation branch dispatch. It has a per-test faulthandler deadline and a process-group hard timeout. A timeout is a failed run with the pytest log and JUnit report attached; an interrupted or missing run is never reported as passed. CI reuses the committed uv, npm and Camoufox caches and installs system browser packages only in the browser job.
+
+Record each release's commit, fast-gate result, image digests, complete pytest state (`passed`, `failed`, `timed out`, or `not run`), online health result, and real-account status. Synthetic checks do not establish login, long-term renewal, or Voice audio acceptance.

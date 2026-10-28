@@ -102,3 +102,26 @@ No real-account login or deployment is part of this documentation refactor.
 
 Other vendors, IMAP, concurrent browser scheduling, multi-user authorization,
 multi-host queues and automated CAPTCHA handling are outside v1 scope.
+
+## Release record template
+
+Copy this template for each deployment. Keep the immutable image digests and the workflow run URL with the record.
+
+```text
+release_commit: <40-character commit>
+fast_gate: passed | failed
+app_image_digest: sha256:<64 hex characters>
+worker_image_digest: sha256:<64 hex characters>
+full_pytest: passed | failed | timed out | not run
+migration: passed | failed
+online_app_worker_health: passed | failed
+https_redirect_home_static_readyz: passed | failed
+websocket_sse_cliproxyapi_voice_synthetic: passed | failed | not run
+certificate_renewal: passed | failed | unverified
+real_account_login: verified | unverified
+long_term_renewal: verified | unverified
+voice_actual_call: verified | unverified
+rollback_or_old_bridge_cleanup: <action and timestamp>
+```
+
+The fast gate is the deployment conclusion. Complete pytest and real-account rows remain separate evidence and must retain their actual state.
