@@ -26,6 +26,13 @@ const syncLabels: Record<string, string> = {
 const pauseLabels = {
   signed_out: "会话已退出，请重新登录", identity_mismatch: "账号身份不匹配", maintenance_disabled: "自动维护已关闭",
 };
+const errorLabels: Record<string, string> = {
+  account_deleted: "账号已被 OpenAI 删除",
+  account_deactivated: "账号已被 OpenAI 停用",
+  account_suspended: "账号已被 OpenAI 暂停",
+  identity_mismatch: "账号身份不匹配",
+  check_failed: "检查失败",
+};
 export function HealthTime({ value, now = Date.now() }: { value: number | null; now?: number }) {
   if (value === null) return <>暂无记录</>;
   const date = new Date(value * 1000);
@@ -48,7 +55,7 @@ export function SessionHealth({ session, syncs = [], targets, openTask }: {
       {session?.task_id != null && session.activity !== "idle" && <button className="health-task" onClick={() => openTask(session.task_id!)}>查看任务 #{session.task_id}</button>}
     </div>
     <p className="muted">最近检查：<span><HealthTime value={session?.checked_at ?? null} /></span> · 最近成功：<span><HealthTime value={session?.last_success_at ?? null} /></span></p>
-    {session?.error_code && <p className="muted">检查错误：{session.error_code}</p>}
+    {session?.error_code && <p className="muted">检查错误：{errorLabels[session.error_code] || session.error_code}</p>}
     {syncs.map((sync) => <div key={sync.target_id} className="target-health">
       <div className="health-row">
         <strong>{targets.find((target) => target.id === sync.target_id)?.name || `目标 #${sync.target_id}`}</strong>

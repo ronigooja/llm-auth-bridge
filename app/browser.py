@@ -42,9 +42,43 @@ class BrowserError(RuntimeError):
     """Safe error suitable for API display; never include provider output."""
 
 
+class ProviderRejection(BrowserError):
+    def __init__(self, code, message):
+        self.error_code = code
+        super().__init__(message)
+
+
 class ReauthenticationRequired(BrowserError):
     def __init__(self):
         super().__init__("reauth_required")
+
+
+def provider_rejection(page):
+    """Classify explicit provider account rejection pages.
+
+    The provider changes its markup frequently. Keep this deliberately small:
+    inspect only visible body text, return a stable code/message, and never
+    expose the page contents in task history or logs.
+    """
+    try:
+        text = page.locator("body").inner_text(timeout=1000)
+    except Exception:
+        return None
+    text = re.sub(r"\s+", " ", text or "").strip().casefold()
+    if not text:
+        return None
+    patterns = (
+        ("account_deleted", ("account has been deleted", "account was deleted", "账号已删除", "账户已删除"),
+         "OpenAI 已删除此账号，无法继续登录"),
+        ("account_deactivated", ("account has been deactivated", "account was deactivated", "账号已停用", "账户已停用"),
+         "OpenAI 已停用此账号，无法继续登录"),
+        ("account_suspended", ("account has been suspended", "account was suspended", "账号已暂停", "账户已暂停"),
+         "OpenAI 已暂停此账号，无法继续登录"),
+    )
+    for code, needles, message in patterns:
+        if any(needle.casefold() in text for needle in needles):
+            return code, message
+    return None
 
 
 def pkce_pair() -> tuple[str, str]:
@@ -574,6 +608,7 @@ def _run_login(
         with device_directory(account, control) as device:
             context = None
             camoufox_runtime = None
+            page = None
             try:
                 from .browser_identity import context_options
                 options = context_options(account["_browser_profile"], native_window=True)
@@ -698,6 +733,13 @@ def _run_login(
                         if result:
                             _save(context, control)
                             return result
+                    rejection = provider_rejection(page)
+                    if rejection:
+                        code, reason = rejection
+                        _save(context, control)
+                        _human(control, reason, phase=code)
+                        page.wait_for_timeout(500)
+                        continue
                     stage = detect_state(page)
                     marker = (stage, urlsplit(page.url).path)
                     if marker != observed_marker:
@@ -844,6 +886,10 @@ def _run_login(
                         started = time.monotonic()
                     page.wait_for_timeout(500)
             except (PlaywrightError, httpx.HTTPError, json.JSONDecodeError):
+                rejection = provider_rejection(page) if page is not None else None
+                if rejection:
+                    code, reason = rejection
+                    raise ProviderRejection(code, reason) from None
                 raise BrowserError(
                     "Browser authentication failed; review the account and route"
                 ) from None

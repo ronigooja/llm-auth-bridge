@@ -105,7 +105,9 @@ A waiting task accepts code only in `email_code_required`,
 return 409. The last phase accepts manually supplied SMS/ambiguous codes and never
 initiates automatic TOTP or mailbox retrieval. `password_required` means the
 single password submission needs browser review; `waiting_human` means general
-review. Continue/takeover remain available in all waiting phases. Older generic
+review. `account_deleted`, `account_deactivated`, and `account_suspended` mean
+the provider displayed an explicit account rejection page; the browser remains
+available for takeover so the operator can inspect it. Continue/takeover remain available in all waiting phases. Older generic
 waiting tasks need page re-identification before code entry. Code is applied only
 to the still-matching challenge. Deploy worker and UI together.
 
@@ -138,6 +140,6 @@ unauthenticated browser access.
 
 ### Web session health and maintenance summaries
 
-Account responses include a `web_session` object with `status` (`unknown`, `valid`, `signed_out`, or `error`), `checked_at`, `last_success_at`, and a safe `error_code`. The value is written only after a leased web session check; account creation and downstream synchronization do not imply a valid web session. `target_syncs` contains the bound target kind, synchronization state, verification time, maintenance plan (`next_check`), pause reason, and active task ID. Credentials are never returned.
+Account responses include a `web_session` object with `status` (`unknown`, `valid`, `signed_out`, or `error`), `checked_at`, `last_success_at`, and a safe `error_code`. Provider rejection codes include `account_deleted`, `account_deactivated`, and `account_suspended`. The value is written only after a leased web session check; account creation and downstream synchronization do not imply a valid web session. `target_syncs` contains the bound target kind, synchronization state, verification time, maintenance plan (`next_check`), pause reason, and active task ID. Credentials are never returned.
 
 Task `kind` identifies the operation (`maintenance`, `login`, or `browser_window`). Its `phase` distinguishes web-session checking from downstream synchronization. A task is shown as checking only while its execution lease is valid; queued maintenance is reported as waiting for a check. `next_check` describes scheduling and does not determine session validity.

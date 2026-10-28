@@ -511,7 +511,11 @@ class Worker:
                         target_row = conn.execute("SELECT kind FROM targets WHERE id=?", (task["target_id"],)).fetchone()
                         if target_row and target_row["kind"] == "chatgpt-web-voice":
                             self.queue.owned(conn, task["id"], task["execution_id"])
-                            error_code = "identity_mismatch" if "identity" in str(exc).lower() and "match" in str(exc).lower() else "check_failed"
+                            error_code = getattr(exc, "error_code", None) or (
+                                "identity_mismatch"
+                                if "identity" in str(exc).lower() and "match" in str(exc).lower()
+                                else "check_failed"
+                            )
                             conn.execute("INSERT INTO web_session_health(account_id,status,checked_at,last_success_at,error_code) VALUES(?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET status='error',checked_at=excluded.checked_at,error_code=excluded.error_code", (task["account_id"], "error", time.time(), None, error_code))
                 self._finish(
                     task,

@@ -12,6 +12,7 @@ from app.browser import (
     pkce_pair,
     session_result,
     validate_callback,
+    provider_rejection,
 )
 
 
@@ -94,6 +95,29 @@ def test_browser_session_identity_and_expiry():
     data["accessToken"] = token({"exp": 1})
     with pytest.raises(BrowserError):
         session_result(data, "synthetic@example.com")
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("Your account has been deleted.", ("account_deleted", "OpenAI 已删除此账号，无法继续登录")),
+        ("This account has been deactivated.", ("account_deactivated", "OpenAI 已停用此账号，无法继续登录")),
+        ("Your account has been suspended.", ("account_suspended", "OpenAI 已暂停此账号，无法继续登录")),
+        ("Please sign in to continue.", None),
+    ],
+)
+def test_provider_rejection_classifies_only_explicit_account_messages(body, expected):
+    class Locator:
+        def inner_text(self, timeout):
+            assert timeout == 1000
+            return body
+
+    class Page:
+        def locator(self, selector):
+            assert selector == "body"
+            return Locator()
+
+    assert provider_rejection(Page()) == expected
 
 
 @pytest.mark.parametrize("mode", ["manual", "maintenance", "cancel", "browser_window", "browser_window_cancel"])
