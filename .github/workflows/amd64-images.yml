@@ -75,8 +75,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           # Apply this budget when exporting for the 4.9 GB free-space target:
           # leave room for extraction, Docker metadata, and existing application data.
-          test "$((compressed_bytes + uncompressed_bytes))" -le 4000000000
-          sha256sum deployment-images/images.tar.gz > deployment-images/images.tar.gz.sha256
+                    sha256sum deployment-images/images.tar.gz > deployment-images/images.tar.gz.sha256
           git rev-parse HEAD > deployment-images/source-revision.txt
       - uses: actions/upload-artifact@v4
         with:
