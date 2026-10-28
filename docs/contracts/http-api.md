@@ -135,3 +135,9 @@ Outside the API prefix, `/healthz` provides liveness and `/readyz` validates the
 initialized database/key. Authenticated `/account-window`, `/account-viewer`,
 `/account-viewer.js` and noVNC assets support the account popup; they do not grant
 unauthenticated browser access.
+
+### Web session health and maintenance summaries
+
+Account responses include a `web_session` object with `status` (`unknown`, `valid`, `signed_out`, or `error`), `checked_at`, `last_success_at`, and a safe `error_code`. The value is written only after a leased web session check; account creation and downstream synchronization do not imply a valid web session. `target_syncs` contains the bound target kind, synchronization state, verification time, maintenance plan (`next_check`), pause reason, and active task ID. Credentials are never returned.
+
+Task `kind` identifies the operation (`maintenance`, `login`, or `browser_window`). Its `phase` distinguishes web-session checking from downstream synchronization. A task is shown as checking only while its execution lease is valid; queued maintenance is reported as waiting for a check. `next_check` describes scheduling and does not determine session validity.
