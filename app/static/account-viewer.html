@@ -7,12 +7,27 @@
 <style>
 html, body, #desktop { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 body { background: #eef4f8; font: 16px system-ui; }
+#desktop { position: absolute; inset: 0; }
+#toolbar { position: fixed; z-index: 2; top: 8px; right: 8px; display: flex; gap: 6px; align-items: flex-start; }
+#toolbar button { border: 1px solid #768692; border-radius: 4px; background: rgba(255,255,255,.92); color: #18252d; padding: 5px 9px; cursor: pointer; }
+#clipboard-panel { display: none; width: min(340px, calc(100vw - 120px)); padding: 8px; border-radius: 4px; background: rgba(255,255,255,.96); box-shadow: 0 2px 8px #0005; }
+#clipboard-panel.open { display: block; }
+#clipboard-text { box-sizing: border-box; width: 100%; min-height: 70px; resize: vertical; }
+#clipboard-actions { display: flex; gap: 6px; margin-top: 6px; }
 #status { position: fixed; inset: 0; display: grid; place-items: center; margin: 0; }
 #status[hidden] { display: none; }
 </style>
 </head>
 <body>
 <div id="desktop"></div>
+<div id="toolbar" aria-label="账号浏览器工具">
+  <button id="fullscreen" type="button">全屏</button>
+  <button id="clipboard-toggle" type="button" hidden>剪贴板</button>
+  <div id="clipboard-panel" aria-label="剪贴板">
+    <textarea id="clipboard-text" aria-label="剪贴板内容" placeholder="可在此粘贴或编辑文本"></textarea>
+    <div id="clipboard-actions"><button id="clipboard-send" type="button">发送到浏览器</button><button id="clipboard-copy" type="button">复制到本机</button></div>
+  </div>
+</div>
 <p id="status" role="status">正在连接账号浏览器…</p>
 <script type="module" src="/account-viewer.js"></script>
 </body>
