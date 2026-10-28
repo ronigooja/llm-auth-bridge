@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./main";
 
@@ -505,4 +505,69 @@ it("keeps account editor busy until new route and bindings finish refreshing", a
   await user.click(screen.getByRole("button", { name: "登录 Codex" }));
   expect(within(screen.getByRole("dialog")).getByRole("button", { name: "登录 Codex" })).toHaveProperty("disabled", true);
   expect(screen.getByText(/请先在“编辑与绑定”中绑定 ChatGPT Web Voice/)).toBeTruthy();
+});
+
+
+describe("session health refresh", () => {
+  it("refreshes account health every 30 seconds while visible", async () => {
+    let refreshTick: (() => void) | undefined;
+    let accountReads = 0;
+    const interval = vi.spyOn(window, "setInterval").mockImplementation((handler, delay) => {
+      if (delay === 30000) refreshTick = handler as () => void;
+      return 1;
+    });
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    vi.mocked(fetch).mockImplementation((input) => {
+      const path = String(input);
+      if (path.endsWith("/auth/session")) return response({ csrf_token: "synthetic" });
+      if (path.endsWith("/accounts")) {
+        accountReads++;
+        return response({ accounts: [{ id: 1, username: "synthetic@example.test", status: "ready", route_type: "direct", target_ids: [], web_session: { status: accountReads === 1 ? "valid" : "signed_out", checked_at: null, last_success_at: null, error_code: null, activity: "idle", task_id: null }, target_syncs: [] }] });
+      }
+      if (path.endsWith("/targets")) return response({ targets: [] });
+      return response({ tasks: [] });
+    });
+    try {
+      render(<App />);
+      expect(await screen.findByText("会话有效")).toBeTruthy();
+      expect(screen.getByText("历史同步成功")).toBeTruthy();
+      expect(refreshTick).toBeDefined();
+      await act(async () => { refreshTick!(); });
+      expect(await screen.findByText("已退出登录")).toBeTruthy();
+      expect(screen.getByText("历史同步成功")).toBeTruthy();
+      visibility.mockReturnValue("hidden");
+      await act(async () => { refreshTick!(); });
+      expect(accountReads).toBe(2);
+    } finally { interval.mockRestore(); visibility.mockRestore(); }
+  });
+  it.each([
+    ["maintenance", "自动维护", "checking_session", "正在检查会话"],
+    ["login", "登录", "syncing", "正在同步"],
+    ["browser_window", "账号窗口", "browser_window", "账号窗口已就绪"],
+  ])("labels %s tasks and refreshes health after completion", async (kind, kindLabel, phase, phaseLabel) => {
+    window.history.replaceState(null, "", "/#tasks/7");
+    let taskEvent: ((event: MessageEvent) => void) | undefined;
+    let accountReads = 0;
+    vi.stubGlobal("EventSource", class {
+      addEventListener(_name: string, callback: (event: MessageEvent) => void) { taskEvent = callback; }
+      close() {}
+    });
+    const task = { id: 7, account_id: 1, target_id: 2, state: "running", kind, phase };
+    vi.mocked(fetch).mockImplementation((input) => {
+      const path = String(input);
+      if (path.endsWith("/auth/session")) return response({ csrf_token: "synthetic" });
+      if (path.endsWith("/accounts")) { accountReads++; return response({ accounts: [] }); }
+      if (path.endsWith("/targets")) return response({ targets: [] });
+      if (path.endsWith("/tasks")) return response({ tasks: [task] });
+      if (path.endsWith("/history")) return response({ events: [] });
+      return response(task);
+    });
+    render(<App />);
+    expect(await screen.findByText(`任务类型：${kindLabel}`)).toBeTruthy();
+    expect(screen.getByText(phaseLabel)).toBeTruthy();
+    expect(screen.getByRole("button", { name: new RegExp(`${kindLabel} · 任务 #7`) })).toBeTruthy();
+    const previousReads = accountReads;
+    await act(async () => { taskEvent!(new MessageEvent("task", { data: JSON.stringify({ task_id: 7, event_id: 1, state: "succeeded" }) })); });
+    await waitFor(() => expect(accountReads).toBeGreaterThan(previousReads));
+  });
 });

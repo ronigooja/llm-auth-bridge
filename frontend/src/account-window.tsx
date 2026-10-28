@@ -204,5 +204,5 @@ export function useAccountWindow(enabled: boolean) {
       {available && <iframe title="账号浏览器" src={accountViewerUrl(task.id, interactive)} style={{ border: 0, width: "100%", flex: 1, minHeight: 0 }} />}
     </>, host)}
   </>;
-  return { open, panel };
+  return { open, panel, task };
 }
