@@ -84,6 +84,7 @@ const labels: Record<string, string> = {
   account_deactivated: "账号已被停用",
   account_suspended: "账号已被暂停",
   account_rejected: "账号登录被 OpenAI 拒绝",
+  browser_review: "需要人工检查浏览器页面",
   browser: "浏览器已就绪",
   browser_window: "账号窗口已就绪",
   waiting_dependency: "等待前序任务同步",
@@ -1331,7 +1332,7 @@ function TaskDetail({ id, updated, openAccountWindow }: { id: number; updated: (
               {task.phase === "password_required" && (
                 <p className="muted">密码页面仍未通过。请接管浏览器检查密码或页面提示，完成后点击“继续任务”。</p>
               )}
-              {!["email_code_required", "authenticator_code_required", "verification_code_required", "password_required", "browser_window", "account_deleted", "account_deactivated", "account_suspended", "account_rejected"].includes(task.phase || "") && (
+              {!["email_code_required", "authenticator_code_required", "verification_code_required", "password_required", "browser_window", "account_deleted", "account_deactivated", "account_suspended", "account_rejected", "browser_review"].includes(task.phase || "") && (
                 <p className="muted">请接管浏览器检查当前步骤，再点击“继续任务”重新识别页面；识别到验证码页面后会显示验证码输入框。</p>
               )}
               {task.phase === "verification_code_required" && (
@@ -1359,7 +1360,7 @@ function TaskDetail({ id, updated, openAccountWindow }: { id: number; updated: (
                 </form>
               )}
               <div className="actions">
-                {["account_deleted", "account_deactivated", "account_suspended", "account_rejected"].includes(task.phase || "") ? (
+                {["account_deleted", "account_deactivated", "account_suspended", "account_rejected", "browser_review"].includes(task.phase || "") ? (
                   <p className="muted">请接管浏览器查看拒绝页面；该页面不会继续自动提交，请取消任务后重新绑定可用账号。</p>
                 ) : (
                   <button

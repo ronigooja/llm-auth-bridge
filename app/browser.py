@@ -856,8 +856,8 @@ def _run_login(
                         }.get(
                             stage,
                             (
-                                "waiting_human",
-                                "Review the browser and continue after completing the login step",
+                                "browser_review",
+                                "Browser page requires manual review; take over the browser or cancel this task",
                             ),
                         )
                         code = _human(control, reason, phase)
