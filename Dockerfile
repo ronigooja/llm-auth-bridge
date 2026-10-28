@@ -18,7 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends novnc tini \
     && groupadd --gid 10001 bridge && useradd --uid 10001 --gid bridge --create-home bridge \
     && mkdir /data && chown bridge:bridge /data
 COPY pyproject.toml uv.lock ./
-RUN pip install --no-cache-dir uv==0.8.22 && uv sync --frozen --no-dev --no-install-project
+RUN pip install --no-cache-dir uv==0.8.22 \
+    && uv sync --no-cache --frozen --no-dev --no-install-project
 ENV PATH=/app/.venv/bin:$PATH
 USER bridge
 ENTRYPOINT ["/usr/bin/tini", "--"]
@@ -29,8 +30,7 @@ COPY --from=frontend /build/dist/ ./frontend/dist/
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
-FROM base AS worker
-USER root
+FROM python:3.12.10-slim-bookworm AS gost
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
     && case "$TARGETARCH" in \
@@ -41,16 +41,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && echo "$GOST_SHA  /tmp/gost.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/gost.tar.gz -C /usr/local/bin gost \
     && rm /tmp/gost.tar.gz
+
+FROM base AS worker
+USER root
+COPY --from=gost /usr/local/bin/gost /usr/local/bin/gost
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright XDG_CACHE_HOME=/opt/cache DISPLAY=:99
 RUN apt-get update && apt-get install -y --no-install-recommends tigervnc-standalone-server openbox x11-utils websockify libgtk-3-0 libasound2 \
     && mkdir -p /opt/playwright /opt/cache \
-    && uv pip install --python /app/.venv/bin/python --no-cache camoufox==0.5.8 playwright==1.56.0 \
+    && uv sync --no-cache --frozen --no-dev --no-install-project --extra browser \
     && XDG_CACHE_HOME=/opt/cache /app/.venv/bin/python -m camoufox fetch \
     && chown -R bridge:bridge /opt/playwright /opt/cache \
     && chmod -R u+rwX,go+rX /opt/playwright /opt/cache \
     && rm -rf /var/lib/apt/lists/*
-# The uv environment also installs the exact browser API version for runtime imports.
-RUN uv sync --frozen --no-dev --no-install-project --extra browser
 RUN <<'SH'
 cat > /usr/local/bin/bridge-worker <<'SCRIPT'
 #!/bin/sh
