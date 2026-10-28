@@ -148,21 +148,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - name: Build app and worker images
-        timeout-minutes: 14
-        run: |
-          set -Eeuo pipefail
-          mkdir -p fast-gate-logs
-          docker buildx build --load --platform linux/amd64 --target app \
-            --cache-from type=gha,scope=fast-gate-app --cache-to type=gha,scope=fast-gate-app,mode=max \
-            --tag llm-auth-bridge-app:${GITHUB_SHA} . > fast-gate-logs/app-build.log 2>&1
-          docker buildx build --load --platform linux/amd64 --target worker \
-            --cache-from type=gha,scope=fast-gate-worker --cache-to type=gha,scope=fast-gate-worker,mode=max \
-            --tag llm-auth-bridge-worker:${GITHUB_SHA} . > fast-gate-logs/worker-build.log 2>&1
+      - name: Build app image
+        timeout-minutes: 8
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: app
+          platforms: linux/amd64
+          load: true
+          tags: llm-auth-bridge-app:${{ github.sha }}
+          cache-from: type=gha,scope=fast-gate-app
+          cache-to: type=gha,scope=fast-gate-app,mode=max
+      - name: Build worker image
+        timeout-minutes: 12
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: worker
+          platforms: linux/amd64
+          load: true
+          tags: llm-auth-bridge-worker:${{ github.sha }}
+          cache-from: type=gha,scope=fast-gate-worker
+          cache-to: type=gha,scope=fast-gate-worker,mode=max
       - name: Verify non-root worker, seccomp, and readyz
         timeout-minutes: 4
         run: |
           set -Eeuo pipefail
+          mkdir -p fast-gate-logs
           docker run --rm --security-opt no-new-privileges:true \
             --security-opt seccomp=deploy/playwright-seccomp.json \
             --entrypoint sh llm-auth-bridge-worker:${GITHUB_SHA} -c 'test "$(id -u)" -eq 10001'
