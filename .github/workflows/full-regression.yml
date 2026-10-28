@@ -40,7 +40,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p regression-logs
-          exec > >(tee regression-logs/provision.log) 2>&1
+          exec > regression-logs/provision.log 2>&1
           uv sync --frozen --extra test --extra browser
           uv run python -m camoufox fetch
           sudo apt-get update
@@ -58,8 +58,8 @@ jobs:
           set +e
           timeout --signal=TERM --kill-after=20s 18m xvfb-run -a -s '-screen 0 1920x1080x24' \
             uv run python -m pytest -p tools.pytest_deadline -v -ra -o faulthandler_timeout=120 \
-            --junitxml=regression-logs/pytest.xml 2>&1 | tee regression-logs/pytest.log
-          result=${PIPESTATUS[0]}
+            --junitxml=regression-logs/pytest.xml > regression-logs/pytest.log 2>&1
+          result=$?
           printf '%s\n' "$result" > regression-logs/pytest.exit
           if [ "$result" -eq 124 ] || [ "$result" -eq 137 ]; then
             echo 'pytest exceeded the hard timeout' >> regression-logs/pytest.log

@@ -45,7 +45,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p "$GITHUB_WORKSPACE/fast-gate-logs"
-          exec > >(tee "$GITHUB_WORKSPACE/fast-gate-logs/frontend.log") 2>&1
+          exec > "$GITHUB_WORKSPACE/fast-gate-logs/frontend.log" 2>&1
           npm ci --ignore-scripts
           timeout --signal=TERM --kill-after=15s 3m npm test
           timeout --signal=TERM --kill-after=15s 4m npm run build
@@ -71,7 +71,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p fast-gate-logs
-          exec > >(tee fast-gate-logs/provision.log) 2>&1
+          exec > fast-gate-logs/provision.log 2>&1
           uv sync --frozen --extra test --extra browser
       - name: Set up cached synthetic proxy
         timeout-minutes: 4
@@ -82,9 +82,9 @@ jobs:
           set -Eeuo pipefail
           set +e
           timeout --signal=TERM --kill-after=15s 5m bash -o pipefail -c \
-            'uv run python -m pytest -p tools.pytest_deadline -v -ra -o faulthandler_timeout=60 \
+            'uv run python -m pytest -p tools.pytest_deadline -x -v -ra -o faulthandler_timeout=60 \
               --ignore-glob="tests/*_live.py" \
-              --junitxml=fast-gate-logs/pytest-nonbrowser.xml 2>&1 | tee fast-gate-logs/pytest-nonbrowser.log'
+              --junitxml=fast-gate-logs/pytest-nonbrowser.xml > fast-gate-logs/pytest-nonbrowser.log 2>&1'
           result=$?
           printf '%s\n' "$result" > fast-gate-logs/pytest-nonbrowser.exit
           exit "$result"
@@ -115,7 +115,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p fast-gate-logs
-          exec > >(tee fast-gate-logs/browser-provision.log) 2>&1
+          exec > fast-gate-logs/browser-provision.log 2>&1
           uv sync --frozen --extra test --extra browser
           uv run python -m camoufox fetch
           sudo apt-get update
@@ -128,9 +128,9 @@ jobs:
           set -Eeuo pipefail
           set +e
           timeout --signal=TERM --kill-after=15s 3m xvfb-run -a -s '-screen 0 1280x720x24' \
-            uv run python -m pytest -p tools.pytest_deadline -v -ra tests/test_browser_live.py -k 'real_camoufox_detects_and_submits_synthetic_login or codex_existing' \
-            --junitxml=fast-gate-logs/browser.xml 2>&1 | tee fast-gate-logs/browser.log
-          result=${PIPESTATUS[0]}
+            uv run python -m pytest -p tools.pytest_deadline -x -v -ra tests/test_browser_live.py -k 'real_camoufox_detects_and_submits_synthetic_login or codex_existing' \
+            --junitxml=fast-gate-logs/browser.xml > fast-gate-logs/browser.log 2>&1
+          result=$?
           printf '%s\n' "$result" > fast-gate-logs/browser.exit
           exit "$result"
       - uses: actions/upload-artifact@v4
