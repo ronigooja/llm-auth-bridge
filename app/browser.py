@@ -906,6 +906,14 @@ def _run_login(
                 if rejection:
                     code, reason = rejection
                     raise ProviderRejection(code, reason) from None
+                if page is not None:
+                    _save(context, control)
+                    stage = detect_state(page)
+                    _human(
+                        control,
+                        "Browser authentication hit an unexpected page or navigation error; take over the browser to inspect it",
+                        phase="browser_review" if stage == "unknown" else "waiting_human",
+                    )
                 raise BrowserError(
                     "Browser authentication failed; review the account and route"
                 ) from None
