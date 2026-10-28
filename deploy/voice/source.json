@@ -1,8 +1,8 @@
 {
   "repository": "https://github.com/ronigooja/chatgpt-web-voice.git",
-  "revision": "6338ac478070aaa34bfe7a3c0469caf9e9174c02",
-  "version": "bridge-v1-6338ac4",
-  "image_reference": "ghcr.io/ronigooja/chatgpt-web-voice:bridge-v1-6338ac4",
+  "revision": "e6001bc98fabdfc2a8a14478ed426b90e1107c89",
+  "version": "bridge-v1-e6001bc",
+  "image_reference": "ghcr.io/ronigooja/chatgpt-web-voice:bridge-v1-e6001bc",
   "image_digest": "published-by-voice-image-workflow",
   "real_provider_verification": "unverified"
 }
