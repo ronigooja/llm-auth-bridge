@@ -179,7 +179,9 @@ def assert_native_viewer(frame, native_page):
         return {readonly: rfb.viewOnly, scale: rfb.scaleViewport, resize: rfb.resizeSession};
     }""") == {"readonly": True, "scale": False, "resize": True}
     assert frame.get_by_role("status").is_hidden()
-    assert frame.locator("select, button, input").count() == 0
+    assert frame.locator("#fullscreen").is_visible()
+    assert frame.locator("#clipboard-toggle").is_hidden()
+    assert frame.locator("#clipboard-panel").is_hidden()
 
 
 def assert_read_only_viewer(frame):
@@ -294,3 +296,125 @@ def test_packaged_novnc_connects_read_only_without_pausing_task(settings, resour
                     ).fetchone()[0] == 1
             finally:
                 context.close()
+
+
+# These checks use the served viewer and real browser DOM, with synthetic RFB
+# and browser APIs so clipboard permissions do not depend on CI's desktop.
+SYNTHETIC_RFB = """
+export default class RFB extends EventTarget {
+    constructor() {
+        super();
+        this.pastes = [];
+        setTimeout(() => this.dispatchEvent(new Event('connect')), 0);
+    }
+    clipboardPasteFrom(text) { this.pastes.push(text); }
+}
+"""
+
+SYNTHETIC_BROWSER_APIS = """
+window.viewerChecks = { copies: [], fallbackCopies: [], fullscreen: [], keys: [] };
+let fullscreenElement = null;
+Object.defineProperty(document, 'fullscreenElement', {get: () => fullscreenElement});
+Element.prototype.requestFullscreen = async function () {
+    fullscreenElement = this;
+    window.viewerChecks.fullscreen.push('enter');
+    document.dispatchEvent(new Event('fullscreenchange'));
+};
+document.exitFullscreen = async () => {
+    fullscreenElement = null;
+    window.viewerChecks.fullscreen.push('exit');
+    document.dispatchEvent(new Event('fullscreenchange'));
+};
+Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+    writeText: async text => {
+        if (window.viewerChecks.denyClipboard) throw new Error('Clipboard permission denied');
+        window.viewerChecks.copies.push(text);
+    }
+}});
+document.execCommand = command => {
+    if (command !== 'copy') return false;
+    const field = document.activeElement;
+    window.viewerChecks.fallbackCopies.push(field.value.slice(field.selectionStart, field.selectionEnd));
+    return true;
+};
+"""
+
+
+@pytest.mark.parametrize("mode", ["monitor", "takeover"])
+@pytest.mark.parametrize("engine", ["camoufox", pytest.param("webkit", marks=pytest.mark.skipif(
+    not os.getenv("BRIDGE_TEST_WEBKIT"), reason="Enable installed WebKit acceptance explicitly",
+))])
+def test_account_viewer_clipboard_and_fullscreen_controls(settings, mode, engine):
+    """Synthetic browser API acceptance; no real account or system clipboard."""
+    with web_server(settings) as url, viewer_browser(engine) as browser:
+        context = browser.new_context(service_workers="block")
+        try:
+            context.add_init_script(SYNTHETIC_BROWSER_APIS)
+            context.route("**/novnc/core/rfb.js", lambda route: route.fulfill(
+                content_type="text/javascript", body=SYNTHETIC_RFB,
+            ))
+            assert context.request.post(
+                url + "/api/v1/auth/login", data={"password": "synthetic-password-123"},
+            ).status == 200
+            page = context.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(f"{url}/account-viewer?path=api/v1/tasks/1/{mode}")
+            page.wait_for_function("document.querySelector('#status').hidden")
+            assert page.locator("#toolbar").is_visible()
+            assert page.locator("#fullscreen").is_visible()
+            assert page.locator("#clipboard-toggle").is_visible() == (mode == "takeover")
+            assert page.locator("#clipboard-panel").is_hidden()
+            page.evaluate("""() => {
+                document.addEventListener('keydown', event => viewerChecks.keys.push(event.key));
+            }""")
+            page.locator("#fullscreen").click()
+            page.wait_for_function("document.fullscreenElement === document.documentElement")
+            page.evaluate("""() => document.dispatchEvent(new KeyboardEvent('keydown', {
+                key: 'Escape', code: 'Escape', bubbles: true, cancelable: true,
+            }))""")
+            page.wait_for_function("document.fullscreenElement === null")
+            assert page.evaluate("viewerChecks.keys") == []
+            page.locator("#fullscreen").click()
+            page.locator("#fullscreen").click()
+            page.wait_for_function("document.fullscreenElement === null")
+            assert page.evaluate("viewerChecks.fullscreen") == ["enter", "exit", "enter", "exit"]
+
+            if mode == "takeover":
+                page.locator("#clipboard-toggle").click()
+                assert page.locator("#clipboard-panel").is_visible()
+                page.locator("#clipboard-text").fill("Synthetic local clipboard\nsecond line")
+                page.locator("#clipboard-send").click()
+            page.evaluate("""() => {
+                const event = new Event('paste', {bubbles: true, cancelable: true});
+                Object.defineProperty(event, 'clipboardData', {value: {
+                    getData: type => type === 'text/plain' || type === 'text' ? 'Synthetic native paste' : '',
+                }});
+                document.dispatchEvent(event);
+            }""")
+            assert page.evaluate("""async () => {
+                const {rfb} = await import('/account-viewer.js');
+                return rfb.pastes;
+            }""") == (["Synthetic local clipboard\nsecond line", "Synthetic native paste"]
+                        if mode == "takeover" else [])
+            page.evaluate("""async () => {
+                const {rfb} = await import('/account-viewer.js');
+                rfb.dispatchEvent(new CustomEvent('clipboard', {detail: {text: 'Synthetic remote clipboard'}}));
+            }""")
+            if mode == "takeover":
+                assert page.locator("#clipboard-text").input_value() == "Synthetic remote clipboard"
+                page.locator("#clipboard-copy").click()
+                page.wait_for_function("viewerChecks.copies.length === 1")
+                assert page.evaluate("viewerChecks.copies") == ["Synthetic remote clipboard"]
+                page.evaluate("viewerChecks.denyClipboard = true")
+                page.locator("#clipboard-copy").click()
+                page.wait_for_function("viewerChecks.fallbackCopies.length === 1")
+                assert page.evaluate("viewerChecks.fallbackCopies") == ["Synthetic remote clipboard"]
+                page.locator("#clipboard-toggle").click()
+                assert page.locator("#clipboard-panel").is_hidden()
+            else:
+                assert page.locator("#clipboard-panel").is_hidden()
+                assert page.evaluate("viewerChecks.copies") == []
+            assert errors == []
+        finally:
+            context.close()
