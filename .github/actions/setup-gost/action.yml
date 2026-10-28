@@ -1,0 +1,33 @@
+name: Set up checksum-verified GOST
+description: Reuse the pinned amd64 synthetic proxy executable on Linux runners.
+inputs: {}
+runs:
+  using: composite
+  steps:
+    - name: Restore pinned GOST executable
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/environment/gost/3.3.1-linux-amd64
+        key: gost-${{ runner.os }}-${{ runner.arch }}-3.3.1-e0e3a2c9116e2f025
+    - name: Install and expose pinned GOST
+      shell: bash
+      run: |
+        set -Eeuo pipefail
+        test "$RUNNER_OS" = Linux
+        test "$RUNNER_ARCH" = X64
+        gost_dir="$HOME/environment/gost/3.3.1-linux-amd64"
+        if [ ! -x "$gost_dir/gost" ]; then
+          gost_temp=$(mktemp -d /tmp/bridge-gost.XXXXXX)
+          trap 'rm -rf "$gost_temp"' EXIT
+          gost_source=https://github.com/go-gost/gost/releases/download/v3.3.1/gost_3.3.1_linux_amd64.tar.gz
+          printf 'Downloading %s to %s/gost.tar.gz; installing to %s/gost\n' "$gost_source" "$gost_temp" "$gost_dir"
+          curl --connect-timeout 15 --max-time 120 --retry 2 -fsSL "$gost_source" -o "$gost_temp/gost.tar.gz"
+          echo "e0e3a2c9116e2f025e962bba340749f80696bda318613d45e5ae96dd0bcae37c  $gost_temp/gost.tar.gz" | sha256sum -c -
+          tar -xzf "$gost_temp/gost.tar.gz" -C "$gost_temp" gost
+          mkdir -p "$gost_dir"
+          install -m 755 "$gost_temp/gost" "$gost_dir/gost"
+        else
+          printf 'Reusing GOST at %s/gost\n' "$gost_dir"
+        fi
+        printf 'BRIDGE_TEST_GOST=%s/gost\n' "$gost_dir" >> "$GITHUB_ENV"

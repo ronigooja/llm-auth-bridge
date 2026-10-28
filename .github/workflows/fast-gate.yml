@@ -73,13 +73,11 @@ jobs:
           mkdir -p fast-gate-logs
           exec > >(tee fast-gate-logs/provision.log) 2>&1
           uv sync --frozen --extra test --extra browser
-          curl -fsSL https://github.com/go-gost/gost/releases/download/v3.3.1/gost_3.3.1_linux_amd64.tar.gz -o /tmp/gost.tar.gz
-          echo 'e0e3a2c9116e2f025e962bba340749f80696bda318613d45e5ae96dd0bcae37c  /tmp/gost.tar.gz' | sha256sum -c -
-          tar -xzf /tmp/gost.tar.gz -C /tmp gost
+      - name: Set up cached synthetic proxy
+        timeout-minutes: 4
+        uses: ./.github/actions/setup-gost
       - name: Run non-browser pytest gate
         timeout-minutes: 7
-        env:
-          BRIDGE_TEST_GOST: /tmp/gost
         run: |
           set -Eeuo pipefail
           set +e
