@@ -617,6 +617,30 @@ def _human(control, reason: str, phase: str = "waiting_human") -> str | None:
     return result
 
 
+def _new_foreground_page(context):
+    """Create the sole task page and make it the page shown by takeover/VNC.
+
+    Persistent Firefox profiles can retain a prior tab/window. If the worker
+    creates a new page without closing or foregrounding those pages, the
+    operator may interact with a different page than the worker is observing.
+    Login tasks are single-page flows, so close retained pages before creating
+    the task page and explicitly bring it to the foreground.
+    """
+    for existing in list(getattr(context, "pages", ())):
+        try:
+            if not existing.is_closed():
+                existing.close()
+        except Exception:
+            # A stale retained page must not prevent creation of the task page.
+            pass
+    page = context.new_page()
+    try:
+        page.bring_to_front()
+    except Exception:
+        pass
+    return page
+
+
 def _get_session(context, username: str) -> dict | None:
     response = context.request.get(
         CHATGPT_ORIGIN + "/api/auth/session", timeout=10000, max_redirects=0
@@ -738,7 +762,7 @@ def _run_login(
                 # completed. Publish only initialized devices to the archive.
                 device.mark_ready()
                 context.set_default_timeout(10000)
-                page = context.new_page()
+                page = _new_foreground_page(context)
                 configure_page_identity(context, page, account["_browser_profile"])
                 fit_browser_window(context, page)
                 if hasattr(control, "browser_ready"):

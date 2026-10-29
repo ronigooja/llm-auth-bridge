@@ -14,6 +14,7 @@ from app.browser import (
     validate_callback,
     provider_rejection,
     wait_provider_rejection,
+    _new_foreground_page,
 )
 
 
@@ -173,6 +174,38 @@ def test_wait_provider_rejection_rechecks_loading_page():
     assert wait_provider_rejection(page)[0] == "account_rejected"
     assert page.waits == 2
     assert wait_provider_rejection(_page("https://auth.openai.com/log-in", ""), attempts=3) is None
+
+
+def test_new_foreground_page_closes_retained_pages_and_focuses_task_page():
+    events = []
+
+    class Page:
+        def __init__(self, name):
+            self.name = name
+            self.closed = False
+
+        def is_closed(self):
+            return self.closed
+
+        def close(self):
+            self.closed = True
+            events.append(("close", self.name))
+
+        def bring_to_front(self):
+            events.append(("front", self.name))
+
+    retained = Page("retained")
+    task_page = Page("task")
+
+    class Context:
+        pages = [retained]
+
+        def new_page(self):
+            events.append("new")
+            return task_page
+
+    assert _new_foreground_page(Context()) is task_page
+    assert events == [("close", "retained"), "new", ("front", "task")]
 
 
 @pytest.mark.parametrize("mode", ["manual", "maintenance", "cancel", "browser_window", "browser_window_cancel"])
