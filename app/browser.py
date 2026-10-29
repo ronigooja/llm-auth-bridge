@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit
 
 from .browser_device import device_directory
 from .browser_identity import configure_page_identity
-from .routing import account_route
+from .routing import RouteError, account_route
 from .route_timezone import resolve_timezone
 from .totp import generate_code, seconds_remaining
 
@@ -724,9 +724,18 @@ def _run_login(
     with account_route(account) as route:
         if account.get("route_type") == "proxy":
             control.phase("route_timezone", "Resolving account route timezone")
-            zone = resolve_timezone(route.session, checkpoint=control.checkpoint)
-            control.update_timezone(zone)
-            account["_browser_profile"]["context"]["timezone_id"] = zone
+            try:
+                zone = resolve_timezone(route.session, checkpoint=control.checkpoint)
+            except RouteError:
+                # Public geolocation services can be unavailable even while
+                # the configured proxy can reach the provider.  Do not turn
+                # that auxiliary lookup into login_failed; retain the last
+                # verified account timezone and let the browser exercise the
+                # real route so provider rejection pages remain observable.
+                zone = account["_browser_profile"]["context"]["timezone_id"]
+            else:
+                control.update_timezone(zone)
+                account["_browser_profile"]["context"]["timezone_id"] = zone
         # Snapshot only after context.close(), including exception paths.
         with device_directory(account, control) as device:
             context = None
