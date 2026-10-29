@@ -18,7 +18,11 @@ async function waitForShell(target: Window) {
 }
 
 export function accountViewerUrl(id: number, interactive: boolean) {
-  return `/account-viewer?autoconnect=true&resize=remote&view_only=${!interactive}&shared=true&path=api/v1/tasks/${id}/${interactive ? "takeover" : "monitor"}`;
+  // Use the packaged noVNC client for the live account window. It is the same
+  // client exercised by the native WebSocket acceptance test and handles RFB
+  // negotiation failures instead of leaving the viewer at a permanent
+  // "connecting" state.
+  return `/novnc/vnc.html?autoconnect=true&resize=remote&view_only=${!interactive}&shared=true&path=api/v1/tasks/${id}/${interactive ? "takeover" : "monitor"}`;
 }
 
 // One controller survives page navigation. A native close releases only idle
