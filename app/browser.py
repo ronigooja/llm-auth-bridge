@@ -520,9 +520,17 @@ def _restore_session_cookies(context, directory):
         context.add_cookies(cookies)
 
 
-def _save(context, control):
+def _save(context, control, page=None):
     control.checkpoint()
-    control.save_state(context.storage_state(indexed_db=True))
+    state = context.storage_state(indexed_db=True)
+    # Keep the last provider URL so a later account-window takeover opens the
+    # page that required review instead of resetting to the ChatGPT home page.
+    if page is not None:
+        current_url = page.url
+        parsed = urlsplit(current_url)
+        if parsed.hostname in ("chatgpt.com", "auth.openai.com", "auth0.openai.com"):
+            state["bridge_review_url"] = current_url
+    control.save_state(state)
 
 
 def _human(control, reason: str, phase: str = "waiting_human") -> str | None:
@@ -656,11 +664,16 @@ def _run_login(
                     )
                 control.phase("browser", "Browser ready")
                 if kind == "browser_window":
-                    page.goto(CHATGPT_ORIGIN, wait_until="domcontentloaded", timeout=30000)
-                    _save(context, control)
+                    review_url = (saved_state or {}).get("bridge_review_url")
+                    if not isinstance(review_url, str) or urlsplit(review_url).hostname not in (
+                        "chatgpt.com", "auth.openai.com", "auth0.openai.com"
+                    ):
+                        review_url = CHATGPT_ORIGIN
+                    page.goto(review_url, wait_until="domcontentloaded", timeout=30000)
+                    _save(context, control, page)
                     _human(control, "Use the account browser, then continue to save and close it",
                            phase="browser_window")
-                    _save(context, control)
+                    _save(context, control, page)
                     return None
                 captured = []
                 if native:
@@ -691,7 +704,7 @@ def _run_login(
                     )
                     result = _get_session(context, account["username"])
                     if result:
-                        _save(context, control)
+                        _save(context, control, page)
                         return result
                     if account.get("_maintenance"):
                         raise ReauthenticationRequired()
@@ -907,7 +920,7 @@ def _run_login(
                     code, reason = rejection
                     raise ProviderRejection(code, reason) from None
                 if page is not None:
-                    _save(context, control)
+                    _save(context, control, page)
                     stage = detect_state(page)
                     _human(
                         control,

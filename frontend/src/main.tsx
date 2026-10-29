@@ -1360,8 +1360,15 @@ function TaskDetail({ id, updated, openAccountWindow }: { id: number; updated: (
                 </form>
               )}
               <div className="actions">
-                {["account_deleted", "account_deactivated", "account_suspended", "account_rejected", "browser_review"].includes(task.phase || "") ? (
+                {["account_deleted", "account_deactivated", "account_suspended", "account_rejected"].includes(task.phase || "") ? (
                   <p className="muted">请接管浏览器查看拒绝页面；该页面不会继续自动提交，请取消任务后重新绑定可用账号。</p>
+                ) : task.phase === "browser_review" ? (
+                  <>
+                    <p className="muted">请接管浏览器检查当前页面；确认下一步后点击“继续任务”，系统会重新识别页面。</p>
+                    <button disabled={m.busy} onClick={() => void action("continue")}>
+                      继续任务
+                    </button>
+                  </>
                 ) : (
                   <button
                     disabled={m.busy}
