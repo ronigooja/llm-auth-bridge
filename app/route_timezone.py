@@ -65,7 +65,7 @@ def resolve_timezone(
         check()
         return timezone
     except (
-        httpx.HTTPError, ValueError, TypeError, KeyError, RecursionError,
+        OSError, httpx.HTTPError, ValueError, TypeError, KeyError, RecursionError,
         ZoneInfoNotFoundError,
     ):
         raise RouteError("Could not verify account route timezone") from None

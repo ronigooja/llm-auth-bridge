@@ -77,6 +77,14 @@ def test_route_failure_does_not_expose_sensitive_error(error):
     assert raised.value.__suppress_context__
 
 
+def test_socket_route_failure_is_normalized():
+    def respond(request):
+        raise OSError("synthetic proxy socket failure")
+    with httpx.Client(transport=httpx.MockTransport(respond)) as session:
+        with pytest.raises(RouteError, match='^Could not verify account route timezone$'):
+            resolve_timezone(session)
+
+
 def test_total_deadline_stops_trickling_response(monkeypatch):
     clock = [0]
     monkeypatch.setattr('app.route_timezone.time.monotonic', lambda: clock[0])
