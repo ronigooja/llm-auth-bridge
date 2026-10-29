@@ -73,6 +73,17 @@ verified timezone when the lookup fails, and normalizes low-level socket
 errors to the safe `RouteError` type. The browser then exercises the real route
 so an explicit provider rejection can be classified and observed.
 
+Tasks 76 and 77 showed that this phase can also fail after the route lookup,
+while the task event still reports only `route_timezone`. A production-side
+diagnostic for account 4 independently started the configured route, received
+HTTP 200 from the geolocation endpoint, and resolved `Asia/Tokyo`; the stored
+browser profile was version 4 with a valid timezone field. This rules out a
+general DNS, proxy-authentication, or socket-connectivity failure for that
+check. Commit `09539ec` therefore treats timezone preference persistence as
+auxiliary as well: cancellation and lease-loss errors still stop the task, but
+an ordinary persistence/runtime error must not prevent the provider browser
+from opening.
+
 For this incident, inspect task events first. If the final phase is
 `route_timezone`, the provider page was not reached; do not ask the operator to
 inspect a browser window. After deployment, create a new task and verify that
