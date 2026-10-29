@@ -777,11 +777,11 @@ def _run_login(
                         return result
                     if account.get("_maintenance"):
                         raise ReauthenticationRequired()
-                    page.goto(
-                        CHATGPT_ORIGIN + "/auth/login",
-                        wait_until="domcontentloaded",
-                        timeout=30000,
-                    )
+                    # The current ChatGPT home page already exposes the
+                    # provider login control. Navigating to /auth/login here
+                    # is redundant and can be reported by Playwright as an
+                    # aborted navigation when the provider redirects back to
+                    # the home page, losing the page that should be classified.
                 submitted = set()
                 totp_attempts = 0
                 manual_rounds = 0
