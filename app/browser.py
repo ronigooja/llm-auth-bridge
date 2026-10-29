@@ -462,7 +462,9 @@ def _submit(page):
     # The provider often replaces the document immediately after submission.
     # Do not make Playwright wait for the old document's navigation here; the
     # state loop below observes the resulting provider page and classifies it.
-    button.click(timeout=10000, no_wait_after=True)
+    # Dispatch through the DOM so a provider document replacement cannot make
+    # Playwright wait on or invalidate the old page handle.
+    button.evaluate("element => element.click()")
 
 
 def _restore_legacy_state(context, state):
@@ -849,8 +851,8 @@ def _run_login(
                             continuation = None
                     if stage == "login" and marker not in submitted:
                         control.phase("login", "Opening account sign in")
-                        _visible(page, 'button[data-testid="login-button"]:enabled').click(
-                            timeout=10000, no_wait_after=True
+                        _visible(page, 'button[data-testid="login-button"]:enabled').evaluate(
+                            "element => element.click()"
                         )
                         submitted.add(marker)
                         started = time.monotonic()
