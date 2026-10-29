@@ -70,6 +70,25 @@ def _safe_navigation_diagnostic(page, error, stage=None):
     return f"error={error_name}; page={host}{path}; state={state}"
 
 
+def _safe_page_shape(page, stage=None):
+    """Describe unknown markup without collecting text, credentials, or HTML."""
+    diagnostic = _safe_navigation_diagnostic(page, None, stage)
+    selectors = {
+        "email": 'input[type="email"], input[name="username"]',
+        "password": 'input[type="password"]',
+        "code": 'input[autocomplete="one-time-code"], input[name="code"], input[name="otp"]',
+        "buttons": "button, input[type=submit]",
+        "links": "a",
+    }
+    counts = []
+    for name, selector in selectors.items():
+        try:
+            counts.append(f"{name}={page.locator(selector).count()}")
+        except Exception:
+            counts.append(f"{name}=?")
+    return diagnostic + "; " + "; ".join(counts)
+
+
 _PROVIDER_HOSTS = ("chatgpt.com", "auth.openai.com", "auth0.openai.com")
 _AUTH_HOSTS = ("auth.openai.com", "auth0.openai.com")
 # Applies to every page: phrases specific enough to never appear in ordinary
@@ -989,6 +1008,8 @@ def _run_login(
                                 "Browser page requires manual review; take over the browser or cancel this task",
                             ),
                         )
+                        if phase == "browser_review":
+                            reason += f" ({_safe_page_shape(page, stage)})"
                         code = _human(control, reason, phase)
                         # Takeover can navigate away while a command is pending.
                         # A code applies only to the challenge that requested it.

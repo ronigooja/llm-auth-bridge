@@ -15,6 +15,7 @@ from app.browser import (
     provider_rejection,
     wait_provider_rejection,
     _safe_navigation_diagnostic,
+    _safe_page_shape,
 )
 
 
@@ -32,6 +33,34 @@ def test_safe_navigation_diagnostic_excludes_query_and_page_data():
 
     diagnostic = _safe_navigation_diagnostic(Page(), RuntimeError("password=secret"), "login")
     assert diagnostic == "error=RuntimeError; page=auth.openai.com/u/abc; state=login"
+    assert "secret" not in diagnostic
+
+
+def test_safe_page_shape_reports_structure_without_text():
+    class Locator:
+        def __init__(self, count):
+            self._count = count
+
+        def count(self):
+            return self._count
+
+    class Page:
+        url = "https://auth.openai.com/login?token=secret"
+
+        def locator(self, selector):
+            return Locator({
+                'input[type="email"], input[name="username"]': 1,
+                'input[type="password"]': 0,
+                'input[autocomplete="one-time-code"], input[name="code"], input[name="otp"]': 0,
+                "button, input[type=submit]": 2,
+                "a": 3,
+            }[selector])
+
+    diagnostic = _safe_page_shape(Page(), "unknown")
+    assert diagnostic == (
+        "error=unknown; page=auth.openai.com/login; state=unknown; "
+        "email=1; password=0; code=0; buttons=2; links=3"
+    )
     assert "secret" not in diagnostic
 
 
