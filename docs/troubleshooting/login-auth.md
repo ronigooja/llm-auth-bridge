@@ -65,6 +65,13 @@ the account and route`; their event history stopped at `route_timezone`. The
 operator therefore had no page to inspect for those runs. Treat this evidence
 as a pre-browser failure until a new task records a later phase.
 
+Task 80, run after commit `fa77fe5`, reached `browser` → `login` → `email` and
+then paused at `browser_review`. The browser was therefore opened and made
+available for takeover. The root cause of the earlier pre-browser failures was
+the restored Firefox profile's only startup window: the worker closed it and
+then asked Camoufox to create a new page, which failed with `window is null`.
+The worker now reuses the sole restored window and closes only extra tabs.
+
 ## Proxy route preflight failures
 
 This section applies when a proxy-routed task fails in the `route_timezone`
@@ -100,6 +107,13 @@ Acceptance requires observing that later phase in a serial real-account run.
 Seeing a generic `login_failed` message alone does not establish that the
 provider rejected the account, and a saved account window cannot reconstruct a
 page that was never opened.
+
+When a run reaches `browser_review`, inspect that same task's live browser. If
+the page visibly states that the account was deleted or deactivated, record the
+provider rejection through the task action and stop using the account. If the
+page is still loading or otherwise unclassified, preserve the takeover state
+for operator review; do not convert it to an account rejection from the generic
+message alone.
 
 ## Relevant historical fixes
 
