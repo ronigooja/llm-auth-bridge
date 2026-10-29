@@ -2,7 +2,7 @@
 
 This guide applies when a ChatGPT web login task enters `login_failed` or
 `browser_review`, especially after the provider login control or email form was
-submitted.
+submitted, or when an account proxy is configured.
 
 ## Meaning of the task phases
 
@@ -34,6 +34,26 @@ sequence:
 Task 67 was run on commit `82b92e7` and task 68 on the same deployed revision.
 Both tasks were cancelled after evidence collection. No credentials, cookies,
 page body, screenshots, or browser traces were retained.
+
+## Proxy route preflight failures
+
+This section applies when a proxy-routed task fails in the `route_timezone`
+phase before any browser page is opened. The timezone lookup uses the account
+route to query a public geolocation service. An unavailable geolocation
+service, proxy DNS failure, or proxy socket error must not be reported as a
+provider login failure when the configured route may still reach OpenAI.
+
+Task 75 reproduced this failure: it ended in `login_failed` after two
+`route_timezone` events and never created a takeover page. Commits `477c21f`
+and `9288cd3` changed this behavior. The worker now retains the account's last
+verified timezone when the lookup fails, and normalizes low-level socket
+errors to the safe `RouteError` type. The browser then exercises the real route
+so an explicit provider rejection can be classified and observed.
+
+For this incident, inspect task events first. If the final phase is
+`route_timezone`, the provider page was not reached; do not ask the operator to
+inspect a browser window. After deployment, create a new task and verify that
+the phase progresses to `login`, `email`, or an explicit provider rejection.
 
 ## Relevant historical fixes
 
