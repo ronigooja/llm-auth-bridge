@@ -868,7 +868,14 @@ def _run_login(
                         control = _login_control(page)
                         if control is None:
                             raise BrowserError("Provider login control is unavailable")
-                        control.evaluate("element => element.click()")
+                        try:
+                            control.evaluate("element => element.click()")
+                        except PlaywrightError:
+                            # A provider redirect can destroy the old
+                            # execution context immediately after dispatch.
+                            # Treat that as a submitted navigation and let the
+                            # next loop classify the new document.
+                            pass
                         submitted.add(marker)
                         started = time.monotonic()
                     elif stage in ("email", "password") and marker not in submitted:
