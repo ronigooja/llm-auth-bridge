@@ -480,7 +480,42 @@ def _consent_continue(page):
     return visible[0]
 
 
-def _submit(page):
+_SOCIAL_BUTTON = r"google|apple|microsoft|phone|passkey|sso|手机|谷歌|苹果|微软"
+
+
+def _form_submit(field):
+    """Return the field's own form submit control, never a social sign-in button.
+
+    The ChatGPT login dialog lists "Continue with Google/Apple/Microsoft/phone"
+    controls next to the email form. Clicking the first visible submit button
+    sent task 82 to accounts.google.com, so only controls inside the field's
+    form are eligible and social-provider controls are excluded.
+    """
+    handle = field.evaluate_handle(
+        """(field, social) => {
+            const scope = field.closest('form') || field.parentElement;
+            const bad = new RegExp(social, 'i');
+            const controls = Array.from(scope.querySelectorAll(
+                'button[type="submit"], input[type="submit"], button:not([type])'));
+            return controls.find(control => control.getClientRects().length
+                && !control.disabled
+                && !bad.test([control.innerText, control.value, control.name, control.id,
+                              control.getAttribute('aria-label'),
+                              control.getAttribute('data-testid')].join(' '))) || null;
+        }""",
+        _SOCIAL_BUTTON,
+    )
+    return handle.as_element()
+
+
+def _submit(page, field=None):
+    if field is not None:
+        button = _form_submit(field)
+        if button is None:
+            # Never fall back to an arbitrary page-wide submit control here.
+            raise BrowserError("Login form requires manual review")
+        button.evaluate("element => element.click()")
+        return
     button = _visible(page, 'button[type="submit"]:enabled, input[type="submit"]:enabled')
     if button is None:
         # A sole pending button can become enabled after field validation.
@@ -944,10 +979,11 @@ def _run_login(
                             if stage == "email"
                             else 'input[type="password"]'
                         )
-                        _editable(page, selector).fill(
+                        field = _editable(page, selector)
+                        field.fill(
                             account["username" if stage == "email" else "password"]
                         )
-                        _submit(page)
+                        _submit(page, field)
                         submitted.add(marker)
                         started = time.monotonic()
                     elif stage == "totp" and account.get("totp") and totp_attempts < 2:

@@ -397,6 +397,35 @@ def test_submit_waits_for_only_pending_button():
         assert page.locator("body").get_attribute("data-submitted") == "1"
 
 
+def test_submit_uses_email_form_not_social_login_buttons():
+    # Task 82 reached accounts.google.com because the first visible submit
+    # button on the ChatGPT login dialog was "Continue with Google".
+    with real_browser() as browser:
+        page = browser.new_page()
+        page.set_content(
+            '<button type="submit" onclick="document.body.dataset.social=1">Continue with Google</button>'
+            '<button type="submit" onclick="document.body.dataset.social=1">Continue with Apple</button>'
+            '<form onsubmit="event.preventDefault(); document.body.dataset.submitted=1">'
+            '<input type="email" name="email"><button type="submit" disabled>Loading</button>'
+            '<button type="submit">Continue</button></form>'
+        )
+        _submit(page, page.locator('input[type="email"]'))
+        assert page.locator("body").get_attribute("data-submitted") == "1"
+        assert page.locator("body").get_attribute("data-social") is None
+
+
+def test_submit_refuses_form_with_only_social_buttons():
+    with real_browser() as browser:
+        page = browser.new_page()
+        page.set_content(
+            '<form onsubmit="event.preventDefault(); document.body.dataset.submitted=1">'
+            '<input type="email"><button type="submit">Continue with Google</button></form>'
+        )
+        with pytest.raises(Exception, match="manual review"):
+            _submit(page, page.locator('input[type="email"]'))
+        assert page.locator("body").get_attribute("data-submitted") is None
+
+
 def test_legacy_localstorage_migration_is_origin_bound_and_does_not_reset_values():
     from app.browser import _restore_legacy_state
     with real_browser() as browser:

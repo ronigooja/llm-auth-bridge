@@ -72,6 +72,31 @@ the restored Firefox profile's only startup window: the worker closed it and
 then asked Camoufox to create a new page, which failed with `window is null`.
 The worker now reuses the sole restored window and closes only extra tabs.
 
+## Email submission reached a social sign-in provider
+
+This section applies when a login task reaches `email` and then stops at
+`browser_review` with the ChatGPT home page in the account window.
+
+Task 82, run after commit `4a04322`, produced `browser` → `login` → `email` →
+`browser_review`. The worker's Firefox window title was the ChatGPT home page.
+The device session history for that run contained only host and path entries:
+`accounts.google.com /` followed by `chatgpt.com /`. No `auth.openai.com`
+entry existed, so the provider rejection page was never loaded by this
+automation. The rejection classifier therefore had nothing to match; widening
+it (commit `4a04322`) was necessary only for pages that do load.
+
+The cause is the submit step. The ChatGPT login dialog places "Continue with
+Google/Apple/Microsoft/phone" controls next to the email form, and `_submit()`
+clicked the first visible submit button on the page. The worker therefore
+navigated to a social provider instead of submitting the email form. The fix
+restricts submission to the submit control inside the filled field's own form
+and excludes social-provider controls; a form with no such control now stops
+for review instead of clicking something else.
+
+To reproduce the diagnosis, read the device session history for the running
+task and record only host and path. Do not record query strings, page text, or
+screenshots.
+
 ## Proxy route preflight failures
 
 This section applies when a proxy-routed task fails in the `route_timezone`
