@@ -39,6 +39,11 @@ from serving requests; see the [deployment guide](../guides/deployment.md).
 - Architecture decisions explain [account routing](decisions/001-oauth-proxy.md),
   [encrypted secrets](decisions/002-encrypted-secrets.md), and
   [serial execution and handoff](decisions/003-execution-and-handoff.md).
+- Operational incidents and phase-by-phase diagnosis belong in
+  [troubleshooting](../troubleshooting/), including the
+  [login authentication guide](../troubleshooting/login-auth.md). This section
+  records observed failures and operator investigation steps; it does not
+  redefine runtime or API contracts.
 
 Interface details have one home: [HTTP API](../contracts/http-api.md),
 [worker adapters](../contracts/worker-adapters.md) and

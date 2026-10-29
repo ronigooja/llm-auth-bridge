@@ -26,7 +26,7 @@ acceptance](docs/roadmap.md) before relying on an integration.
 
 | Reader | Entry points |
 | --- | --- |
-| Operator | [Deployment and recovery](docs/guides/deployment.md), [account workflow](docs/guides/account-workflow.md) |
+| Operator | [Deployment and recovery](docs/guides/deployment.md), [account workflow](docs/guides/account-workflow.md), [troubleshooting](docs/troubleshooting/) |
 | Contributor | [Development, tests and CI](docs/guides/development.md), [project working agreement](AGENTS.md) |
 | System maintainer | [Architecture overview](docs/architecture/overview.md), [runtime and browser devices](docs/architecture/runtime.md), [data and tasks](docs/architecture/data-and-tasks.md), [security boundaries](docs/architecture/security.md) |
 | API or adapter author | [HTTP API](docs/contracts/http-api.md), [worker/adapters](docs/contracts/worker-adapters.md), [account window transport](docs/contracts/account-window.md), [CLIProxyAPI](docs/contracts/integrations/cliproxyapi.md), [Voice](docs/contracts/integrations/voice.md) |
