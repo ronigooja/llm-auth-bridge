@@ -757,7 +757,7 @@ def _run_login(
                     rejection = provider_rejection(page)
                     if rejection:
                         code, reason = rejection
-                        _save(context, control)
+                        _save(context, control, page)
                         _human(control, reason, phase=code)
                         page.wait_for_timeout(500)
                         continue
@@ -848,7 +848,7 @@ def _run_login(
                         if time.monotonic() - started < settle_seconds:
                             page.wait_for_timeout(500)
                             continue
-                        _save(context, control)
+                        _save(context, control, page)
                         phase, reason = {
                             "verification_code": (
                                 "verification_code_required",
