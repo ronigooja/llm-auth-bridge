@@ -16,7 +16,7 @@ import secrets
 import stat
 import sys
 import time
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit
 
 from .browser_device import device_directory
 from .browser_identity import configure_page_identity
@@ -53,39 +53,98 @@ class ReauthenticationRequired(BrowserError):
         super().__init__("reauth_required")
 
 
+_PROVIDER_HOSTS = ("chatgpt.com", "auth.openai.com", "auth0.openai.com")
+_AUTH_HOSTS = ("auth.openai.com", "auth0.openai.com")
+# Applies to every page: phrases specific enough to never appear in ordinary
+# provider markup.
+_STRICT_REJECTIONS = (
+    ("account_deleted", (
+        "deleted or deactivated", "deleted or disabled", "account has been deleted",
+        "account was deleted", "account is deleted", "account deleted",
+        "已被删除或停用", "已删除或停用", "账号已删除", "账户已删除", "帐号已删除", "帐户已删除",
+        "账号已被删除", "账户已被删除", "帐号已被删除", "帐户已被删除",
+     ), "OpenAI 已删除或停用此账号，无法继续登录"),
+    ("account_deactivated", (
+        "account has been deactivated", "account was deactivated", "account is deactivated",
+        "account deactivated", "account has been disabled", "account was disabled",
+        "账号已停用", "账户已停用", "帐号已停用", "账号已被停用", "账户已被停用", "帐号已被停用",
+     ), "OpenAI 已停用此账号，无法继续登录"),
+    ("account_suspended", (
+        "account has been suspended", "account was suspended", "account is suspended",
+        "account suspended", "account has been banned", "account was banned",
+        "账号已暂停", "账户已暂停", "账号已被暂停", "账户已被暂停", "账号已被封禁", "账户已被封禁",
+     ), "OpenAI 已暂停此账号，无法继续登录"),
+)
+# Applies only to provider authentication pages, where a generic sentence is
+# the page's message rather than user content such as chat titles.
+_BROAD_REJECTIONS = (
+    ("account_deleted", ("has been deleted", "was deleted", "已被删除"),
+     "OpenAI 已删除或停用此账号，无法继续登录"),
+    ("account_deactivated", ("has been deactivated", "was deactivated", "已被停用"),
+     "OpenAI 已停用此账号，无法继续登录"),
+    ("account_suspended", ("has been suspended", "was suspended", "已被暂停", "已被封禁"),
+     "OpenAI 已暂停此账号，无法继续登录"),
+)
+_URL_REJECTIONS = (
+    ("account_deleted", r"delet"),
+    ("account_deactivated", r"deactivat|disabled"),
+    ("account_suspended", r"suspend|banned"),
+)
+
+
 def provider_rejection(page):
     """Classify explicit provider account rejection pages.
 
-    The provider changes its markup frequently. Keep this deliberately small:
-    inspect only visible body text, return a stable code/message, and never
-    expose the page contents in task history or logs.
+    Applies to every observed login page and to browser errors. The provider
+    changes its markup and wording frequently, so match visible body text and
+    provider error parameters, return a stable code/message, and never expose
+    page contents in task history or logs.
     """
+    try:
+        parsed = urlsplit(page.url)
+    except Exception:
+        parsed = urlsplit("")
     try:
         text = page.locator("body").inner_text(timeout=1000)
     except Exception:
-        return None
-    text = re.sub(r"\s+", " ", text or "").strip().casefold()
-    if not text:
         text = ""
-    patterns = (
-        ("account_deleted", ("account has been deleted", "account was deleted", "账号已删除", "账户已删除"),
-         "OpenAI 已删除此账号，无法继续登录"),
-        ("account_deactivated", ("account has been deactivated", "account was deactivated", "账号已停用", "账户已停用"),
-         "OpenAI 已停用此账号，无法继续登录"),
-        ("account_suspended", ("account has been suspended", "account was suspended", "账号已暂停", "账户已暂停"),
-         "OpenAI 已暂停此账号，无法继续登录"),
-    )
-    for code, needles, message in patterns:
-        if any(needle.casefold() in text for needle in needles):
-            return code, message
-    try:
-        parsed = urlsplit(page.url)
-        if parsed.hostname in ("auth.openai.com", "auth0.openai.com") and re.search(
-            r"(?:error|deactivat|suspend|disable|blocked|denied)", parsed.path, re.I
-        ):
-            return "account_rejected", "OpenAI 拒绝了此账号登录，请接管浏览器查看页面"
-    except Exception:
-        pass
+    text = re.sub(r"\s+", " ", text or "").strip().casefold()
+    groups = [_STRICT_REJECTIONS]
+    if text and (
+        parsed.hostname in _AUTH_HOSTS
+        or (parsed.hostname == "chatgpt.com" and parsed.path.startswith(("/auth", "/api/auth")))
+    ):
+        groups.append(_BROAD_REJECTIONS)
+    for group in groups:
+        for code, needles, message in group:
+            if any(needle.casefold() in text for needle in needles):
+                return code, message
+    if parsed.hostname in _PROVIDER_HOSTS:
+        query = " ".join(
+            value for key, value in parse_qsl(parsed.query)
+            if key in ("error", "error_code", "reason", "error_description")
+        )
+        if re.search(r"account|user", query, re.I):
+            for code, pattern in _URL_REJECTIONS:
+                if re.search(pattern, query, re.I):
+                    return code, dict((c, m) for c, _, m in _STRICT_REJECTIONS)[code]
+    if parsed.hostname in _AUTH_HOSTS and re.search(
+        r"(?:error|deactivat|suspend|disable|blocked|denied|delet)", parsed.path, re.I
+    ):
+        return "account_rejected", "OpenAI 拒绝了此账号登录，请接管浏览器查看页面"
+    return None
+
+
+def wait_provider_rejection(page, attempts=10):
+    """Re-check a page that may still be loading after a browser error."""
+    for _ in range(attempts):
+        rejection = provider_rejection(page)
+        if rejection:
+            return rejection
+        try:
+            page.wait_for_timeout(500)
+        except Exception:
+            return provider_rejection(page)
     return None
 
 
@@ -545,7 +604,12 @@ def _get_session(context, username: str) -> dict | None:
     )
     if response.status != 200:
         return None
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError:
+        # Interstitial or error HTML instead of the session JSON is not a
+        # session; keep classifying the visible page instead of failing.
+        return None
     if not isinstance(data, dict) or not data.get("accessToken"):
         return None
     return session_result(data, username)
@@ -915,7 +979,9 @@ def _run_login(
                         started = time.monotonic()
                     page.wait_for_timeout(500)
             except (PlaywrightError, httpx.HTTPError, json.JSONDecodeError):
-                rejection = provider_rejection(page) if page is not None else None
+                # A rejection page often arrives as a redirect that aborts the
+                # pending navigation or click; let it finish loading first.
+                rejection = wait_provider_rejection(page) if page is not None else None
                 if rejection:
                     code, reason = rejection
                     raise ProviderRejection(code, reason) from None
@@ -924,9 +990,14 @@ def _run_login(
                     stage = detect_state(page)
                     _human(
                         control,
-                        "Browser authentication hit an unexpected page or navigation error; take over the browser to inspect it",
+                        "Browser navigation or page action failed and no account rejection was recognized; "
+                        "take over the browser to inspect the current page",
                         phase="browser_review" if stage == "unknown" else "waiting_human",
                     )
+                    rejection = provider_rejection(page)
+                    if rejection:
+                        code, reason = rejection
+                        raise ProviderRejection(code, reason) from None
                 raise BrowserError(
                     "Browser authentication failed; review the account and route"
                 ) from None

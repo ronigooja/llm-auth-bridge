@@ -151,6 +151,18 @@ def test_human_timeout_becomes_interrupted(settings, resources):
         assert tuple(r) == ("interrupted", "human_timeout")
 
 
+def test_provider_rejection_pause_records_account_health(settings, resources):
+    a, t = resources
+    q = queue(settings)
+    q.create(a, t)
+    short = replace(settings, human_seconds=0.02)
+    Worker(short, runner=lambda a, t, c, s: c.wait_human("Deleted", phase="account_deleted")).run_once()
+    with database(settings.db_path) as conn:
+        assert tuple(conn.execute("SELECT state,phase FROM tasks").fetchone()) == ("interrupted", "human_timeout")
+        health = conn.execute("SELECT status,error_code FROM web_session_health WHERE account_id=?", (a,)).fetchone()
+        assert tuple(health) == ("error", "account_deleted")
+
+
 def test_sync_retry_does_not_repeat_browser_and_clears_credentials(
     settings, resources, admin
 ):

@@ -14,6 +14,10 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from .db import database, validate_database
 from .queue import Queue, LeaseLost, Cancelled, HumanTimeout, Conflict, event
 
+PROVIDER_REJECTION_PHASES = frozenset(
+    ("account_deleted", "account_deactivated", "account_suspended", "account_rejected")
+)
+
 
 class Control:
     def __init__(self, worker, task):
@@ -169,6 +173,18 @@ class Control:
             human_deadline=deadline,
             takeover_requested=0,
         )
+        if phase in PROVIDER_REJECTION_PHASES:
+            # Applies while a provider rejection page is held for review: the
+            # account status must show the rejection even if the task is then
+            # cancelled, times out, or its browser page changes.
+            with database(self.worker.settings.db_path) as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self.queue.owned(conn, self.id, self.execution_id)
+                conn.execute(
+                    "INSERT INTO web_session_health(account_id,status,checked_at,last_success_at,error_code) VALUES(?,?,?,?,?) "
+                    "ON CONFLICT(account_id) DO UPDATE SET status='error',checked_at=excluded.checked_at,error_code=excluded.error_code",
+                    (self.task["account_id"], "error", time.time(), None, phase),
+                )
         while True:
             if self.worker.stopping.is_set():
                 raise LeaseLost()

@@ -13,6 +13,7 @@ from app.browser import (
     session_result,
     validate_callback,
     provider_rejection,
+    wait_provider_rejection,
 )
 
 
@@ -103,6 +104,9 @@ def test_browser_session_identity_and_expiry():
         ("Your account has been deleted.", ("account_deleted", "OpenAI 已删除此账号，无法继续登录")),
         ("This account has been deactivated.", ("account_deactivated", "OpenAI 已停用此账号，无法继续登录")),
         ("Your account has been suspended.", ("account_suspended", "OpenAI 已暂停此账号，无法继续登录")),
+        ("You do not have an account because it has been deleted or deactivated.",
+         ("account_deleted", "OpenAI 已删除或停用此账号，无法继续登录")),
+        ("你的账号已被删除。", ("account_deleted", "OpenAI 已删除或停用此账号，无法继续登录")),
         ("Please sign in to continue.", None),
     ],
 )
@@ -113,11 +117,62 @@ def test_provider_rejection_classifies_only_explicit_account_messages(body, expe
             return body
 
     class Page:
+        url = "https://auth.openai.com/log-in"
+
         def locator(self, selector):
             assert selector == "body"
             return Locator()
 
+    if expected and expected[0] == "account_deleted":
+        expected = ("account_deleted", "OpenAI 已删除或停用此账号，无法继续登录")
     assert provider_rejection(Page()) == expected
+
+
+def _page(url, body):
+    class Locator:
+        def inner_text(self, timeout):
+            return body
+
+    class Page:
+        def __init__(self):
+            self.url = url
+            self.waits = 0
+
+        def locator(self, selector):
+            return Locator()
+
+        def wait_for_timeout(self, ms):
+            self.waits += 1
+
+    return Page()
+
+
+def test_provider_rejection_uses_error_parameters_and_limits_generic_phrases():
+    assert provider_rejection(_page(
+        "https://chatgpt.com/auth/error?error=account_deactivated", ""
+    ))[0] == "account_deactivated"
+    assert provider_rejection(_page(
+        "https://auth.openai.com/log-in?error=user_account_deleted", ""
+    ))[0] == "account_deleted"
+    # Generic wording outside authentication pages can be user content.
+    assert provider_rejection(_page("https://chatgpt.com/", "This conversation was deleted")) is None
+    assert provider_rejection(_page("https://chatgpt.com/auth/error", "Your profile was deleted"))[0] == "account_deleted"
+    # The callback authorization code is never classified.
+    assert provider_rejection(_page("https://chatgpt.com/api/auth/callback?code=user_deleted", "")) is None
+
+
+def test_wait_provider_rejection_rechecks_loading_page():
+    page = _page("https://auth.openai.com/log-in", "")
+
+    def wait_for_timeout(ms):
+        page.waits += 1
+        if page.waits == 2:
+            page.url = "https://auth.openai.com/error"
+
+    page.wait_for_timeout = wait_for_timeout
+    assert wait_provider_rejection(page)[0] == "account_rejected"
+    assert page.waits == 2
+    assert wait_provider_rejection(_page("https://auth.openai.com/log-in", ""), attempts=3) is None
 
 
 @pytest.mark.parametrize("mode", ["manual", "maintenance", "cancel", "browser_window", "browser_window_cancel"])
