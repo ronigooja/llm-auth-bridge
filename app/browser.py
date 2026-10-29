@@ -726,6 +726,8 @@ def _run_login(
             control.phase("route_timezone", "Resolving account route timezone")
             try:
                 zone = resolve_timezone(route.session, checkpoint=control.checkpoint)
+                control.update_timezone(zone)
+                account["_browser_profile"]["context"]["timezone_id"] = zone
             except Exception as error:
                 # The geolocation service is auxiliary. Preserve task control
                 # exceptions, but never let an unexpected transport/runtime
@@ -739,9 +741,6 @@ def _run_login(
                 # verified account timezone and let the browser exercise the
                 # real route so provider rejection pages remain observable.
                 zone = account["_browser_profile"]["context"]["timezone_id"]
-            else:
-                control.update_timezone(zone)
-                account["_browser_profile"]["context"]["timezone_id"] = zone
         # Snapshot only after context.close(), including exception paths.
         with device_directory(account, control) as device:
             context = None
