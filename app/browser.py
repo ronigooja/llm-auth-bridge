@@ -459,7 +459,10 @@ def _submit(page):
         button = _visible(page, 'button[type="submit"], input[type="submit"]')
     if button is None:
         raise BrowserError("Login form requires manual review")
-    button.click(timeout=10000)
+    # The provider often replaces the document immediately after submission.
+    # Do not make Playwright wait for the old document's navigation here; the
+    # state loop below observes the resulting provider page and classifies it.
+    button.click(timeout=10000, no_wait_after=True)
 
 
 def _restore_legacy_state(context, state):
@@ -847,7 +850,7 @@ def _run_login(
                     if stage == "login" and marker not in submitted:
                         control.phase("login", "Opening account sign in")
                         _visible(page, 'button[data-testid="login-button"]:enabled').click(
-                            timeout=10000
+                            timeout=10000, no_wait_after=True
                         )
                         submitted.add(marker)
                         started = time.monotonic()
