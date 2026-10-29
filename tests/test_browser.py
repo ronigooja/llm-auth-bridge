@@ -162,6 +162,30 @@ def test_provider_rejection_uses_error_parameters_and_limits_generic_phrases():
     assert provider_rejection(_page("https://chatgpt.com/api/auth/callback?code=user_deleted", "")) is None
 
 
+def test_provider_rejection_classifies_explicit_account_deactivated_code():
+    assert provider_rejection(_page(
+        "https://auth.openai.com/error?error_code=account_deactivated", ""
+    ))[0] == "account_deactivated"
+
+
+def test_provider_rejection_reads_same_page_frame():
+    class FramePage:
+        url = "https://auth.openai.com/error"
+        frames = ()
+
+        def locator(self, selector):
+            return type("Locator", (), {"inner_text": lambda self, timeout: ""})()
+
+    frame = type("Frame", (), {
+        "locator": lambda self, selector: type(
+            "Locator", (), {"inner_text": lambda self, timeout: "身份验证错误：你的账号已被删除或停用"}
+        )()
+    })()
+    page = FramePage()
+    page.frames = (object(), frame)
+    assert provider_rejection(page)[0] == "account_deleted"
+
+
 def test_wait_provider_rejection_rechecks_loading_page():
     page = _page("https://auth.openai.com/log-in", "")
 

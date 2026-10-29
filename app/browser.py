@@ -104,11 +104,23 @@ def provider_rejection(page):
         parsed = urlsplit(page.url)
     except Exception:
         parsed = urlsplit("")
+    # Provider error pages have appeared both as ordinary document text and
+    # inside a hydrated frame. Read the document body plus same-page frames;
+    # never persist or log the resulting text.
+    texts = []
     try:
-        text = page.locator("body").inner_text(timeout=1000)
+        texts.append(page.locator("body").inner_text(timeout=1000))
     except Exception:
-        text = ""
-    text = re.sub(r"\s+", " ", text or "").strip().casefold()
+        pass
+    try:
+        for frame in getattr(page, "frames", ())[1:]:
+            try:
+                texts.append(frame.locator("body").inner_text(timeout=500))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    text = re.sub(r"\s+", " ", " ".join(texts or [])).strip().casefold()
     groups = [_STRICT_REJECTIONS]
     if text and (
         parsed.hostname in _AUTH_HOSTS
@@ -124,10 +136,13 @@ def provider_rejection(page):
             value for key, value in parse_qsl(parsed.query)
             if key in ("error", "error_code", "reason", "error_description")
         )
-        if re.search(r"account|user", query, re.I):
-            for code, pattern in _URL_REJECTIONS:
-                if re.search(pattern, query, re.I):
-                    return code, dict((c, m) for c, _, m in _STRICT_REJECTIONS)[code]
+        # Explicit provider error codes are authoritative even when the
+        # parameter contains no separate "account"/"user" word.
+        for code, pattern in _URL_REJECTIONS:
+            if re.search(pattern, query, re.I) and re.search(
+                r"(?:account|user|error_code|error|reason|description)", query, re.I
+            ):
+                return code, dict((c, m) for c, _, m in _STRICT_REJECTIONS)[code]
     if parsed.hostname in _AUTH_HOSTS and re.search(
         r"(?:error|deactivat|suspend|disable|blocked|denied|delet)", parsed.path, re.I
     ):
