@@ -45,6 +45,11 @@ from serving requests; see the [deployment guide](../guides/deployment.md).
   records observed failures and operator investigation steps; it does not
   redefine runtime or API contracts.
 
+  New incident records must be added under `docs/troubleshooting/` and linked
+  from the relevant guide. Do not place operational incident notes in
+  `docs/archive/`, `docs/operations/`, or the architecture pages; those
+  locations have different ownership and purpose.
+
 Interface details have one home: [HTTP API](../contracts/http-api.md),
 [worker adapters](../contracts/worker-adapters.md) and
 [account window transport](../contracts/account-window.md). Downstream protocol

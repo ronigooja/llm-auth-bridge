@@ -58,6 +58,13 @@ Task 67 was run on commit `82b92e7` and task 68 on the same deployed revision.
 Both tasks were cancelled after evidence collection. No credentials, cookies,
 page body, screenshots, or browser traces were retained.
 
+The later serial runs for the same saved account (account id 4, target id 2)
+did not reach the browser either. Tasks 73, 75, 76, and 77 ended with
+`login_failed` and the generic message `Browser authentication failed; review
+the account and route`; their event history stopped at `route_timezone`. The
+operator therefore had no page to inspect for those runs. Treat this evidence
+as a pre-browser failure until a new task records a later phase.
+
 ## Proxy route preflight failures
 
 This section applies when a proxy-routed task fails in the `route_timezone`
@@ -88,6 +95,11 @@ For this incident, inspect task events first. If the final phase is
 `route_timezone`, the provider page was not reached; do not ask the operator to
 inspect a browser window. After deployment, create a new task and verify that
 the phase progresses to `login`, `email`, or an explicit provider rejection.
+
+Acceptance requires observing that later phase in a serial real-account run.
+Seeing a generic `login_failed` message alone does not establish that the
+provider rejected the account, and a saved account window cannot reconstruct a
+page that was never opened.
 
 ## Relevant historical fixes
 
