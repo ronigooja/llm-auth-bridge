@@ -14,6 +14,7 @@ from app.browser import (
     validate_callback,
     provider_rejection,
     wait_provider_rejection,
+    _safe_navigation_diagnostic,
 )
 
 
@@ -23,6 +24,15 @@ def token(claims):
         + base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
         + ".signature"
     )
+
+
+def test_safe_navigation_diagnostic_excludes_query_and_page_data():
+    class Page:
+        url = "https://auth.openai.com/u/abc?code=secret-token#fragment"
+
+    diagnostic = _safe_navigation_diagnostic(Page(), RuntimeError("password=secret"), "login")
+    assert diagnostic == "error=RuntimeError; page=auth.openai.com/u/abc; state=login"
+    assert "secret" not in diagnostic
 
 
 def test_pkce_and_authorization():

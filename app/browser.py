@@ -53,6 +53,23 @@ class ReauthenticationRequired(BrowserError):
         super().__init__("reauth_required")
 
 
+def _safe_navigation_diagnostic(page, error, stage=None):
+    """Return a bounded diagnostic without exposing page data or credentials."""
+    try:
+        parsed = urlsplit(page.url)
+        host = parsed.hostname or ""
+        path = parsed.path or "/"
+    except Exception:
+        host, path = "", "/"
+    # Provider paths can contain opaque identifiers; query strings and
+    # fragments are intentionally excluded, and the path is bounded for task
+    # history/log safety.
+    path = re.sub(r"[^A-Za-z0-9._~/%:-]", "", path)[:160] or "/"
+    error_name = type(error).__name__ if error is not None else "unknown"
+    state = stage or "unknown"
+    return f"error={error_name}; page={host}{path}; state={state}"
+
+
 _PROVIDER_HOSTS = ("chatgpt.com", "auth.openai.com", "auth0.openai.com")
 _AUTH_HOSTS = ("auth.openai.com", "auth0.openai.com")
 # Applies to every page: phrases specific enough to never appear in ordinary
@@ -865,11 +882,11 @@ def _run_login(
                             continuation = None
                     if stage == "login" and marker not in submitted:
                         control.phase("login", "Opening account sign in")
-                        control = _login_control(page)
-                        if control is None:
+                        login_control = _login_control(page)
+                        if login_control is None:
                             raise BrowserError("Provider login control is unavailable")
                         try:
-                            control.evaluate("element => element.click()")
+                            login_control.evaluate("element => element.click()")
                         except PlaywrightError:
                             # A provider redirect can destroy the old
                             # execution context immediately after dispatch.
@@ -1005,16 +1022,18 @@ def _run_login(
                             )
                         started = time.monotonic()
                     page.wait_for_timeout(500)
-            except (PlaywrightError, httpx.HTTPError, json.JSONDecodeError):
+            except (PlaywrightError, httpx.HTTPError, json.JSONDecodeError) as exc:
                 # A rejection page often arrives as a redirect that aborts the
                 # pending navigation or click; let it finish loading first.
                 rejection = wait_provider_rejection(page) if page is not None else None
                 if rejection:
                     code, reason = rejection
                     raise ProviderRejection(code, reason) from None
+                diagnostic = _safe_navigation_diagnostic(page, exc)
                 if page is not None:
                     _save(context, control, page)
                     stage = detect_state(page)
+                    diagnostic = _safe_navigation_diagnostic(page, exc, stage)
                     _human(
                         control,
                         "Browser navigation or page action failed and no account rejection was recognized; "
@@ -1026,7 +1045,8 @@ def _run_login(
                         code, reason = rejection
                         raise ProviderRejection(code, reason) from None
                 raise BrowserError(
-                    "Browser authentication failed; review the account and route"
+                    "Browser authentication failed; review the account and route "
+                    f"({diagnostic})"
                 ) from None
             finally:
                 original_failure = sys.exception()
