@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit
 
 from .browser_device import device_directory
 from .browser_identity import configure_page_identity
-from .routing import RouteError, account_route
+from .routing import account_route
 from .route_timezone import resolve_timezone
 from .totp import generate_code, seconds_remaining
 
@@ -726,7 +726,13 @@ def _run_login(
             control.phase("route_timezone", "Resolving account route timezone")
             try:
                 zone = resolve_timezone(route.session, checkpoint=control.checkpoint)
-            except RouteError:
+            except Exception as error:
+                # The geolocation service is auxiliary. Preserve task control
+                # exceptions, but never let an unexpected transport/runtime
+                # error prevent the provider page from opening.
+                from .queue import Cancelled, LeaseLost
+                if isinstance(error, (Cancelled, LeaseLost)):
+                    raise
                 # Public geolocation services can be unavailable even while
                 # the configured proxy can reach the provider.  Do not turn
                 # that auxiliary lookup into login_failed; retain the last
