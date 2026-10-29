@@ -626,14 +626,20 @@ def _new_foreground_page(context):
     Login tasks are single-page flows, so close retained pages before creating
     the task page and explicitly bring it to the foreground.
     """
-    for existing in list(getattr(context, "pages", ())):
+    pages = [page for page in list(getattr(context, "pages", ()))
+             if not page.is_closed()]
+    # A restored persistent Firefox profile may have exactly one startup
+    # window. Closing that sole window makes Camoufox unable to create a new
+    # one ("window is null"), so reuse it and close only extra retained tabs.
+    page = pages[0] if pages else None
+    for existing in pages[1:]:
         try:
-            if not existing.is_closed():
-                existing.close()
+            existing.close()
         except Exception:
             # A stale retained page must not prevent creation of the task page.
             pass
-    page = context.new_page()
+    if page is None:
+        page = context.new_page()
     try:
         page.bring_to_front()
     except Exception:

@@ -195,17 +195,41 @@ def test_new_foreground_page_closes_retained_pages_and_focuses_task_page():
             events.append(("front", self.name))
 
     retained = Page("retained")
-    task_page = Page("task")
+    extra_page = Page("extra")
+
+    class Context:
+        pages = [retained, extra_page]
+
+        def new_page(self):
+            raise AssertionError("an existing window should be reused")
+
+    assert _new_foreground_page(Context()) is retained
+    assert events == [("close", "extra"), ("front", "retained")]
+
+
+def test_new_foreground_page_reuses_sole_restored_window():
+    events = []
+
+    class Page:
+        def is_closed(self):
+            return False
+
+        def close(self):
+            raise AssertionError("the sole restored window must be reused")
+
+        def bring_to_front(self):
+            events.append("front")
+
+    retained = Page()
 
     class Context:
         pages = [retained]
 
         def new_page(self):
-            events.append("new")
-            return task_page
+            raise AssertionError("the sole restored window must be reused")
 
-    assert _new_foreground_page(Context()) is task_page
-    assert events == [("close", "retained"), "new", ("front", "task")]
+    assert _new_foreground_page(Context()) is retained
+    assert events == ["front"]
 
 
 @pytest.mark.parametrize("mode", ["manual", "maintenance", "cancel", "browser_window", "browser_window_cancel"])
