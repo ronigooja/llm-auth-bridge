@@ -354,6 +354,22 @@ def _code_kind(field) -> str:
     return "verification_code"
 
 
+def _login_control(page):
+    """Find the provider's current home-page login control."""
+    for selector in (
+        'button[data-testid="login-button"]:enabled',
+        'a[href*="/auth/login"]',
+        'button:has-text("Log in")',
+        'a:has-text("Log in")',
+        'button:has-text("登录")',
+        'a:has-text("登录")',
+    ):
+        control = _visible(page, selector)
+        if control is not None:
+            return control
+    return None
+
+
 def detect_state(page) -> str:
     """Prioritize the most specific known challenge; unknown markup is manual."""
     parsed = urlsplit(page.url)
@@ -374,9 +390,7 @@ def detect_state(page) -> str:
         return _code_kind(code)
     if _editable(page, 'input[type="email"], input[name="username"]'):
         return "email"
-    if parsed.hostname == "chatgpt.com" and _visible(
-        page, 'button[data-testid="login-button"]:enabled'
-    ):
+    if parsed.hostname == "chatgpt.com" and _login_control(page) is not None:
         return "login"
     if parsed.hostname == "auth.openai.com" and parsed.path == "/choose-an-account":
         return "account_chooser"
@@ -851,9 +865,10 @@ def _run_login(
                             continuation = None
                     if stage == "login" and marker not in submitted:
                         control.phase("login", "Opening account sign in")
-                        _visible(page, 'button[data-testid="login-button"]:enabled').evaluate(
-                            "element => element.click()"
-                        )
+                        control = _login_control(page)
+                        if control is None:
+                            raise BrowserError("Provider login control is unavailable")
+                        control.evaluate("element => element.click()")
                         submitted.add(marker)
                         started = time.monotonic()
                     elif stage in ("email", "password") and marker not in submitted:
