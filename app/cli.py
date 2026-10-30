@@ -55,7 +55,7 @@ def restore(settings: Settings, source: Path):
     key = load_key(settings.key_file)
     # Only explicit offline restore accepts an older versioned archive. Service
     # startup and backup retain the default current-schema validation.
-    validate_database(source, key, supported_versions=(1, 2, 3, SCHEMA_VERSION))
+    validate_database(source, key, supported_versions=(1, 2, 3, 4, 5, SCHEMA_VERSION))
     destination_paths = [
         settings.db_path,
         *(Path(str(settings.db_path) + suffix) for suffix in ("-wal", "-shm", "-journal")),

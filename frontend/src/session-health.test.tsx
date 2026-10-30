@@ -53,7 +53,7 @@ describe("account session health", () => {
     expect(document.querySelectorAll("time")).toHaveLength(2);
   });
   it("prioritizes account deletion over an unhelpful never-successful message", () => {
-    render(<SessionHealth session={{ ...session, status: "error", error_code: "account_deleted", last_success_at: null }} targets={[]} openTask={vi.fn()} />);
+    render(<SessionHealth session={{ ...session, status: "unavailable", error_code: "account_deleted", last_success_at: null }} targets={[]} openTask={vi.fn()} />);
     expect(screen.getByText("账号不可用")).toBeTruthy();
     expect(screen.queryByText("检查失败")).toBeNull();
     expect(screen.getByText(/最近检查/)).toBeTruthy();

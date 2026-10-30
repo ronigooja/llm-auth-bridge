@@ -124,4 +124,4 @@ belong to the [deployment guide](../guides/deployment.md).
 
 ### Web session health
 
-`web_session_health` stores the latest account-level browser check independently from each target's `syncs` row. A migrated database starts with no health record, which is exposed as `unknown`; historical `ready` values are not used as evidence. Checks are fenced by the task execution lease and persist `valid`, `signed_out`, or `error` with timestamps and a safe error code before downstream synchronization begins.
+`web_session_health` stores the latest account-level browser check independently from each target's `syncs` row. A migrated database starts with no health record, which is exposed as `unknown`; historical `ready` values are not used as evidence. Checks are fenced by the task execution lease and persist `valid`, `signed_out`, `error`, or `unavailable` (provider rejection) with timestamps and a safe error code before downstream synchronization begins.

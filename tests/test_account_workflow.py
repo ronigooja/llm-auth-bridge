@@ -137,6 +137,33 @@ def test_v3_additive_migration(settings, resources):
         assert 'depends_on_task_id' in [r[1] for r in conn.execute('PRAGMA table_info(tasks)')]
 
 
+def test_v5_migration_reclassifies_provider_rejections(settings, resources):
+    key = load_key(settings.key_file)
+    a, _ = resources
+    with database(settings.db_path) as conn:
+        conn.execute('DROP TABLE web_session_health')
+        conn.execute("CREATE TABLE web_session_health(account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,status TEXT NOT NULL CHECK(status IN ('unknown','valid','signed_out','error')),checked_at REAL,last_success_at REAL,error_code TEXT)")
+        conn.execute("INSERT INTO web_session_health VALUES(?,'error',1.0,NULL,'account_deleted')", (a,))
+        conn.execute('PRAGMA user_version=5')
+    migrate(settings.db_path, key)
+    with database(settings.db_path) as conn:
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION
+        assert tuple(conn.execute('SELECT status,error_code,checked_at FROM web_session_health').fetchone()) == ('unavailable', 'account_deleted', 1.0)
+
+
+def test_v5_migration_keeps_ordinary_errors(settings, resources):
+    key = load_key(settings.key_file)
+    a, _ = resources
+    with database(settings.db_path) as conn:
+        conn.execute('DROP TABLE web_session_health')
+        conn.execute("CREATE TABLE web_session_health(account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,status TEXT NOT NULL CHECK(status IN ('unknown','valid','signed_out','error')),checked_at REAL,last_success_at REAL,error_code TEXT)")
+        conn.execute("INSERT INTO web_session_health VALUES(?,'error',1.0,NULL,'navigation_failed')", (a,))
+        conn.execute('PRAGMA user_version=5')
+    migrate(settings.db_path, key)
+    with database(settings.db_path) as conn:
+        assert tuple(conn.execute('SELECT status,error_code FROM web_session_health').fetchone()) == ('error', 'navigation_failed')
+
+
 def test_flow_rejects_unbound_target_without_partial_insert(settings, flow, admin):
     q, a, voice, cli = flow
     assert admin.patch(f'/api/v1/accounts/{a}', json={'target_ids': [voice]}).status_code == 200

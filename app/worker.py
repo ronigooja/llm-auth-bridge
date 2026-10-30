@@ -182,8 +182,8 @@ class Control:
                 self.queue.owned(conn, self.id, self.execution_id)
                 conn.execute(
                     "INSERT INTO web_session_health(account_id,status,checked_at,last_success_at,error_code) VALUES(?,?,?,?,?) "
-                    "ON CONFLICT(account_id) DO UPDATE SET status='error',checked_at=excluded.checked_at,error_code=excluded.error_code",
-                    (self.task["account_id"], "error", time.time(), None, phase),
+                    "ON CONFLICT(account_id) DO UPDATE SET status='unavailable',checked_at=excluded.checked_at,error_code=excluded.error_code",
+                    (self.task["account_id"], "unavailable", time.time(), None, phase),
                 )
         while True:
             if self.worker.stopping.is_set():
@@ -604,13 +604,12 @@ class Worker:
             cfg = conn.execute("SELECT * FROM settings").fetchone()
             if cfg["maintenance_enabled"]:
                 # Provider-rejected accounts are final; skip them until a new login clears the health row.
-                marks = ",".join("?" * len(PROVIDER_REJECTION_PHASES))
                 due = conn.execute(
                     "SELECT s.account_id,s.target_id FROM syncs s JOIN targets t ON t.id=s.target_id "
                     "LEFT JOIN web_session_health h ON h.account_id=s.account_id "
                     "WHERE t.kind='chatgpt-web-voice' AND s.state='verified' AND s.next_check<=? "
-                    f"AND COALESCE(h.error_code,'') NOT IN ({marks})",
-                    (now, *PROVIDER_REJECTION_PHASES),
+                    "AND COALESCE(h.status,'')!='unavailable'",
+                    (now,),
                 ).fetchall()
             else:
                 due = []

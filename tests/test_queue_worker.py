@@ -160,7 +160,7 @@ def test_provider_rejection_pause_records_account_health(settings, resources):
     with database(settings.db_path) as conn:
         assert tuple(conn.execute("SELECT state,phase FROM tasks").fetchone()) == ("interrupted", "human_timeout")
         health = conn.execute("SELECT status,error_code FROM web_session_health WHERE account_id=?", (a,)).fetchone()
-        assert tuple(health) == ("error", "account_deleted")
+        assert tuple(health) == ("unavailable", "account_deleted")
 
 
 def test_sync_retry_does_not_repeat_browser_and_clears_credentials(
@@ -342,7 +342,7 @@ def test_maintenance_skips_provider_rejected_accounts(settings, resources):
             (a, t, time.time() - 1),
         )
         conn.execute(
-            "INSERT INTO web_session_health(account_id,status,checked_at,error_code) VALUES(?,'error',?,'account_deleted')",
+            "INSERT INTO web_session_health(account_id,status,checked_at,error_code) VALUES(?,'unavailable',?,'account_deleted')",
             (a, time.time()),
         )
     Worker(settings, runner=lambda *args: None).maintenance()

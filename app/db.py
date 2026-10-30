@@ -7,7 +7,8 @@ import sqlite3
 from .config import DB_PATH
 from .crypto import encrypt, decrypt
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
+WEB_SESSION_HEALTH_SCHEMA = """CREATE TABLE web_session_health(account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,status TEXT NOT NULL CHECK(status IN ('unknown','valid','signed_out','error','unavailable')),checked_at REAL,last_success_at REAL,error_code TEXT)"""
 WORKFLOW_SCHEMA = """
 CREATE TABLE login_flows(voice_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,cli_task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,idempotency_key TEXT UNIQUE);
 CREATE INDEX task_dependency ON tasks(depends_on_task_id);
@@ -53,7 +54,7 @@ CREATE TABLE syncs (
 );
 CREATE TABLE pending_credentials(task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,result_cipher TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE browser_sessions(account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,state_cipher TEXT NOT NULL,updated_at REAL NOT NULL);
-CREATE TABLE web_session_health(account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,status TEXT NOT NULL CHECK(status IN ('unknown','valid','signed_out','error')),checked_at REAL,last_success_at REAL,error_code TEXT);
+CREATE TABLE web_session_health(account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,status TEXT NOT NULL CHECK(status IN ('unknown','valid','signed_out','error','unavailable')),checked_at REAL,last_success_at REAL,error_code TEXT);
 CREATE TABLE admin(id INTEGER PRIMARY KEY CHECK(id=1),password_hash TEXT NOT NULL,key_check TEXT NOT NULL);
 CREATE TABLE sessions(token_hash TEXT PRIMARY KEY,csrf TEXT NOT NULL,expires_at REAL NOT NULL);
 CREATE TABLE login_attempts(client TEXT PRIMARY KEY,attempts INTEGER NOT NULL,reset_at REAL NOT NULL);
@@ -238,11 +239,28 @@ def migrate(path: Path, key: bytes):
                 raise ValueError("database key check failed")
             conn.execute("ALTER TABLE tasks ADD COLUMN depends_on_task_id INTEGER")
             _statements(conn, WORKFLOW_SCHEMA)
-            conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            version = 4
         if version == 4:
+            # Created with the pre-v6 constraint; the v5 step below widens it.
             conn.execute("""CREATE TABLE IF NOT EXISTS web_session_health (account_id INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE, status TEXT NOT NULL CHECK(status IN ('unknown','valid','signed_out','error')), checked_at REAL, last_success_at REAL, error_code TEXT)""")
-            conn.execute("PRAGMA user_version=5")
             version = 5
+        if version == 5:
+            # SQLite cannot alter a CHECK constraint, so rebuild the table and
+            # reclassify provider rejections as unavailable accounts.
+            conn.execute("ALTER TABLE web_session_health RENAME TO web_session_health_old")
+            conn.execute(WEB_SESSION_HEALTH_SCHEMA)
+            conn.execute(
+                "INSERT INTO web_session_health(account_id,status,checked_at,last_success_at,error_code) "
+                "SELECT account_id,CASE WHEN status='error' AND error_code IN "
+                "('account_deleted','account_deactivated','account_suspended','account_rejected') "
+                "THEN 'unavailable' ELSE status END,checked_at,last_success_at,error_code "
+                "FROM web_session_health_old"
+            )
+            conn.execute("DROP TABLE web_session_health_old")
+            version = 6
+        if version != SCHEMA_VERSION:
+            raise RuntimeError("database migration did not reach the current schema")
+        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         conn.commit()
         # Scrub dropped plaintext proxy pages from the main file and WAL.
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
