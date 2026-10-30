@@ -14,7 +14,9 @@ websockify is reachable only inside the private service network. Administrator
 access passes through the application's authorized WebSockets. Monitor and
 interactive takeover reuse the task's current browser; opening a monitor does
 not pause automation. See the [account window contract](../contracts/account-window.md)
-for authorization and RFB filtering.
+for authorization and RFB filtering. TigerVNC uses unauthenticated RFB only inside
+the worker; VNC and websockify ports are not published because publishing them
+would bypass the application's authenticated gateway.
 
 The production desktop starts at 1920×1080 with remote resizing enabled. The
 viewer requests a desktop matching its iframe's CSS dimensions and renders at
@@ -56,6 +58,10 @@ lose current-task changes. Archives exclude caches, crash material and process
 locks; native sessionStorage remains tab scoped. This is persistent account
 storage, not a byte-for-byte archive of every Firefox artifact.
 
+Each task restores the device archive into a restricted temporary directory on
+production tmpfs and removes it after use. Restoration rejects path traversal,
+links and oversized payloads. GOST receives proxy secrets through a private
+temporary configuration rather than command-line arguments.
 Restoration validates paths, file types and size budgets before extracting.
 Authenticated encryption binds each archive to its account ID, preventing
 cross-account ciphertext substitution. See [browser_device.py](../../app/browser_device.py)
@@ -63,18 +69,19 @@ and device controls in [worker.py](../../app/worker.py). Profile allocation and
 upgrades are committed under task ownership before navigation. Device archive
 format, profile format and database schema have independent version lifecycles.
 
-Proxy tasks resolve the route's exit timezone before navigation and persist the
-verified IANA timezone in the profile. Lookup failure stops the task rather than
+Proxy tasks resolve the route's exit timezone through the account route before
+navigation and persist the verified IANA timezone in the profile. Lookup failure
+stops the task rather than
 switching routes or silently selecting UTC. Locale remains an account preference;
 it does not automatically follow IP geolocation. See
 [route_timezone.py](../../app/route_timezone.py).
 
 ## Platform identity and limits
 
-Profile format v4 stores `windows` (default) or `macos`. Older profile formats
-upgrade while preserving the account seed and preferences. Platform changes keep
-the existing device archive and sessions and apply on the next task; API mutation
-constraints belong to the [HTTP contract](../contracts/http-api.md).
+The current profile format stores `windows` (default) or `macos`; older profile
+formats upgrade while preserving the account seed and preferences. Platform
+changes keep the existing device archive and sessions and apply on the next task;
+API mutation constraints belong to the [HTTP contract](../contracts/http-api.md).
 
 Camoufox receives the persisted account fingerprint/config at launch. The adapter
 uses the actual Firefox user agent and does not inject Chromium UA-CH or CDP

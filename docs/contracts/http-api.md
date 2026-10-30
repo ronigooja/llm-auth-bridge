@@ -9,6 +9,12 @@ messages; validation omits input values. Authentication behavior is described in
 
 ## Administrator session
 
+Passwords use Argon2id; session tokens are random and SQLite stores only their
+SHA-256 hashes. Cookies are HttpOnly, SameSite Strict and Secure by default with
+a twelve-hour lifetime; login attempts are rate limited, and changing the
+password revokes every session while a password-hash recheck fences concurrent
+login with the old password.
+
 | Method and path | Body / response |
 | --- | --- |
 | `POST /auth/login` | `{password}` → `{csrf_token}` |
@@ -57,10 +63,9 @@ settings, alongside `id`, `kind`, `name`, `version`, `verification`, and `create
 `POST /targets/{id}/test` checks management reachability, not provider usability.
 `DELETE /targets/{id}` rejects active work and returns `{deleted:true}`.
 
-New CPA targets default to native OAuth; explicit null keeps legacy auth-files
-behavior, and edits preserve the saved protocol. Voice requires explicit
-`bridge-v1`. Refer to the [CPA](integrations/cliproxyapi.md) and
-[Voice](integrations/voice.md) contracts for compatibility and configuration.
+The `compatibility` field is validated against the selected integration contract;
+refer to [CPA](integrations/cliproxyapi.md) and [Voice](integrations/voice.md) for
+protocol selection and defaults.
 
 Browser-active resources cannot be edited. During idle non-native pending sync,
 only target administrator secrets/name may change while the endpoint, kind and
@@ -118,13 +123,11 @@ Continue/takeover remain available in all waiting phases. Older generic
 waiting tasks need page re-identification before code entry. Code is applied only
 to the still-matching challenge. Deploy worker and UI together.
 
-Ordinary cancellation conflicts once a remote write may have started. For idle
-pending sync, confirmed discard deletes local pending material, retains remote
-ID/audit, marks task `interrupted`/`remote_outcome_unknown` and account `sync_unknown`,
-and never deletes the remote account. Retry reconciles uncertain writes rather
-than blindly replacing credentials. Native queued `native_recovery_failed` and
-`native_cancel_pending` phases expose `/retry-sync` for reconciliation; ordinary
-cancellation remains available before commit.
+Ordinary cancellation returns a conflict once a remote write may have started. For
+idle pending sync, confirmed `/discard-sync` deletes local pending material,
+retains remote ID/audit, marks the task and account outcome unknown, and never
+deletes the remote account. `/retry-sync` reconciles uncertain writes before
+replacement; ordinary cancellation remains available before commit.
 
 `GET /tasks/{id}/history` returns `{events}` ordered by persisted `event_id`.
 `GET /tasks/{id}/events` streams SSE with a monotonic wire `id`, `event: task`, and

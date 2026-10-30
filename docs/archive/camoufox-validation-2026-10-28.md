@@ -1,5 +1,9 @@
 # Camoufox validation report (archived)
 
+This is historical evidence. Its candidate status and migration TODOs have been
+superseded by [ADR 004](../architecture/decisions/004-camoufox-primary-engine.md)
+and [runtime](../architecture/runtime.md).
+
 This report records the synthetic Camoufox evaluation completed on 2026-10-28.
 It is archived because the evaluation is complete and the result is a migration
 input, not a production capability guarantee.
@@ -8,13 +12,8 @@ input, not a production capability guarantee.
 
 The evaluation used the open-source [Camoufox](https://github.com/daijro/camoufox)
 repository at commit `39940c849a561534b315a225b2753cd4fa4bacf4` and its Python
-package source version `0.5.7`. It ran on a GitHub-hosted Ubuntu runner with
-synthetic pages, profiles, cookies, and storage only. No real account, provider
-credential, or `auth.txt` was used.
-
-The probe was run from the independent validation worktree
-`/tmp/bridge-camoufox-validation`, branch
-`validation/camoufox-probe-20261028`, latest probe commit `75f7ee7`.
+package source version `0.5.7`. It used synthetic pages, profiles, cookies, and
+storage only. No real account or provider credential was used.
 The final hosted run is [40558866064](https://github.com/ronigooja/llm-auth-bridge/actions/runs/40558866064).
 
 ## Results
