@@ -82,7 +82,7 @@ jobs:
           set -Eeuo pipefail
           set +e
           timeout --signal=TERM --kill-after=15s 5m bash -o pipefail -c \
-            'uv run python -m pytest -p tools.pytest_deadline -x -v -ra -o faulthandler_timeout=60 \
+            'uv run python -m pytest -p tools.pytest_deadline -x -v -ra --durations=20 -o faulthandler_timeout=60 \
               --ignore-glob="tests/*_live.py" \
               --junitxml=fast-gate-logs/pytest-nonbrowser.xml > fast-gate-logs/pytest-nonbrowser.log 2>&1'
           result=$?

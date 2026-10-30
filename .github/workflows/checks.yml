@@ -38,7 +38,7 @@ jobs:
           fi
           changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
           has_path() { grep -Eq "$1" <<<"$changed"; }
-           echo "images=$(has_path '^(app/|frontend/|deploy/|Dockerfile|docker-compose|pyproject.toml$|uv.lock$)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "images=$(has_path '^(app/|frontend/|deploy/|Dockerfile|docker-compose|pyproject.toml$|uv.lock$)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
   images:
     needs: changes
     if: ${{ needs.changes.outputs.images == 'true' }}
