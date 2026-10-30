@@ -23,4 +23,4 @@ Cookie and Local Storage persistence are validated across close, archive,
 restore, and restart before real account migration. Window control uses the
 Firefox desktop/window APIs available to the adapter rather than CDP. Browser
 upgrades require re-running the synthetic identity, persistence, proxy, and
-headed/noVNC checks. Real account acceptance remains a serial, main-agent task.
+headed/noVNC checks.

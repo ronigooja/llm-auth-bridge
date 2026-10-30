@@ -3,7 +3,7 @@
 ## Durable model
 
 [db.py](../../app/db.py) owns the schema and versioned transactional migrations.
-The current database schema is **v4**. Connections enable foreign keys and a
+The current database schema is **v5**. Connections enable foreign keys and a
 ten-second busy timeout; initialization/migration configures SQLite WAL. App and
 worker validate the schema and key at startup and never migrate concurrently.
 The explicit CLI migration preserves existing records, including case-distinct
@@ -19,10 +19,11 @@ legacy identities; new operations reject case-insensitive duplicates.
 | `login_flows`, `browser_requests` | Login-flow dependencies and browser request idempotency |
 | `admin`, `sessions`, `login_attempts`, `runtime`, `settings` | Administrator access, runtime health and maintenance policy |
 
-Schema v2 introduced profiles and native sessions, v3 added device archives, and
-v4 added dependent login flows and browser request tracking. The migration source
-is authoritative for columns, constraints and legacy conversion details. Profile
-format v3 is separate from database schema v4.
+Schema v2 introduced profiles and native sessions, v3 added device archives, v4
+added dependent login flows and browser request tracking, and v5 added web-session
+health. The migration source is authoritative for columns, constraints and legacy
+conversion details. Profile format and database schema have independent version
+lifecycles; the current profile representation is described in [runtime](runtime.md).
 
 ## Ownership and scheduling
 

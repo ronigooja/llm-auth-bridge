@@ -95,9 +95,6 @@ check is green. This documentation change does not alter application or test cod
    pinned public egress, redirect controls, pre-request baseline, bounded polling,
    freshness and ambiguity checks.
 
-Real credential acceptance is serial and main-agent owned under [AGENTS.md](../AGENTS.md).
-No real-account login or deployment is part of this documentation refactor.
-
 ## Later scope
 
 Other vendors, IMAP, concurrent browser scheduling, multi-user authorization,

@@ -46,7 +46,8 @@ A preview or empty proxy cannot prove direct routing. The patched server must
 bypass inherited proxies for explicit direct mode in every upstream transport;
 explicit proxy mode must override process `NO_PROXY`. Management handlers must
 never invoke provider login, token checks, refresh or sessions. Runtime transport
-and Voice audio acceptance are separate from storage consistency.
+is outside this storage contract; remaining capability status is tracked in the
+[roadmap](../../roadmap.md).
 
 ## Disposable synthetic HTTP acceptance
 [`tests/test_voice_bridge_acceptance.py`](../../../tests/test_voice_bridge_acceptance.py) exercises the real bridge client over HTTP against an independently started, disposable server. It is skipped by default. Start the candidate server with an empty temporary account database, administrator `synthetic-user` / `synthetic-password`, and outbound provider traffic blocked, then run:

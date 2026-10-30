@@ -71,10 +71,10 @@ it does not automatically follow IP geolocation. See
 
 ## Platform identity and limits
 
-Profile format v4 stores `windows` (default) or `macos`. Older profile formats
-upgrade while preserving the account seed and preferences. Platform changes keep
-the existing device archive and sessions and apply on the next task; API mutation
-constraints belong to the [HTTP contract](../contracts/http-api.md).
+The current profile format stores `windows` (default) or `macos`; older profile
+formats upgrade while preserving the account seed and preferences. Platform
+changes keep the existing device archive and sessions and apply on the next task;
+API mutation constraints belong to the [HTTP contract](../contracts/http-api.md).
 
 Camoufox receives the persisted account fingerprint/config at launch. The adapter
 uses the actual Firefox user agent and does not inject Chromium UA-CH or CDP

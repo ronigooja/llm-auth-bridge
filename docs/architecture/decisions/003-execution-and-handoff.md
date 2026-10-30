@@ -10,39 +10,26 @@ also be prevented from sharing the private desktop.
 
 ## Decision
 
-When claiming work, combine a SQLite immediate transaction with a shared process
-file lock. Fence owned mutations using a random execution ID and live lease;
-renew heartbeats independently of browser activity. Keep execution on one host
-with one shared lock and serialize browser tasks, including human waits.
+Use one host-wide process lock with SQLite transaction fencing, execution IDs and
+leases so browser work remains serial and owned. Do not replay expired browser
+authorization or uncertain native callbacks; reconcile durable state instead.
+Persist pending results before leaving the browser and require readback of the
+documented credential, identity and route contract before success.
 
-When an ordinary browser execution expires, interrupt it rather than replaying
-code exchange. When native downstream state exists, reconcile that state and
-poll an uncertain exchange rather than resubmitting callbacks. After browser
-credential capture, persist an encrypted pending result and finish browser
-teardown before claiming another task. Retry synchronization using stored
-material without reopening the login browser.
+Record a downstream write attempt before it can begin. Later retries reconcile
+first, and only an adapter's explicit proof that no write was possible clears
+uncertainty. Local discard preserves remote identity and audit without deleting
+the remote account. Downstream owns CPA refresh rotation, while Voice maintenance
+uses the same queue and saved sessions.
 
-When a downstream write can begin, durably record the attempt in the same
-transaction that checks cancellation. Later retries reconcile before writing.
-Only an adapter's explicit proof that no write was possible clears that
-uncertainty. An unresolved conflict requires administrator-confirmed local
-discard, preserving remote identity and audit without deleting the remote account.
-Require readback that proves the documented credential, identity and route
-contract before declaring success; generic server reachability is insufficient.
-
-When handoff succeeds, downstream owns CPA refresh rotation and the bridge
-removes its active pending credential copy. Voice maintenance uses the same queue
-and saved web sessions. A native integration is available only when its server
-implements the required contract; real deployment acceptance is recorded in the
-[capability matrix](../../roadmap.md).
+Native integration availability depends on its server contract; deployment
+acceptance is tracked in the [roadmap](../../roadmap.md).
 
 ## Consequences
 
-Throughput is deliberately serial, and human waits block other browser work.
-An expired browser task may need a fresh authorization. Possible remote writes
-can prevent ordinary cancellation and require operator reconciliation. Native
-recovery can retain account/target binding until its remote outcome is settled.
-Pending credentials need durable encryption and retention beyond browser lifetime.
+Serial throughput and reconciliation are deliberate consequences of avoiding
+duplicate authorization and ambiguous remote writes. Pending credentials remain
+encrypted beyond the browser lifetime.
 
 The current lifecycle is documented in [data and tasks](../data-and-tasks.md).
 [queue.py](../../../app/queue.py), [worker.py](../../../app/worker.py) and the

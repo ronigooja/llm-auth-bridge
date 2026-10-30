@@ -10,9 +10,8 @@ the set of sensitive records beyond initial account passwords.
 ## Decision
 
 When storing reusable account, browser or integration secret material, encrypt it
-with AES-GCM under a 32-byte key supplied as a separately mounted secret file.
-Keep administrator passwords as Argon2id hashes and session tokens as SHA-256
-hashes. Ordinary public responses return sanitized fields and presence flags.
+with AES-GCM under a separately mounted key. Keep administrator passwords and
+session tokens hashed, and expose only sanitized public fields.
 
 When storing a native device archive, authenticate its account ID as additional
 associated data to reject cross-account ciphertext substitution. Keep runtime
@@ -22,10 +21,7 @@ plaintext device directories temporary and restricted. The implementation is in
 
 ## Consequences
 
-A database backup requires its matching key to recover encrypted data. The key
-must be restored separately and startup must validate the encrypted key check.
-A compromised runtime or host can still access material being used; at-rest
-encryption does not protect against that threat. New durable secret types must
-use the same storage boundary, and safe public serialization remains a separate
-responsibility. See [security](../security.md) for the current protected data and
-[deployment](../../guides/deployment.md) for backup and restore procedures.
+A database backup requires its matching key; a compromised runtime or host can
+still access material in use. New durable secret types must use the same storage
+boundary, while runtime handling is defined in [runtime](../runtime.md) and
+backup procedures in [deployment](../../guides/deployment.md).

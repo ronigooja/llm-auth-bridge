@@ -13,7 +13,7 @@ When performing account authorization, require an explicit direct or proxy route
 and use that route for both browser traffic and ordinary OAuth code exchange.
 Direct mode ignores ambient proxies; proxy failure stops execution without a
 direct fallback. GOST normalizes supported proxy types into a local endpoint
-usable by Chromium and the HTTP client. The worker image pins its release and
+usable by the browser and HTTP client. The worker image pins its release and
 architecture-specific checksums in the [Dockerfile](../../../Dockerfile).
 
 When native CPA delegates exchange to the downstream extension, require explicit

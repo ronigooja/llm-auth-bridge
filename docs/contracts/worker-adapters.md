@@ -3,7 +3,8 @@
 Source interfaces: [worker control](../../app/worker.py),
 [browser adapter](../../app/browser.py), [integrations](../../app/integrations.py),
 and [native OAuth client](../../app/cpa_oauth.py). Task ownership and persistence
-are defined in [data and tasks](../architecture/data-and-tasks.md).
+are defined in [data and tasks](../architecture/data-and-tasks.md); browser-window
+transport is defined in the [account window contract](account-window.md).
 
 ## Browser adapter
 
@@ -42,14 +43,12 @@ provider usability. `test_connection(target) -> {reachable, verification:
 boundary. Protocol-specific requirements are in [CLIProxyAPI](integrations/cliproxyapi.md)
 and [Voice](integrations/voice.md).
 
-The worker encrypts pending results, tears down the browser before sync retry,
-and deletes its active pending credential after handoff. A first-write callback
-persists the selected remote ID before any upload. `IntegrationError.write_possible`
-is false for fresh preflight failures and true once a write may have started.
-On `_reconcile_only: true`, every failure retains prior write uncertainty,
-including configuration/connection failures. Unknown exception types also retain
-uncertainty. Auth-files and Voice synchronization never perform provider login,
-code exchange, token refresh or live account probes. CPA owns refresh rotation.
+`IntegrationError.write_possible` is false for fresh preflight failures and true
+once a write may have started. On `_reconcile_only: true`, failures retain prior
+write uncertainty, including configuration and connection failures; unknown
+exception types do too. Auth-files and Voice synchronization return adapter
+results without provider login, code exchange, token refresh or live account
+probes. CPA owns refresh rotation.
 
 ## Downstream transport
 All targets require `base_url`. HTTPS is required unless `allow_http: true` explicitly permits HTTP in a trusted deployment. URLs must not contain user information, query parameters, or fragments. A base path is supported. HTTP requests use a separate client with `trust_env=False`, TLS verification, redirects disabled, a five-second connection timeout, and a fifteen-second operation timeout. The account proxy is serialized into the remote account; it is never used to access the target management API. Targets need independent network reachability from the bridge worker.
