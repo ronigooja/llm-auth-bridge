@@ -15,7 +15,12 @@ services:
     volumes:
       - app-data:/data
     secrets: [master_key]
-    depends_on: [worker]
+    depends_on:
+      worker:
+        condition: service_healthy
+        restart: true
+    mem_limit: 768m
+    pids_limit: 256
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=5)"]
       interval: 30s
@@ -32,11 +37,14 @@ services:
     tmpfs:
       - /tmp:rw,nosuid,nodev,size=512m,mode=1777
     stop_grace_period: 60s
+    mem_limit: 3g
+    pids_limit: 512
     healthcheck:
       test: ["CMD", "python", "-c", "import os,sqlite3,time; c=sqlite3.connect(os.environ['LLM_AUTH_DB']); assert c.execute('SELECT 1 FROM runtime WHERE heartbeat>?',(time.time()-45,)).fetchone()"]
       interval: 30s
       timeout: 6s
       retries: 3
+      start_period: 45s
     environment:
       LLM_AUTH_DB: /data/app.sqlite3
       LLM_AUTH_MASTER_KEY_FILE: /run/secrets/master_key

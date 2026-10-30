@@ -23,22 +23,10 @@ CI provisions Camoufox and its paired Firefox and the checksum-verified GOST exe
 
 ## CI entry points
 
-- [Fast deployment gate](../../.github/workflows/fast-gate.yml) runs frontend
-  tests/build, non-browser pytest, a synthetic Camoufox preflight and amd64
-  app/worker startup checks in parallel. Every job must pass before publishing.
-  Pushes to main, validation and deployment branches validate without publishing.
-  Dispatch [deployment.yml](../../.github/workflows/deployment.yml) with
-  `publish=true` to validate and publish SHA-tagged GHCR images and digest records.
-- [Full pytest regression](../../.github/workflows/full-regression.yml) runs all
-  synthetic pytest nightly, manually or on validation branches. It is independent
-  of image publication. A release gate pass does not imply full regression passed.
-- [Checks](../../.github/workflows/checks.yml) retains path-based frontend,
-  browser preflight and multiarchitecture build checks. It does not run full pytest.
-- [Native OAuth validation](../../.github/workflows/validation.yml) retains native
-  CPA tests and upstream comparisons; bridge full pytest runs in Full pytest
-  regression. Upstream failures remain failures even if focused diagnostics pass.
-- [Account viewer regression](../../.github/workflows/novnc.yml) checks packaged
-  noVNC behavior. Real accounts and physical client acceptance are separate.
+See the [CI workflow inventory](ci-workflows.md) for every workflow's trigger,
+purpose, overlap, owner-of-fact, and keep/merge/retire status. It is the single
+index for CI entry points; the workflow files remain authoritative for exact job
+steps, triggers, cache keys, and artifact retention.
 
 When running release tests, the CI plugin bounds each test, including fixture
 setup and teardown, to 90 seconds. GNU timeout bounds non-browser pytest to five
