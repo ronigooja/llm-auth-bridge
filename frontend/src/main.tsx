@@ -710,7 +710,7 @@ function AccountForm({
     if (
       account &&
       (password || totp || mailbox || clearTotp || clearMailbox || server) &&
-      !confirm("确认替换或清除所选凭据？留空的凭据会保留。")
+      !confirm("确认保存修改？留空项保持不变。")
     )
       return;
     await m.run(async () => {
