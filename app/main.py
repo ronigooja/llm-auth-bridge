@@ -417,11 +417,9 @@ def create_app(settings: Settings | None = None):
                 raise HTTPException(
                     422, "required secret or identity cannot be cleared"
                 )
-            allow = values.get(
-                "allow_http_mailbox", old["allow_http_mailbox"] if old else False
-            )
-            if allow is None:
-                raise HTTPException(422, "invalid mailbox policy")
+            # Mailbox URLs may use HTTP or HTTPS; the legacy
+            # allow_http_mailbox input is accepted but no longer restricts.
+            allow = True
             mailbox = values.get(
                 "mailbox_url",
                 decrypt(old["mailbox_url_cipher"], key)
@@ -524,7 +522,7 @@ def create_app(settings: Settings | None = None):
                         mailbox_url=parsed.mailbox_url,
                     )
                     if parsed.mailbox_url:
-                        public_url(parsed.mailbox_url)
+                        public_url(parsed.mailbox_url, True)
                 except ValueError:
                     row.update(
                         valid=False, error="invalid account secrets or mailbox URL"

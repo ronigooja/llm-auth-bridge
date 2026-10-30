@@ -48,23 +48,27 @@ export function SessionHealth({ session, syncs = [], targets, openTask }: {
   targets: { id: number; name: string }[];
   openTask: (id: number) => void;
 }) {
+  const active = session?.activity === "queued" || session?.activity === "checking";
+  const sep = <span aria-hidden="true"> · </span>;
   return <section className="account-health" aria-label="会话与同步状态">
     <div className="health-row">
       <strong>网页会话</strong>
       <span className={`badge ${session?.status || "unknown"}`}>{healthLabels[session?.status || "unknown"]}</span>
-      {(session?.activity === "queued" || session?.activity === "checking") && <span className="badge running">{session.activity === "queued" ? "检查排队中" : "正在检查会话"}</span>}
-      {session?.task_id != null && (session.activity === "queued" || session.activity === "checking") && <button className="health-task" onClick={() => openTask(session.task_id!)}>查看任务 #{session.task_id}</button>}
+      {active && <span className="badge running">{session?.activity === "queued" ? "检查排队中" : "正在检查会话"}</span>}
+      {active && session?.task_id != null && <button className="health-task" onClick={() => openTask(session.task_id!)}>查看任务 #{session.task_id}</button>}
+      <span className="muted">
+        {session?.checked_at != null && <>检查于 <HealthTime value={session.checked_at} />{sep}{session.last_success_at != null ? <>成功于 <HealthTime value={session.last_success_at} /></> : "从未成功"}</>}
+        {session?.error_code && <>{sep}{errorLabels[session.error_code] || session.error_code}</>}
+      </span>
     </div>
-    <p className="muted">最近检查：<span><HealthTime value={session?.checked_at ?? null} /></span> · 最近成功：<span><HealthTime value={session?.last_success_at ?? null} /></span></p>
-    {session?.error_code && <p className="muted">检查错误：{errorLabels[session.error_code] || session.error_code}</p>}
-    {syncs.map((sync) => <div key={sync.target_id} className="target-health">
-      <div className="health-row">
-        <strong>{targets.find((target) => target.id === sync.target_id)?.name || `目标 #${sync.target_id}`}</strong>
-        <span className={`badge ${sync.state}`}>{syncLabels[sync.state] || "同步状态待确认"}</span>
-        {sync.task_id != null && <button className="health-task" onClick={() => openTask(sync.task_id!)}>查看任务 #{sync.task_id}</button>}
-      </div>
-      <p className="muted">最近验证同步：<HealthTime value={sync.verified_at} /></p>
-      <p className="muted">{sync.pause_reason ? <>自动维护已暂停：{pauseLabels[sync.pause_reason]}</> : sync.next_check !== null ? <>{sync.next_check * 1000 <= Date.now() ? "维护已到期，等待检查" : "下次维护"}：<HealthTime value={sync.next_check} /></> : "维护时间尚未安排"}</p>
+    {syncs.map((sync) => <div key={sync.target_id} className="health-row target-health">
+      <strong>{targets.find((target) => target.id === sync.target_id)?.name || `目标 #${sync.target_id}`}</strong>
+      <span className={`badge ${sync.state}`}>{syncLabels[sync.state] || "同步状态待确认"}</span>
+      {sync.task_id != null && <button className="health-task" onClick={() => openTask(sync.task_id!)}>查看任务 #{sync.task_id}</button>}
+      <span className="muted">
+        {sync.verified_at != null && <>验证于 <HealthTime value={sync.verified_at} />{sep}</>}
+        {sync.pause_reason ? <>维护已暂停：{pauseLabels[sync.pause_reason]}</> : sync.next_check !== null ? <>{sync.next_check * 1000 <= Date.now() ? "维护已到期，等待检查" : "下次维护"} <HealthTime value={sync.next_check} /></> : "维护时间尚未安排"}
+      </span>
     </div>)}
   </section>;
 }

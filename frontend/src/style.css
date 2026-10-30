@@ -560,8 +560,8 @@ dd {
   margin-top: 16px;
 }
 .account-health {
-  margin-top: 16px;
-  padding-top: 16px;
+  margin-top: 10px;
+  padding-top: 10px;
   border-top: 1px solid #e0e5dd;
 }
 .health-row {
@@ -570,9 +570,15 @@ dd {
   flex-wrap: wrap;
   gap: 8px;
 }
+.account-health .health-row + .health-row {
+  margin-top: 6px;
+}
+.account-health .health-row .muted {
+  margin: 0;
+  font-size: 13px;
+}
 .target-health {
-  margin-top: 14px;
-  padding-left: 12px;
+  padding-left: 10px;
   border-left: 2px solid #e0e5dd;
 }
 .health-task {

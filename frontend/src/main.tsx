@@ -336,7 +336,7 @@ export function App() {
         api<{ tasks: Task[] }>("/tasks"),
       ]);
       setAccounts(a.accounts);
-      setTargets(t.targets);
+      setTargets([...t.targets].sort((x, y) => Number(y.kind === "chatgpt-web-voice") - Number(x.kind === "chatgpt-web-voice") || x.id - y.id));
       setTasks(k.tasks);
     } catch (e) {
       setError(message(e));
@@ -477,15 +477,6 @@ export function App() {
                         <h2>{a.username}</h2>
                         <span className="badge">{a.status === "ready" ? "历史同步成功" : "历史同步待验证"}</span>
                       </div>
-                      <p className="muted">
-                        网络：{label(a.route_type)} · 已绑定{" "}
-                        {a.target_ids.length} 个目标
-                      </p>
-                      <p className="secrets">
-                        {a.has_password ? "密码已设置" : "未设置密码"} ·{" "}
-                        {a.has_totp ? "验证器已设置" : "未设置验证器"} ·{" "}
-                        {a.has_mailbox ? "邮箱已设置" : "未设置邮箱"}
-                      </p>
                       <SessionHealth session={a.web_session} syncs={a.target_syncs} targets={targets || []} openTask={openTask} />
                       <div className="actions">
                         {(["chatgpt", "codex"] as const).map((mode) => (
@@ -560,7 +551,7 @@ export function App() {
                     <article className="resource" key={t.id}>
                       <div className="resource-heading">
                         <h2>{t.name}</h2>
-                        <Status value={t.verification || "unverified"} />
+                        {t.verification && t.verification !== "unverified" && <Status value={t.verification} />}
                       </div>
                       <p className="muted">{t.kind}</p>
                       <div className="actions">
@@ -689,7 +680,6 @@ function AccountForm({
   const [password, setPassword] = useState("");
   const [totp, setTotp] = useState("");
   const [mailbox, setMailbox] = useState("");
-  const [allowHttp, setAllowHttp] = useState(false);
   const unconfigured = !account || account.route_type === "unset";
   const [route, setRoute] = useState(unconfigured ? "proxy" : account.route_type);
   const [server, setServer] = useState("");
@@ -731,7 +721,7 @@ function AccountForm({
         ...(password ? { password } : {}),
         ...(totp ? { totp } : clearTotp ? { totp: null } : {}),
         ...(mailbox
-          ? { mailbox_url: mailbox, allow_http_mailbox: allowHttp }
+          ? { mailbox_url: mailbox }
           : clearMailbox
             ? { mailbox_url: null }
             : {}),
@@ -771,8 +761,6 @@ function AccountForm({
             onChange={(e) => setPassword(e.target.value)}
           />
         </Field>
-        <details>
-          <summary>验证与邮箱</summary>
           <Field title="验证器密钥（留空保留）">
             <input
               type="text"
@@ -801,14 +789,6 @@ function AccountForm({
               placeholder="https://…"
             />
           </Field>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={allowHttp}
-              onChange={(e) => setAllowHttp(e.target.checked)}
-            />
-            允许不加密的 HTTP 邮箱地址
-          </label>
           {account?.has_mailbox && (
             <label className="check">
               <input
@@ -819,7 +799,6 @@ function AccountForm({
               清除现有邮箱地址
             </label>
           )}
-        </details>
         <Field title="网络路由">
           <select value={route} onChange={(e) => setRoute(e.target.value)}>
             <option value="unset">未设置</option>
