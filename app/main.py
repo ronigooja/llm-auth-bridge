@@ -69,6 +69,9 @@ def public_account(conn, row):
     result["target_ids"] = [r[0] for r in conn.execute("SELECT target_id FROM account_targets WHERE account_id=?", (row["id"],))]
     health = conn.execute("SELECT status,checked_at,last_success_at,error_code FROM web_session_health WHERE account_id=?", (row["id"],)).fetchone()
     result["web_session"] = {"status": health["status"] if health else "unknown", "checked_at": health["checked_at"] if health else None, "last_success_at": health["last_success_at"] if health else None, "error_code": health["error_code"] if health else None}
+    check = conn.execute("SELECT id,state FROM tasks WHERE account_id=? AND kind='maintenance' AND state IN ('queued','running') ORDER BY (state='running') DESC, id DESC LIMIT 1", (row["id"],)).fetchone()
+    result["web_session"]["activity"] = ("checking" if check["state"] == "running" else "queued") if check else "idle"
+    result["web_session"]["task_id"] = check["id"] if check else None
     result["target_syncs"] = [dict(r) for r in conn.execute("SELECT s.target_id,t.kind,s.state,s.verified_at,s.next_check,s.last_error FROM syncs s JOIN targets t ON t.id=s.target_id WHERE s.account_id=?", (row["id"],))]
     for item in result["target_syncs"]:
         item["pause_reason"] = "signed_out" if item["state"] == "reauth_required" else None

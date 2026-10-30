@@ -52,6 +52,15 @@ describe("account session health", () => {
     expect(screen.queryByText("已退出登录")).toBeNull();
     expect(document.querySelectorAll("time")).toHaveLength(2);
   });
+  it("shows no activity badge when the backend omits or idles activity", () => {
+    const { rerender } = render(<SessionHealth session={{ ...session, activity: undefined, task_id: undefined }} targets={[]} openTask={vi.fn()} />);
+    expect(screen.queryByText("正在检查会话")).toBeNull();
+    expect(screen.queryByText("检查排队中")).toBeNull();
+    rerender(<SessionHealth session={{ ...session, activity: "idle", task_id: null }} targets={[]} openTask={vi.fn()} />);
+    expect(screen.queryByText("正在检查会话")).toBeNull();
+    rerender(<SessionHealth session={{ ...session, activity: "queued", task_id: 4 }} targets={[]} openTask={vi.fn()} />);
+    expect(screen.getByText("检查排队中")).toBeTruthy();
+  });
   it("does not infer validity when session health is missing", () => {
     render(<SessionHealth targets={[]} openTask={vi.fn()} />);
     expect(screen.getByText("尚未检查")).toBeTruthy();

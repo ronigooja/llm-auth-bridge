@@ -3,8 +3,8 @@ export type WebSession = {
   checked_at: number | null;
   last_success_at: number | null;
   error_code: string | null;
-  activity: "idle" | "queued" | "checking";
-  task_id: number | null;
+  activity?: "idle" | "queued" | "checking";
+  task_id?: number | null;
 };
 export type TargetSync = {
   target_id: number;
@@ -52,8 +52,8 @@ export function SessionHealth({ session, syncs = [], targets, openTask }: {
     <div className="health-row">
       <strong>网页会话</strong>
       <span className={`badge ${session?.status || "unknown"}`}>{healthLabels[session?.status || "unknown"]}</span>
-      {session && session.activity !== "idle" && <span className="badge running">{session.activity === "queued" ? "检查排队中" : "正在检查会话"}</span>}
-      {session?.task_id != null && session.activity !== "idle" && <button className="health-task" onClick={() => openTask(session.task_id!)}>查看任务 #{session.task_id}</button>}
+      {(session?.activity === "queued" || session?.activity === "checking") && <span className="badge running">{session.activity === "queued" ? "检查排队中" : "正在检查会话"}</span>}
+      {session?.task_id != null && (session.activity === "queued" || session.activity === "checking") && <button className="health-task" onClick={() => openTask(session.task_id!)}>查看任务 #{session.task_id}</button>}
     </div>
     <p className="muted">最近检查：<span><HealthTime value={session?.checked_at ?? null} /></span> · 最近成功：<span><HealthTime value={session?.last_success_at ?? null} /></span></p>
     {session?.error_code && <p className="muted">检查错误：{errorLabels[session.error_code] || session.error_code}</p>}

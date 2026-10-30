@@ -560,3 +560,35 @@ def test_cpa_creation_defaults_to_native_and_preserves_saved_protocol(admin, pro
     updated = admin.patch(f"/api/v1/targets/{created.json()['id']}", json={"name": "Renamed CPA"})
     assert updated.status_code == 200, updated.text
     assert updated.json()["config"]["compatibility"] == expected
+
+
+def test_web_session_activity_reflects_maintenance_tasks(admin, settings):
+    r = admin.post(
+        "/api/v1/accounts",
+        json={"username": "activity-user", "password": "p", "route_type": "direct"},
+    )
+    assert r.status_code == 200, r.text
+    account_id = r.json()["id"]
+    assert r.json()["web_session"]["activity"] == "idle"
+    assert r.json()["web_session"]["task_id"] is None
+
+    def add(kind, state):
+        with database(settings.db_path) as conn:
+            cur = conn.execute(
+                "INSERT INTO tasks(account_id,kind,state,phase) VALUES(?,?,?,'p')",
+                (account_id, kind, state),
+            )
+            return cur.lastrowid
+
+    def session():
+        accounts = admin.get("/api/v1/accounts").json()
+        accounts = accounts["accounts"] if isinstance(accounts, dict) else accounts
+        return next(a for a in accounts if a["id"] == account_id)["web_session"]
+
+    add("login", "running")
+    add("maintenance", "succeeded")
+    assert session()["activity"] == "idle"
+    queued = add("maintenance", "queued")
+    assert (session()["activity"], session()["task_id"]) == ("queued", queued)
+    running = add("maintenance", "running")
+    assert (session()["activity"], session()["task_id"]) == ("checking", running)
