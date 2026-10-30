@@ -1,6 +1,6 @@
 # Development
 
-Python 3.12 is the supported runtime. App imports are side-effect free; schema changes run explicitly through the CLI. Use GitHub-hosted Linux runners for Linux builds/tests and GitHub-hosted macOS runners for Apple builds/tests. Prepare required environment files and tooling under `$HOME/environment` on the runner. Use the committed locks; for a prepared runner checkout:
+Python 3.12 is the supported runtime. App imports are side-effect free; schema changes run explicitly through the CLI. Use the committed locks; for a prepared checkout:
 
 ```sh
 export UV_PROJECT_ENVIRONMENT="$HOME/environment/bridge-venv"
@@ -12,11 +12,13 @@ cd frontend && npm ci && npm test && npm run build
 cd .. && uv run pytest
 ```
 
-CI provisions Camoufox and its paired Firefox and the checksum-verified GOST executable for browser and proxy coverage. To use a system browser, set `BRIDGE_TEST_GOST` to a checksum-verified GOST 3.3.1 executable for all proxy protocol tests. Synthetic suites use temporary databases, loopback servers, and synthetic accounts; they do not contact provider accounts. Tracing, HAR, video, and screenshots are disabled by default.
-
 For local development, set `LLM_AUTH_DB` and `LLM_AUTH_MASTER_KEY_FILE` to temporary paths. `python -m app.cli init` prompts for a password; never put passwords in command arguments. Set `LLM_AUTH_SECURE_COOKIE=false` only for local HTTP. Vite development requires an explicitly configured same-origin API proxy; production acceptance serves the built assets through FastAPI.
 
-See [AGENTS.md](../../AGENTS.md) for repository workflow, security, baseline, delegation, and handoff rules. Update the relevant English architecture or contract document whenever an interface changes. Runtime behavior is summarized in [architecture](../architecture/overview.md); HTTP and adapter contracts are under [contracts](../contracts/).
+See [AGENTS.md](../../AGENTS.md) for repository security and handoff rules. Update the relevant architecture or contract document whenever an interface changes. Runtime behavior is summarized in [architecture](../architecture/overview.md); HTTP and adapter contracts are under [contracts](../contracts/).
+
+## Test boundaries
+
+CI provisions Camoufox and its paired Firefox and the checksum-verified GOST executable for browser and proxy coverage. To use a system browser, set `BRIDGE_TEST_GOST` to a checksum-verified GOST 3.3.1 executable for all proxy protocol tests. Synthetic suites use temporary databases, loopback servers, and synthetic accounts; they do not contact provider accounts. Tracing, HAR, video, and screenshots are disabled by default. See the [roadmap](../roadmap.md) for acceptance status and remaining verification.
 
 
 ## CI entry points
@@ -54,9 +56,7 @@ them. GOST is checksum-verified from its pinned GitHub release into a temporary
 `/tmp/bridge-gost.*` directory, then installed under
 `$HOME/environment/gost/3.3.1-linux-amd64`; temporary archives are removed.
 
-When assessing coverage, inspect skipped tests and job conclusions. Synthetic
-checks use temporary databases and loopback fixtures, with tracing, HAR and video
-disabled. They do not establish real login, long-term renewal or Voice audio.
-Retain the source revision, run URL and conclusions with release records; gate
-logs expire after seven days, full regression logs and image digest records after
-30 days. No image tarball is uploaded as an Actions artifact.
+When assessing coverage, inspect skipped tests and job conclusions. Retain the
+source revision, run URL and conclusions with release records. Gate logs expire
+after seven days; full regression logs and image digest records expire after 30
+days. No image tarball is uploaded as an Actions artifact.

@@ -70,20 +70,12 @@ configuration. Verify the sandbox on the deployment host. `/readyz` checks the
 database/key; it does not attest provider or downstream availability. The named
 `app-data` volume must survive routine container replacement.
 
-## Voice fork installation and recovery
+## Voice gateway integration
 
-Build or publish the compatible gateway from the pinned
-[ronigooja fork](../../deploy/voice/README.md). Deploy the immutable image digest
-produced by the voice image workflow; do not use a mutable `main` tag and do not
-apply the historical `deploy/voice/bridge-v1.patch` overlay.
-Before upgrading an existing gateway, stop it and create a consistent SQLite
-backup; preserve its encryption key, previous image and runtime configuration
-outside Git. Keep the data mount, runtime UID, network and hardening settings.
-Startup seals legacy proxy values, and explicit direct routing uses a sentinel
-that older binaries do not understand. **Rollback requires restoring the matching
-pre-upgrade database and previous image together**, with the same key. Preserve
-the post-upgrade database and sidecars before restoring; never overwrite a live
-database. A binary-only rollback is unsafe.
+Follow the [Voice gateway README](../../deploy/voice/README.md) for the pinned
+source, image publication, installation, upgrade, acceptance, and paired
+database/key rollback procedure. The bridge deployment must preserve the gateway
+data mount, runtime UID, network, and hardening settings.
 
 For a separately managed gateway on the existing `cylo` network, the optional
 [network overlay](../../deploy/voice-network.compose.yml) joins the bridge to that
@@ -94,9 +86,9 @@ container service URL such as `http://cylo-voice-gateway:8090` is distinct from
 host loopback and has no `/login` suffix; trusted HTTP requires `allow_http: true`.
 Do not recreate the independently managed gateway during bridge upgrades.
 
-Run the [disposable acceptance harness](../contracts/integrations/voice.md#disposable-synthetic-http-acceptance)
-against a separate empty database with provider egress blocked before changing
-production. Keep its synthetic credentials and account writes away from live data.
+Run the Voice README's disposable acceptance procedure against a separate empty
+database before changing production; keep synthetic credentials and account
+writes away from live data.
 
 ## Source-only worker fallback
 
@@ -118,7 +110,7 @@ fresh authorization. Image integrity checks do not establish real-account accept
 
 ## Immutable GHCR release procedure
 
-A release is eligible for deployment only after the fast gate passes. The image workflow publishes separate amd64 app and worker images to GHCR with the commit SHA and emits their immutable `sha256` digests. The target server pulls those digests directly; Actions artifacts and a developer laptop are never used as an image transport. Authenticate on the server with `docker login ghcr.io` before running [`deploy/release.sh`](../../deploy/release.sh), and supply `APP_IMAGE` and `WORKER_IMAGE` as `ghcr.io/owner/repository@sha256:...` values.
+A release is eligible for deployment only after the fast gate passes. The image workflow publishes separate amd64 app and worker images to GHCR with the commit SHA and emits their immutable `sha256` digests. The target server pulls those digests directly; do not use Actions artifacts or a developer laptop as image transport. Authenticate on the server with `docker login ghcr.io` before running [`deploy/release.sh`](../../deploy/release.sh), and supply `APP_IMAGE` and `WORKER_IMAGE` as `ghcr.io/owner/repository@sha256:...` values.
 
 The server needs Docker Engine with Compose v2, amd64 Linux, at least 10 GiB free on the release filesystem and 4 GiB RAM, an existing UID-readable master key, a renewing HTTPS certificate, and ports 80/443 available to the reverse proxy. The release project uses [`deploy/release.compose.yml`](../../deploy/release.compose.yml), a private candidate port, the existing seccomp profile, non-root containers, and `/readyz` health checks. Configure the reverse proxy with the existing WebSocket upgrade routes and buffering disabled for task SSE; set proxy read/send timeouts to at least 3600 seconds for account-window and SSE operations.
 

@@ -9,19 +9,17 @@ Current acceptance is tracked in the [roadmap](../../docs/roadmap.md).
 
 ## Hosted validation and rebuilding
 
-Use `.github/workflows/validation.yml` on a GitHub-hosted runner. The `cpa` job
-checks out the exact public upstream commit, verifies the patch checksum, checks
-and applies the patch, installs the toolchain requested by the pinned `go.mod`,
-runs `go test ./...`, then compiles `go build ./cmd/server`. Keep module downloads,
-build caches and executables on the runner; retrieve only required evidence and
-artifacts. The workflow does not deploy a running service. Successful
-synthetic tests do not establish live account, runtime reload or deployment health.
-Do not run compilation or executable test suites on the controller.
+The `cpa` job in `.github/workflows/validation.yml` checks out the exact public
+upstream commit, verifies the patch checksum, checks and applies the patch,
+installs the toolchain requested by the pinned `go.mod`, runs `go test ./...`,
+then compiles `go build ./cmd/server`. The workflow does not deploy a running
+service. Successful synthetic tests do not establish live account, runtime reload
+or deployment health.
 
 The general bridge image build does not implicitly modify a running CLIProxyAPI
 installation. The [CPA Bridge OAuth image workflow](../../.github/workflows/cpa-native-image.yml)
-runs the overlay build on GitHub-hosted runners and publishes an immutable GHCR
-tag plus its digest. Deployments must consume that digest; production hosts must
+runs the overlay build and publishes an immutable GHCR tag plus its digest.
+Deployments must consume that digest; production hosts must
 not compile the source or pull the upstream `latest` image. Preserve the current native configuration,
 auth-directory volume and management bearer authentication. Keep credentials and
 session state outside source control; never copy real auth files into a build.

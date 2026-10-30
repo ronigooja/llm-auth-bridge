@@ -12,10 +12,10 @@ The Codex task remains blocked until Voice reaches `verified` after synchronizat
 
 Choose **账号窗口** to reopen the account's encrypted persistent browser device at ChatGPT. The console reuses a live same-account task or queues an idle browser window. A task blocked on an incomplete prerequisite is not eligible, while idle synchronization does not prevent opening a browser. The shared worker lock serializes browsers across accounts.
 
-The window first shows a read-only monitor. For interactive control, request takeover and wait until automation is paused (`waiting_human`); the task page then offers **继续任务** or **取消任务**. For login tasks, Continue resumes automation in that same browser and closing the viewer leaves the task running. For idle browser-window tasks, Continue (also requested when closing the popup) saves the device and releases the browser without credential extraction or target sync. Cancellation also preserves the device while the worker retains its lease. See the [account-window contract](../contracts/account-window.md).
+The window first shows a read-only monitor. Request takeover for interactive control, then use **继续任务** or **取消任务** according to the task state. Follow the [account-window contract](../contracts/account-window.md) for monitor, takeover, continuation, cancellation, and window lifecycle behavior.
 
 ## Recovery and compatibility
 
 Schema v4 migration and backup/restore procedures are documented in the [deployment guide](deployment.md). Dependency IDs survive deletion of an old prerequisite so recovery can interrupt an orphaned queued task; retention preserves prerequisites while dependent tasks remain active. Account and target deletion still rejects active tasks.
 
-See [the roadmap](../roadmap.md) for the recorded assisted-login observations and remaining real-account acceptance.
+See [the roadmap](../roadmap.md) for acceptance status.

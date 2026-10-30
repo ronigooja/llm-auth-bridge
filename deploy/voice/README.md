@@ -13,7 +13,6 @@ checks, assisted credential synchronization, and provider acceptance.
 
 Requirements: Git, SHA-256 utilities, a Go toolchain compatible with the pinned
 upstream `go.mod` and Docker. Module dependencies are pinned by upstream `go.sum`.
-Build on a GitHub-hosted Linux runner (or an equivalent isolated Linux builder).
 The resulting image must be published by the voice image workflow and deployed by
 digest. The human-readable tag in `source.json` is for discovery only; record the
 workflow's OCI digest in the release record before installation.

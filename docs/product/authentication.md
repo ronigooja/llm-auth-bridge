@@ -8,13 +8,12 @@ Auth-files and native OAuth targets use the account's explicit route. Native OAu
 
 Account devices preserve provider sessions between tasks. Their persistence,
 platform preferences and identity limits are defined in [runtime architecture](../architecture/runtime.md).
-Acceptance of assisted login, reuse and unattended flow is recorded in
-[the roadmap](../roadmap.md).
+See [the roadmap](../roadmap.md) for acceptance status.
 
 No generic webmail reader is enabled. Mailbox URLs are validated and encrypted; code entry or same-session takeover is required. Ambiguous or stale messages are not selected automatically.
 
 ## Human operation
 
-Task controls support code entry, takeover, continue, cancel, and safe synchronization retry. Takeover binds the authenticated WebSocket to the live waiting task and lease. Waiting expires after thirty minutes. Cancellation closes the browser; lease checks prevent a stale worker from overwriting account state. Account-window behavior is defined in the [contract](../contracts/account-window.md).
+Task controls support code entry, takeover, continue, cancel, and safe synchronization retry. Account-window transport and lifecycle behavior are defined in the [contract](../contracts/account-window.md).
 
-Codex continuation on `/choose-an-account` requires one visible exact identity match (case insensitive). Multiple, conflicting, or unsupported controls pause for review. Consent waits for one visible enabled **Continue** button; uncertain clicks are not replayed. Assisted, operator-reviewed login and reuse are distinct from unattended continuation, which remains **unverified**.
+Codex continuation on `/choose-an-account` requires one visible exact identity match (case insensitive). Multiple, conflicting, or unsupported controls pause for review. Consent waits for one visible enabled **Continue** button; uncertain clicks are not replayed. See [the roadmap](../roadmap.md) for acceptance status.

@@ -16,9 +16,8 @@ submitted, or when an account proxy is configured.
   only when the provider rejection classifier finds an explicit supported
   rejection signal.
 
-`browser_review` is therefore a classification result, not proof that the
-account was rejected. The operator must inspect the live account browser or
-cancel the task.
+`browser_review` is a classification result, not proof of provider rejection.
+Only an explicit supported rejection signal establishes that conclusion.
 
 ## How to use this guide
 
@@ -133,12 +132,10 @@ Seeing a generic `login_failed` message alone does not establish that the
 provider rejected the account, and a saved account window cannot reconstruct a
 page that was never opened.
 
-When a run reaches `browser_review`, inspect that same task's live browser. If
-the page visibly states that the account was deleted or deactivated, record the
-provider rejection through the task action and stop using the account. If the
-page is still loading or otherwise unclassified, preserve the takeover state
-for operator review; do not convert it to an account rejection from the generic
-message alone.
+When a run reaches `browser_review`, inspect that same task's live browser and
+preserve takeover for operator review when the page is still loading or
+unclassified. Record a rejection only when the page visibly states that the
+account was deleted or deactivated.
 
 ## Relevant historical fixes
 
@@ -176,4 +173,3 @@ Do not record account credentials, cookies, access tokens, page body text,
 screenshots, HAR files, video, or full provider URLs containing query values.
 Add a synthetic fixture for the observed page classification before changing
 selectors, then repeat a serial real-account run and record its task phases.
-

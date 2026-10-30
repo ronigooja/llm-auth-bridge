@@ -2,8 +2,8 @@
 
 Single-administrator Linux console for account import, serial browser authorization,
 human takeover, and typed credential synchronization to CLIProxyAPI and compatible
-Voice gateways. Product screens are Chinese; execution events and project
-documentation are English. Built with Python 3.12, FastAPI, SQLite, React,
+Voice gateways. Product screens are Chinese; execution events are English. Built
+with Python 3.12, FastAPI, SQLite, React,
 Playwright, Camoufox, and Docker Compose.
 
 ## Start
@@ -18,9 +18,8 @@ window backed by each account's persistent encrypted Camoufox/Firefox device. Co
 a Web-before-Codex task dependency. Follow the [account workflow](docs/guides/account-workflow.md)
 for setup, manual challenges, takeover, and synchronization recovery.
 
-Implementation, synthetic checks, and assisted real-account observations have
-different acceptance boundaries. Consult the [capability matrix and remaining
-acceptance](docs/roadmap.md) before relying on an integration.
+See the [capability matrix and remaining acceptance](docs/roadmap.md) before
+relying on an integration.
 
 ## Documentation by reader
 
