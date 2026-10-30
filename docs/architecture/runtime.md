@@ -9,14 +9,18 @@ then starts websockify and the Python worker. Shutdown waits for the worker to
 close its browser before stopping the desktop processes. The app and worker use
 the shared data volume and lock defined in [Compose](../../docker-compose.yml).
 
-TigerVNC binds its RFB listener to localhost with internal None security;
-websockify is reachable only inside the private service network. Administrator
-access passes through the application's authorized WebSockets. Monitor and
-interactive takeover reuse the task's current browser; opening a monitor does
-not pause automation. See the [account window contract](../contracts/account-window.md)
-for authorization and RFB filtering. TigerVNC uses unauthenticated RFB only inside
-the worker; VNC and websockify ports are not published because publishing them
-would bypass the application's authenticated gateway.
+The desktop transport is private to the worker:
+
+- TigerVNC binds localhost with internal unauthenticated RFB (`None` security).
+- websockify is reachable only inside the private service network; VNC and
+  websockify ports are not published.
+- Administrator access passes through the application's authorized WebSockets.
+- Monitor and interactive takeover reuse the task's current browser; opening a
+  monitor does not pause automation.
+
+Authorization and RFB filtering belong to the [account window
+contract](../contracts/account-window.md). Publishing the private ports would
+bypass the authenticated gateway.
 
 The production desktop starts at 1920×1080 with remote resizing enabled. The
 viewer requests a desktop matching its iframe's CSS dimensions and renders at
@@ -59,10 +63,10 @@ locks; native sessionStorage remains tab scoped. This is persistent account
 storage, not a byte-for-byte archive of every Firefox artifact.
 
 Each task restores the device archive into a restricted temporary directory on
-production tmpfs and removes it after use. Restoration rejects path traversal,
-links and oversized payloads. GOST receives proxy secrets through a private
+production tmpfs and removes it after use. Before extracting, restoration
+validates paths, file types and size budgets and rejects path traversal, links,
+and oversized payloads. GOST receives proxy secrets through a private
 temporary configuration rather than command-line arguments.
-Restoration validates paths, file types and size budgets before extracting.
 Authenticated encryption binds each archive to its account ID, preventing
 cross-account ciphertext substitution. See [browser_device.py](../../app/browser_device.py)
 and device controls in [worker.py](../../app/worker.py). Profile allocation and

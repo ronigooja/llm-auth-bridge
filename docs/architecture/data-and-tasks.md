@@ -51,8 +51,8 @@ Browser operations use bounded checkpoints for cancellation, lease loss,
 shutdown and the active deadline. The default active budget is ten minutes;
 human waiting has a separate thirty-minute budget. Resuming extends the active
 deadline by the time spent waiting and rechecks the existing page. Input commands
-are encrypted and submission IDs make retries idempotent. Takeover pauses the
-same browser rather than creating a replacement session.
+are encrypted and submission IDs make retries idempotent. Takeover transport and
+same-browser behavior belong to the [account window contract](../contracts/account-window.md).
 
 ## Credential handoff and cancellation
 

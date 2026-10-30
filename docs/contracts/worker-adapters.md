@@ -55,8 +55,9 @@ All targets require `base_url`. HTTPS is required unless `allow_http: true` expl
 
 GET requests have at most three attempts for transient transport errors, HTTP 429, 502, 503, and 504. Numeric `Retry-After` values above two seconds fail with a retry-later message; smaller values use a bounded delay. Long or date-form delays do not block the worker. Writes use a stable ID and are followed by readback even after a lost response. No unbounded retry loop is used. Remote bodies, URLs containing secrets, HTTP exception text, and credentials are not included in adapter errors or logs.
 
-An account must declare `route_type: direct` or `route_type: proxy`. An absent proxy is never interpreted as direct. Proxy configuration uses `{server, username?, password?}`, with server schemes `http`, `https`, `socks5`, or `socks5h`; proxy credentials are URL encoded for downstream serialization.
-
-The public account input accepts proxy schemes `http`, `https`, `socks5`, and `socks5h`.
+An account must declare `route_type: direct` or `route_type: proxy`. An absent
+proxy is never interpreted as direct. Proxy configuration uses `{server,
+username?, password?}`, with server schemes `http`, `https`, `socks5`, or
+`socks5h`; proxy credentials are URL encoded for downstream serialization.
 `socks5h` is stored as entered; the route layer uses GOST's `socks5` connector,
 which passes hostnames to the upstream proxy for remote resolution.
