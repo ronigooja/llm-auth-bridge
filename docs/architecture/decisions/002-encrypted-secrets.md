@@ -10,8 +10,9 @@ the set of sensitive records beyond initial account passwords.
 ## Decision
 
 When storing reusable account, browser or integration secret material, encrypt it
-with AES-GCM under a separately mounted key. Keep administrator passwords and
-session tokens hashed, and expose only sanitized public fields.
+with AES-GCM under a 32-byte key supplied as a separately mounted secret file.
+Keep administrator passwords and session tokens hashed, and expose only
+sanitized public fields.
 
 When storing a native device archive, authenticate its account ID as additional
 associated data to reject cross-account ciphertext substitution. Keep runtime

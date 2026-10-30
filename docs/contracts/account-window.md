@@ -12,8 +12,13 @@ Both endpoints require an authenticated session, an explicit same-origin Origin,
 a non-cancelled task with `takeover_available`, and a live execution lease. Each
 connection is pinned to its initial task, account and execution owner. Validation
 runs before forwarding traffic and every 500 ms while idle. Logout, lease expiry,
-execution replacement, cancellation, unavailable browser or task completion closes
-the connection. These rules apply to login and browser-window tasks alike.
+execution replacement, cancellation, unavailable browser, browser closure or task
+completion closes the connection. These rules apply to login and browser-window
+tasks alike.
+
+The server-side monitor filter is fail-closed and enforces input restrictions;
+noVNC's `viewOnly` setting is not an authorization boundary. Bounded desktop
+resizing is the permitted geometry exception.
 
 The monitor enforces read-only operation on the server. Its binary RFB stream
 filter supports RFB 3.8, None security on the internal transport, and shared

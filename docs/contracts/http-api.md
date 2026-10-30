@@ -9,6 +9,12 @@ messages; validation omits input values. Authentication behavior is described in
 
 ## Administrator session
 
+Passwords use Argon2id; session tokens are random and SQLite stores only their
+SHA-256 hashes. Cookies are HttpOnly, SameSite Strict and Secure by default with
+a twelve-hour lifetime; login attempts are rate limited, and changing the
+password revokes every session while a password-hash recheck fences concurrent
+login with the old password.
+
 | Method and path | Body / response |
 | --- | --- |
 | `POST /auth/login` | `{password}` → `{csrf_token}` |
