@@ -12,7 +12,6 @@ from .config import Settings
 from .crypto import load_key, encrypt, decrypt
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from .db import database, validate_database
-from .storage import check_storage, warn_storage_check
 from .queue import Queue, LeaseLost, Cancelled, HumanTimeout, Conflict, event
 
 PROVIDER_REJECTION_PHASES = frozenset(
@@ -216,7 +215,6 @@ class Control:
 class Worker:
     def __init__(self, settings=None, runner=None, syncer=None):
         self.settings = settings or Settings()
-        warn_storage_check(check_storage(self.settings))
         self.key = load_key(self.settings.key_file)
         validate_database(self.settings.db_path, self.key)
         self.queue = Queue(self.settings, self.key)

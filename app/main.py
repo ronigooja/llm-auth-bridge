@@ -18,7 +18,6 @@ from fastapi.staticfiles import StaticFiles
 from .config import Settings
 from .crypto import load_key, encrypt, decrypt
 from .db import database, validate_database
-from .storage import check_storage, warn_storage_check
 from .models import (
     AccountCreate,
     AccountPatch,
@@ -101,9 +100,6 @@ def create_app(settings: Settings | None = None):
 
     @asynccontextmanager
     async def lifespan(app):
-        storage = check_storage(settings)
-        app.state.storage_check = storage
-        warn_storage_check(storage)
         key = load_key(settings.key_file)
         validate_database(settings.db_path, key)
         app.state.key = key
@@ -205,21 +201,11 @@ def create_app(settings: Settings | None = None):
 
     @app.get("/readyz")
     def ready():
-        storage = check_storage(settings)
-        app.state.storage_check = storage
         try:
             validate_database(settings.db_path, app.state.key)
         except Exception:
             raise HTTPException(503, "not ready") from None
-        if storage.warnings and settings.storage_check.lower() == "fail":
-            raise HTTPException(
-                503,
-                {"reason": "unsupported storage/lock setup", "warnings": storage.warnings},
-            )
-        result = {"status": "ready"}
-        if storage.warnings:
-            result["storage"] = {"status": "warning", "warnings": storage.warnings}
-        return result
+        return {"status": "ready"}
 
     @app.post("/api/v1/auth/login")
     def login(body: LoginBody, request: Request):

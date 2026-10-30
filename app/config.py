@@ -33,9 +33,6 @@ class Settings:
     static_dir: Path = field(
         default_factory=lambda: Path(os.getenv("LLM_AUTH_STATIC_DIR", "frontend/dist"))
     )
-    storage_check: str = field(
-        default_factory=lambda: os.getenv("LLM_AUTH_STORAGE_CHECK", "warn")
-    )
 
     @property
     def browser_lock(self):
