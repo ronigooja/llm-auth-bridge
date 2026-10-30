@@ -603,9 +603,14 @@ class Worker:
         with database(self.settings.db_path) as conn:
             cfg = conn.execute("SELECT * FROM settings").fetchone()
             if cfg["maintenance_enabled"]:
+                # Provider-rejected accounts are final; skip them until a new login clears the health row.
+                marks = ",".join("?" * len(PROVIDER_REJECTION_PHASES))
                 due = conn.execute(
-                    "SELECT s.account_id,s.target_id FROM syncs s JOIN targets t ON t.id=s.target_id WHERE t.kind='chatgpt-web-voice' AND s.state='verified' AND s.next_check<=?",
-                    (now,),
+                    "SELECT s.account_id,s.target_id FROM syncs s JOIN targets t ON t.id=s.target_id "
+                    "LEFT JOIN web_session_health h ON h.account_id=s.account_id "
+                    "WHERE t.kind='chatgpt-web-voice' AND s.state='verified' AND s.next_check<=? "
+                    f"AND COALESCE(h.error_code,'') NOT IN ({marks})",
+                    (now, *PROVIDER_REJECTION_PHASES),
                 ).fetchall()
             else:
                 due = []

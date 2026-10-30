@@ -333,6 +333,23 @@ def test_maintenance_dedup_and_reauth_required(settings, resources):
         assert conn.execute("SELECT state,next_check FROM syncs").fetchone()[1] is None
 
 
+def test_maintenance_skips_provider_rejected_accounts(settings, resources):
+    a, t = resources
+    with database(settings.db_path) as conn:
+        conn.execute("UPDATE targets SET kind='chatgpt-web-voice' WHERE id=?", (t,))
+        conn.execute(
+            "INSERT INTO syncs(account_id,target_id,credential_type,state,next_check) VALUES(?,?,'chatgpt_web','verified',?)",
+            (a, t, time.time() - 1),
+        )
+        conn.execute(
+            "INSERT INTO web_session_health(account_id,status,checked_at,error_code) VALUES(?,'error',?,'account_deleted')",
+            (a, time.time()),
+        )
+    Worker(settings, runner=lambda *args: None).maintenance()
+    with database(settings.db_path) as conn:
+        assert conn.execute("SELECT count(*) FROM tasks").fetchone()[0] == 0
+
+
 def test_cancel_between_checkpoint_and_first_sync_attempt_is_atomic(
     settings, resources, monkeypatch
 ):
