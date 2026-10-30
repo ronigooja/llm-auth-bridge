@@ -39,10 +39,18 @@ failed-process report. Interrupted or missing results never count as passed.
 The fast gate targets 10–15 minutes with warm caches; cold container builds can
 exceed that target and have a 20-minute job limit. uv/npm, Camoufox and pinned
 GOST caches reuse dependencies, while Docker layer caches retain system/browser
-installation layers. Browser OS packages are provisioned only for jobs needing
-them. GOST is checksum-verified from its pinned GitHub release into a temporary
+installation layers. The browser jobs restore Camoufox with an OS/architecture
+and `uv.lock` key; on a miss they fetch it and save the cache only after the
+fetch succeeds. Browser OS packages are provisioned only for jobs needing them.
+GOST is checksum-verified from its pinned GitHub release into a temporary
 `/tmp/bridge-gost.*` directory, then installed under
 `$HOME/environment/gost/3.3.1-linux-amd64`; temporary archives are removed.
+
+The worker Docker layers apply system packages, the browser dependency sync,
+Camoufox fetch, and final directory ownership in that order. The dependency
+and fetch layers depend on the copied lockfile rather than application source;
+BuildKit's uv cache mount stores downloads outside the image. Source is still
+copied last, so source-only changes reuse the browser and system layers.
 
 When assessing coverage, inspect skipped tests and job conclusions. Retain the
 source revision, run URL and conclusions with release records. Gate logs expire

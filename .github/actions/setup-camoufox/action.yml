@@ -1,0 +1,24 @@
+name: Set up cached Camoufox
+description: Restore Camoufox for the lockfile and save a fetched cache on a miss.
+inputs: {}
+runs:
+  using: composite
+  steps:
+    - name: Restore Camoufox binaries
+      id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.cache/camoufox
+        key: ${{ runner.os }}-${{ runner.arch }}-camoufox-${{ hashFiles('uv.lock') }}
+    - name: Fetch Camoufox binaries
+      if: steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -Eeuo pipefail
+        uv run python -m camoufox fetch
+    - name: Save Camoufox binaries
+      if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.cache/camoufox
+        key: ${{ steps.restore.outputs.cache-primary-key }}
