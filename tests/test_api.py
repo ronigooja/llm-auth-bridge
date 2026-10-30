@@ -592,3 +592,17 @@ def test_web_session_activity_reflects_maintenance_tasks(admin, settings):
     assert (session()["activity"], session()["task_id"]) == ("queued", queued)
     running = add("maintenance", "running")
     assert (session()["activity"], session()["task_id"]) == ("checking", running)
+
+
+def test_http_mailbox_url_is_accepted_without_opt_in(admin):
+    r = admin.post(
+        "/api/v1/accounts",
+        json={
+            "username": "http-mailbox",
+            "password": "p",
+            "mailbox_url": "http://mail.example/inbox",
+            "route_type": "direct",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["has_mailbox"] is True

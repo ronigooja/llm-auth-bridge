@@ -22,7 +22,8 @@ messages; validation omits input values. Authentication behavior is described in
 `status`, `route_type` (`unset`, `direct`, `proxy`), `version`, `target_ids`,
 `has_password`, `has_totp`, `has_mailbox`, `allow_http_mailbox`, and timestamps.
 `POST /accounts` requires `{username,password}` and accepts `totp`, `mailbox_url`,
-`allow_http_mailbox`, `route_type`, `proxy`, and `target_ids`. `PATCH /accounts/{id}`
+`allow_http_mailbox`, `route_type`, `proxy`, and `target_ids`. Mailbox URLs may use HTTP or HTTPS;
+`allow_http_mailbox` is accepted for compatibility and no longer restricts the scheme. `PATCH /accounts/{id}`
 accepts those optional fields. Omission preserves saved fields; explicit null
 clears optional secrets. Nested proxy secrets follow the same preservation rule.
 Proxy input is `{server,username?,password?}` with a required port and `http`,

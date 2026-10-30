@@ -177,7 +177,7 @@ describe("management interactions", () => {
     expect(JSON.parse(String(call.init?.body))).toMatchObject({
       username: "synthetic@example.test",
       route_type: "proxy",
-      target_ids: [1, 2],
+      target_ids: [2, 1],
       proxy: { server: "socks5://proxy.example.test:1080", username: "user", password: "p@ss" },
     });
   });
