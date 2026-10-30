@@ -12,6 +12,16 @@ cd frontend && npm ci && npm test && npm run build
 cd .. && uv run pytest
 ```
 
+For a fast local backend loop (excluding browser/live tests), run the validated
+parallel command:
+
+```sh
+uv run --extra test --extra browser pytest -x -q --ignore-glob='tests/*_live.py' -n auto --durations=20
+```
+
+For a focused check, select a test file and expression, for example:
+`uv run --extra test --extra browser pytest tests/test_api.py -k login`.
+
 For local development, set `LLM_AUTH_DB` and `LLM_AUTH_MASTER_KEY_FILE` to temporary paths. `python -m app.cli init` prompts for a password; never put passwords in command arguments. Set `LLM_AUTH_SECURE_COOKIE=false` only for local HTTP. Vite development requires an explicitly configured same-origin API proxy; production acceptance serves the built assets through FastAPI.
 
 See [AGENTS.md](../../AGENTS.md) for repository security and handoff rules. Update the relevant architecture or contract document whenever an interface changes. Runtime behavior is summarized in [architecture](../architecture/overview.md); HTTP and adapter contracts are under [contracts](../contracts/).
