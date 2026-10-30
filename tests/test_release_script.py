@@ -15,8 +15,7 @@ if name=='timeout': os.execvp(args[3],args[3:])
 if name=='flock': sys.exit(0)
 if name=='ss': sys.exit(0)
 if name=='awk':
-
- if '/proc/meminfo' not in args: print('1' if os.environ.get('LOW_DISK') else '99999999')
+ if '/proc/meminfo' not in args: sys.stdin.read(); print('1' if os.environ.get('LOW_DISK') else '99999999')
  sys.exit(0)
 if name=='df': print('Filesystem 1024-blocks Used Available Capacity Mounted on\nx 1 1 '+('1' if os.environ.get('LOW_DISK') else '99999999')+' 1% /'); sys.exit(0)
 if name=='curl':
