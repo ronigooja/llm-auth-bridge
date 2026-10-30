@@ -70,6 +70,16 @@ configuration. Verify the sandbox on the deployment host. `/readyz` checks the
 database/key; it does not attest provider or downstream availability. The named
 `app-data` volume must survive routine container replacement.
 
+The base Compose file limits the app to 768 MiB and 256 processes, and the browser
+worker to 3 GiB and 512 processes. These are conservative guards for the documented
+4 GiB minimum host: the worker needs headroom for a headed browser, 1 GiB shared
+memory and its private temporary filesystem, while the app remains bounded so a
+browser fault cannot consume the host. If the host runs larger accounts or additional
+services, tune `mem_limit` and `pids_limit` in an ignored Compose override after
+observing peak RSS and process counts; keep enough host memory for Docker and the
+reverse proxy. Compose waits for the worker heartbeat health check before starting
+the app, with a 45-second worker startup grace period.
+
 ## Voice gateway integration
 
 Follow the [Voice gateway README](../../deploy/voice/README.md) for the pinned
