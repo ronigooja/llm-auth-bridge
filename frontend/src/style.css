@@ -180,17 +180,23 @@ p {
   padding: 5px 8px;
 }
 .badge.succeeded,
-.badge.verified {
+.badge.verified,
+.badge.ready {
   background: #e5f0e3;
   color: #345c39;
 }
 .badge.failed,
-.badge.interrupted {
+.badge.interrupted,
+.badge.sync_failed,
+.badge.identity_mismatch {
   background: #faeae5;
   color: #a44935;
 }
 .badge.waiting_human,
-.badge.sync_pending {
+.badge.sync_pending,
+.badge.remote_outcome_unknown,
+.badge.sync_unknown,
+.badge.unverified {
   background: #fbefcf;
   color: #886710;
 }
@@ -583,7 +589,9 @@ dd {
 }
 .health-task {
   font-size: 12px;
-  padding: 4px 8px;
+  line-height: normal;
+  padding: 5px 8px;
+  border-radius: 5px;
 }
 .badge.valid {
   background: #e5f0e3;
