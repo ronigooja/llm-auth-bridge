@@ -10,6 +10,7 @@ services:
       LLM_AUTH_DB: /data/app.sqlite3
       LLM_AUTH_MASTER_KEY_FILE: /run/secrets/master_key
       LLM_AUTH_LOCK_FILE: /data/browser.lock
+      LLM_AUTH_STORAGE_CHECK: ${LLM_AUTH_STORAGE_CHECK:-warn}
       LLM_AUTH_SECURE_COOKIE: ${LLM_AUTH_SECURE_COOKIE:-true}
       LLM_AUTH_TAKEOVER_URL: ws://worker:6080/websockify
     volumes:
@@ -49,6 +50,7 @@ services:
       LLM_AUTH_DB: /data/app.sqlite3
       LLM_AUTH_MASTER_KEY_FILE: /run/secrets/master_key
       LLM_AUTH_LOCK_FILE: /data/browser.lock
+      LLM_AUTH_STORAGE_CHECK: ${LLM_AUTH_STORAGE_CHECK:-warn}
       LLM_AUTH_SECURE_COOKIE: ${LLM_AUTH_SECURE_COOKIE:-true}
       DISPLAY: :99
     volumes:
