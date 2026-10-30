@@ -475,7 +475,7 @@ export function App() {
                     <article key={a.id} className="resource">
                       <div className="resource-heading">
                         <h2>{a.username}</h2>
-                        <span className="badge">{a.status === "ready" ? "历史同步成功" : "历史同步待验证"}</span>
+                        <span className="badge">{a.status === "ready" ? "历史同步：已完成" : "历史同步：待验证"}</span>
                       </div>
                       <SessionHealth session={a.web_session} syncs={a.target_syncs} targets={targets || []} openTask={openTask} />
                       <div className="actions">

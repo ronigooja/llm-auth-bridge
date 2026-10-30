@@ -530,11 +530,11 @@ describe("session health refresh", () => {
     try {
       render(<App />);
       expect(await screen.findByText("会话有效")).toBeTruthy();
-      expect(screen.getByText("历史同步成功")).toBeTruthy();
+      expect(screen.getByText("历史同步：已完成")).toBeTruthy();
       expect(refreshTick).toBeDefined();
       await act(async () => { refreshTick!(); });
       expect(await screen.findByText("已退出登录")).toBeTruthy();
-      expect(screen.getByText("历史同步成功")).toBeTruthy();
+      expect(screen.getByText("历史同步：已完成")).toBeTruthy();
       visibility.mockReturnValue("hidden");
       await act(async () => { refreshTick!(); });
       expect(accountReads).toBe(2);

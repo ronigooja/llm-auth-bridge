@@ -52,6 +52,15 @@ describe("account session health", () => {
     expect(screen.queryByText("已退出登录")).toBeNull();
     expect(document.querySelectorAll("time")).toHaveLength(2);
   });
+  it("prioritizes account deletion over an unhelpful never-successful message", () => {
+    render(<SessionHealth session={{ ...session, status: "error", error_code: "account_deleted", last_success_at: null }} targets={[]} openTask={vi.fn()} />);
+    expect(screen.getByText("账号已删除")).toBeTruthy();
+    expect(screen.queryByText("检查失败")).toBeNull();
+    expect(screen.getByText(/最近检查/)).toBeTruthy();
+    expect(screen.getByText("OpenAI 已删除此账号")).toBeTruthy();
+    expect(screen.queryByText("从未成功")).toBeNull();
+    expect(screen.queryByText("尚无成功记录")).toBeNull();
+  });
   it("shows no activity badge when the backend omits or idles activity", () => {
     const { rerender } = render(<SessionHealth session={{ ...session, activity: undefined, task_id: undefined }} targets={[]} openTask={vi.fn()} />);
     expect(screen.queryByText("正在检查会话")).toBeNull();
