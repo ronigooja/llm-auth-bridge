@@ -1,7 +1,5 @@
 name: Browser cache and routing regression
 on:
-  push:
-    branches: [validation/browser-cache-fix-20261028]
   workflow_dispatch:
 permissions:
   contents: read

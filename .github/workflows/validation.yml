@@ -1,8 +1,6 @@
 name: Native OAuth validation
 on:
   workflow_dispatch:
-  push:
-    branches: ["validation/**"]
 permissions:
   contents: read
 concurrency:

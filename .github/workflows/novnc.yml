@@ -1,8 +1,6 @@
 name: Account viewer regression
 on:
   workflow_dispatch:
-  push:
-    branches: ["fix/novnc-cookie-context"]
 permissions:
   contents: read
 concurrency:

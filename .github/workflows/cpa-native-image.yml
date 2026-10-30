@@ -2,11 +2,6 @@ name: CLIProxyAPI Bridge OAuth image
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "deploy/cpa/**"
-      - ".github/workflows/cpa-native-image.yml"
-    tags: ["cpa-native-v*"]
 
 permissions:
   contents: read

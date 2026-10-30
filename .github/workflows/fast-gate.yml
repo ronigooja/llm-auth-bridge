@@ -12,10 +12,6 @@ on:
         description: Publish GHCR images after every fast gate passes
         type: boolean
         default: false
-  push:
-    branches: [main, "validation/**", "deployment/**"]
-  pull_request:
-    branches: [main]
 
 permissions:
   contents: read
