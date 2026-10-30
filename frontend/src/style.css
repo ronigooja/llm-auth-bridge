@@ -589,8 +589,12 @@ dd {
   background: #e5f0e3;
   color: #345c39;
 }
-.badge.signed_out,
-.badge.error {
+.badge.unavailable {
   background: #faeae5;
   color: #a44935;
+}
+.badge.signed_out,
+.badge.error {
+  background: #fbefcf;
+  color: #886710;
 }
