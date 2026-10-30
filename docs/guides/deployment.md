@@ -60,6 +60,8 @@ New CLIProxyAPI targets default to `cpa-native-oauth-v1`, which requires the rev
 
 The worker uses headed Camoufox/Firefox in a TigerVNC desktop with Openbox and dynamic dimensions. The browser follows desktop resize events; fixed-size Xvfb/x11vnc runtimes are incompatible with account-window resizing. VNC and websockify remain private to the Compose network. Temporary profiles, display sockets, and GOST configuration live on a private `/tmp` mount; containers run as UID/GID 10001.
 
+Keep the database and browser lock on the same local filesystem volume; startup warns for known network filesystems and `/readyz` can fail closed with `LLM_AUTH_STORAGE_CHECK=fail` (use `warn`, the default, or `off` to avoid that failure).
+
 
 The worker uses the vendored [Playwright seccomp profile](../../deploy/playwright-seccomp.json)
 from [Playwright 1.56.0](https://github.com/microsoft/playwright/blob/v1.56.0/utils/docker/seccomp_profile.json)
