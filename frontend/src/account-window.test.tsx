@@ -63,6 +63,26 @@ describe("unified account window", () => {
     task.state = "waiting_human";
     await waitFor(() => expect(target.document.querySelector("iframe")?.src).toContain("view_only=false&shared=true&path=api/v1/tasks/7/takeover"), { timeout: 2500 });
   });
+  it.each([
+    ["browser_review", true],
+    ["account_deactivated", false],
+  ] as const)("offers 继续任务 beside 接管 for %s only when resumable", async (phase, offered) => {
+    const target = popup();
+    const task = { id: 7, kind: "login", state: "waiting_human", phase, takeover_available: true };
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn((input) => { calls.push(String(input)); return json(String(input).endsWith("/browser") ? { task } : task); }));
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "账号窗口" }));
+    await waitFor(() => expect(target.document.querySelector("iframe")).toBeTruthy());
+    const button = within(target.document.body).queryByRole("button", { name: "继续任务" });
+    expect(!!button).toBe(offered);
+    if (button) {
+      fireEvent.click(button);
+      await waitFor(() => expect(calls).toContain("/api/v1/tasks/7/continue"));
+    } else {
+      expect(calls).not.toContain("/api/v1/tasks/7/continue");
+    }
+  });
   it("waits for idle readiness after native closure without offering extra close controls", async () => {
     vi.useFakeTimers();
     const target = popup();

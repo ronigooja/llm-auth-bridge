@@ -6,6 +6,8 @@ import { requestId } from "./id";
 type BrowserTask = { id: number; account_id?: number; depends_on_task_id?: number | null; state: string; kind?: string; phase?: string; message?: string; takeover_available?: boolean };
 const active = new Set(["queued", "running", "waiting_human", "sync_pending"]);
 const shellPath = "/account-window";
+// Provider rejection pages are final; the task page offers cancel only.
+const rejected = new Set(["account_deleted", "account_deactivated", "account_suspended", "account_rejected"]);
 
 async function waitForShell(target: Window) {
   const deadline = Date.now() + 15000;
@@ -138,6 +140,22 @@ export function useAccountWindow(enabled: boolean) {
     } catch (e) { if (current.current?.id === t.id) setError(e instanceof Error ? e.message : "无法接管浏览器"); }
     finally { busyRef.current = false; setBusy(false); }
   }
+  // Resume a paused login after the operator has inspected or fixed the page.
+  // Applies only to login tasks; an idle account window uses finish() instead.
+  async function continueTask() {
+    const t = current.current;
+    if (!t || busyRef.current || idle(t)) return;
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      await api(`/tasks/${t.id}/continue`, "POST");
+      if (current.current?.id !== t.id) return;
+      setTakeoverRequested(false);
+      setInteractive(false);
+      setError("");
+    } catch (e) { if (current.current?.id === t.id) setError(e instanceof Error ? e.message : "无法继续任务"); }
+    finally { busyRef.current = false; setBusy(false); }
+  }
   useEffect(() => {
     if (!enabled) { hide(); update(null); }
   }, [enabled]);
@@ -202,6 +220,7 @@ export function useAccountWindow(enabled: boolean) {
         <strong>账号窗口 · 账号 #{account.current}</strong>
         <span role="status">{!task ? "正在准备账号浏览器…" : closing ? "正在关闭账号窗口，请稍候…" : task.state === "sync_pending" ? "正在同步账号，请稍候…" : !active.has(task.state) ? task.state === "succeeded" ? "任务已完成。" : task.message || "任务已结束，请检查任务记录。" : interactive ? "可操作浏览器" : "正在观察自动操作（只读）"}</span>
         {task && active.has(task.state) && task.state !== "sync_pending" && !idle(task) && !interactive && <button disabled={busy || !available || takeoverRequested} onClick={() => void takeControl()}>{takeoverRequested ? "正在等待接管…" : "接管"}</button>}
+        {task && task.state === "waiting_human" && !idle(task) && !rejected.has(task.phase || "") && <button disabled={busy} onClick={() => void continueTask()}>继续任务</button>}
       </header>
       {task && !idle(task) && <p style={{ margin: "0 12px 12px" }}>关闭窗口仅关闭查看器，登录任务会继续。接管后请返回任务页点击“继续任务”。</p>}
       {error && <p role="alert">{error}</p>}
