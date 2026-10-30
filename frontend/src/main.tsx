@@ -780,6 +780,8 @@ function AccountForm({
               清除现有验证器密钥
             </label>
           )}
+        <details>
+          <summary>邮箱取码地址</summary>
           <Field title="邮箱取码地址（留空保留）">
             <input
               type="text"
@@ -799,6 +801,7 @@ function AccountForm({
               清除现有邮箱地址
             </label>
           )}
+        </details>
         <Field title="网络路由">
           <select value={route} onChange={(e) => setRoute(e.target.value)}>
             <option value="unset">未设置</option>
