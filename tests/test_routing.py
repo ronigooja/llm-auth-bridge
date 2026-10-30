@@ -67,7 +67,7 @@ def test_proxy_never_falls_back_when_gost_missing(monkeypatch):
             pytest.fail("must not fall back to direct")
 
 
-@pytest.mark.parametrize("scheme", ["http", "https", "socks5"])
+@pytest.mark.parametrize("scheme", ["http", "https", "socks5", "socks5h"])
 def test_gost_credentials_only_in_restricted_config(monkeypatch, scheme):
     import json
     import os
@@ -116,6 +116,8 @@ def test_gost_credentials_only_in_restricted_config(monkeypatch, scheme):
         assert route.session._trust_env is False
     node = observed["config"]["chains"][0]["hops"][0]["nodes"][0]
     assert node["connector"]["auth"]["password"] == "synthetic-secret"
+    expected = "socks5" if scheme.startswith("socks5") else "http"
+    assert node["connector"]["type"] == expected
     if scheme == "https":
         assert node["dialer"]["tls"] == {"secure": True, "serverName": "proxy.example"}
     assert observed["terminated"]

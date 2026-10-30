@@ -58,5 +58,6 @@ GET requests have at most three attempts for transient transport errors, HTTP 42
 
 An account must declare `route_type: direct` or `route_type: proxy`. An absent proxy is never interpreted as direct. Proxy configuration uses `{server, username?, password?}`, with server schemes `http`, `https`, `socks5`, or `socks5h`; proxy credentials are URL encoded for downstream serialization.
 
-The public account input accepts proxy schemes `http`, `https`, and `socks5`;
-the downstream serializer additionally understands legacy/internal `socks5h`.
+The public account input accepts proxy schemes `http`, `https`, `socks5`, and `socks5h`.
+`socks5h` is stored as entered; the route layer uses GOST's `socks5` connector,
+which passes hostnames to the upstream proxy for remote resolution.

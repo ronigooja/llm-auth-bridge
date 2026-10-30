@@ -29,7 +29,7 @@ def _proxy_config(proxy: dict) -> tuple[str, str, int, str | None, str | None]:
     try:
         parsed = urlsplit(proxy["server"])
         if (
-            parsed.scheme not in ("http", "https", "socks5")
+            parsed.scheme not in ("http", "https", "socks5", "socks5h")
             or not parsed.hostname
             or parsed.username
             or parsed.password
@@ -46,7 +46,7 @@ def _proxy_config(proxy: dict) -> tuple[str, str, int, str | None, str | None]:
                 443
                 if parsed.scheme == "https"
                 else 1080
-                if parsed.scheme == "socks5"
+                if parsed.scheme in ("socks5", "socks5h")
                 else 80
             ),
             proxy.get("username"),
@@ -81,7 +81,11 @@ def account_route(account: dict):
     node = {
         "name": "upstream",
         "addr": f"[{host}]:{port}" if ":" in host else f"{host}:{port}",
-        "connector": {"type": "socks5" if scheme == "socks5" else "http"},
+        # GOST has no socks5h type: its socks5 connector sends hostnames to the
+        # upstream proxy, which is the remote-resolution behavior of socks5h.
+        "connector": {
+            "type": "socks5" if scheme in ("socks5", "socks5h") else "http"
+        },
         "dialer": {"type": "tls" if scheme == "https" else "tcp"},
     }
     if scheme == "https":

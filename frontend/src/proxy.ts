@@ -12,11 +12,11 @@ export function parseProxyUrl(value: string) {
       (url.pathname !== '' && url.pathname !== '/')
     ) throw new Error();
     return {
-      server: `${url.protocol === 'socks5h:' ? 'socks5:' : url.protocol}//${url.hostname}:${Number(port)}`,
+      server: `${url.protocol}//${url.hostname}:${Number(port)}`,
       ...(url.username ? { username: decodeURIComponent(url.username) } : {}),
       ...(url.password ? { password: decodeURIComponent(url.password) } : {}),
     };
   } catch {
-    throw new Error('代理 URL 格式无效，请填写 http://用户名:密码@主机:端口 或 socks5://主机:端口');
+    throw new Error('代理 URL 格式无效，请填写 http://用户名:密码@主机:端口 、socks5://主机:端口 或 socks5h://主机:端口');
   }
 }

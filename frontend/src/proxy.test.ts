@@ -6,7 +6,7 @@ describe('proxy URL input', () => {
     ['http://proxy.test:80', { server: 'http://proxy.test:80' }],
     ['https://proxy.test:443/', { server: 'https://proxy.test:443' }],
     ['socks5://[::1]:1080', { server: 'socks5://[::1]:1080' }],
-    ['socks5h://u%40x:p%3Aa%2Fss@proxy.test:1080', { server: 'socks5://proxy.test:1080', username: 'u@x', password: 'p:a/ss' }],
+    ['socks5h://u%40x:p%3Aa%2Fss@proxy.test:1080', { server: 'socks5h://proxy.test:1080', username: 'u@x', password: 'p:a/ss' }],
   ])('converts %s to the API contract', (url, expected) => {
     expect(parseProxyUrl(url)).toEqual(expected);
   });

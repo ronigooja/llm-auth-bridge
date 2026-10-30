@@ -66,7 +66,7 @@ class Proxy(Model):
         try:
             u = urlsplit(v)
             if (
-                u.scheme not in ("http", "https", "socks5")
+                u.scheme not in ("http", "https", "socks5", "socks5h")
                 or not u.hostname
                 or not u.port
                 or u.username

@@ -26,7 +26,7 @@ messages; validation omits input values. Authentication behavior is described in
 accepts those optional fields. Omission preserves saved fields; explicit null
 clears optional secrets. Nested proxy secrets follow the same preservation rule.
 Proxy input is `{server,username?,password?}` with a required port and `http`,
-`https`, or `socks5` server scheme; embedded user information is rejected.
+`https`, `socks5`, or `socks5h` server scheme; embedded user information is rejected.
 Masked placeholder values cannot replace secrets.
 
 `GET /accounts/{id}/secrets` is an authenticated administrator edit action that
