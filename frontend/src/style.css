@@ -593,16 +593,16 @@ dd {
   padding: 5px 8px;
   border-radius: 5px;
 }
-.badge.valid {
+.badge.session-valid {
   background: #e5f0e3;
   color: #345c39;
 }
-.badge.unavailable {
+.badge.session-unavailable {
   background: #faeae5;
   color: #a44935;
 }
-.badge.signed_out,
-.badge.error {
+.badge.session-signed_out,
+.badge.session-error {
   background: #fbefcf;
   color: #886710;
 }

@@ -61,6 +61,15 @@ describe("account session health", () => {
     expect(screen.queryByText("从未成功")).toBeNull();
     expect(screen.queryByText("尚无成功记录")).toBeNull();
   });
+  it("does not repeat the status label as the reason and avoids the global error class", () => {
+    render(<SessionHealth session={{ ...session, status: "error", error_code: "check_failed", last_success_at: null }} targets={[]} openTask={vi.fn()} />);
+    expect(screen.getAllByText(/检查失败/)).toHaveLength(1);
+    expect(screen.getByText(/尚无成功记录/)).toBeTruthy();
+    const badge = screen.getByText("检查失败");
+    expect(badge.classList.contains("badge")).toBe(true);
+    expect(badge.classList.contains("error")).toBe(false);
+    expect(badge.classList.contains("session-error")).toBe(true);
+  });
   it("shows no activity badge when the backend omits or idles activity", () => {
     const { rerender } = render(<SessionHealth session={{ ...session, activity: undefined, task_id: undefined }} targets={[]} openTask={vi.fn()} />);
     expect(screen.queryByText("正在检查会话")).toBeNull();
