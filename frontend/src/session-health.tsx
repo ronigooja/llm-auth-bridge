@@ -34,17 +34,12 @@ const errorLabels: Record<string, string> = {
   identity_mismatch: "账号身份不匹配",
   check_failed: "检查失败",
 };
-function sessionLabel(session: WebSession | undefined) {
-  if (session?.error_code === "account_deleted") return "账号已删除";
-  return healthLabels[session?.status || "unknown"];
-}
 function sessionMeta(session: WebSession | undefined, sep: ReactNode) {
   if (!session?.checked_at) return null;
   const checked = <>最近检查 <HealthTime value={session.checked_at} /></>;
-  if (session.error_code === "account_deleted") {
-    return <>{checked}{sep}OpenAI 已删除此账号</>;
-  }
-  return <>{checked}{sep}{session.last_success_at != null ? <>最近成功 <HealthTime value={session.last_success_at} /></> : "尚无成功记录"}{session.error_code && <>{sep}{errorLabels[session.error_code] || session.error_code}</>}</>;
+  const reason = session.error_code && <>{sep}{errorLabels[session.error_code] || session.error_code}</>;
+  if (session.error_code === "account_deleted") return <>{checked}{reason}</>;
+  return <>{checked}{sep}{session.last_success_at != null ? <>最近成功 <HealthTime value={session.last_success_at} /></> : "尚无成功记录"}{reason}</>;
 }
 export function HealthTime({ value, now = Date.now() }: { value: number | null; now?: number }) {
   if (value === null) return <>暂无记录</>;
@@ -65,7 +60,7 @@ export function SessionHealth({ session, syncs = [], targets, openTask }: {
   return <section className="account-health" aria-label="会话与同步状态">
     <div className="health-row">
       <strong>网页会话</strong>
-      <span className={`badge ${session?.status || "unknown"}`}>{sessionLabel(session)}</span>
+      <span className={`badge ${session?.status || "unknown"}`}>{healthLabels[session?.status || "unknown"]}</span>
       {active && <span className="badge running">{session?.activity === "queued" ? "检查排队中" : "正在检查会话"}</span>}
       {active && session?.task_id != null && <button className="health-task" onClick={() => openTask(session.task_id!)}>查看任务 #{session.task_id}</button>}
       <span className="muted">
