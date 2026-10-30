@@ -105,21 +105,20 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - name: Restore Camoufox binaries
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/camoufox
-          key: ${{ runner.os }}-${{ runner.arch }}-camoufox-${{ hashFiles('uv.lock') }}
-      - name: Install browser and display prerequisites
+      - name: Install browser dependencies
         timeout-minutes: 6
         run: |
           set -Eeuo pipefail
           mkdir -p fast-gate-logs
           exec > fast-gate-logs/browser-provision.log 2>&1
           uv sync --frozen --extra test --extra browser
-          uv run python -m camoufox fetch
+      - uses: ./.github/actions/setup-camoufox
+      - name: Install display prerequisites
+        timeout-minutes: 6
+        run: |
+          set -Eeuo pipefail
           sudo apt-get update
-          sudo apt-get install -y xvfb xauth novnc x11vnc websockify tigervnc-standalone-server openbox x11-utils
+          sudo apt-get install -y xvfb xauth
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Run synthetic browser preflight
         timeout-minutes: 5

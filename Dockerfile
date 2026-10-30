@@ -18,8 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends novnc tini \
     && groupadd --gid 10001 bridge && useradd --uid 10001 --gid bridge --create-home bridge \
     && mkdir /data && chown bridge:bridge /data
 COPY pyproject.toml uv.lock ./
-RUN pip install --no-cache-dir uv==0.8.22 \
-    && uv sync --no-cache --frozen --no-dev --no-install-project
+RUN pip install --no-cache-dir uv==0.8.22
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    uv sync --frozen --no-dev --no-install-project
 ENV PATH=/app/.venv/bin:$PATH
 USER bridge
 ENTRYPOINT ["/usr/bin/tini", "--"]
@@ -48,11 +49,15 @@ COPY --from=gost /usr/local/bin/gost /usr/local/bin/gost
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright XDG_CACHE_HOME=/opt/cache DISPLAY=:99
 RUN apt-get update && apt-get install -y --no-install-recommends tigervnc-standalone-server openbox x11-utils websockify libgtk-3-0 libasound2 \
     && mkdir -p /opt/playwright /opt/cache \
-    && uv sync --no-cache --frozen --no-dev --no-install-project --extra browser \
+    && chown bridge:bridge /opt/playwright /opt/cache \
+    && chmod u+rwx,go+rx /opt/playwright /opt/cache \
+    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    uv sync --frozen --no-dev --no-install-project --extra browser
+RUN umask 022 \
     && XDG_CACHE_HOME=/opt/cache /app/.venv/bin/python -m camoufox fetch \
     && chown -R bridge:bridge /opt/playwright /opt/cache \
-    && chmod -R u+rwX,go+rX /opt/playwright /opt/cache \
-    && rm -rf /var/lib/apt/lists/*
+    && chmod -R u+rwX,go+rX /opt/playwright /opt/cache
 RUN <<'SH'
 cat > /usr/local/bin/bridge-worker <<'SCRIPT'
 #!/bin/sh
