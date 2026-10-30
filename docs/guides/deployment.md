@@ -39,7 +39,7 @@ docker compose run --rm --no-deps app python -m app.cli migrate
 docker compose up -d
 ```
 
-Schema v4 is the current schema. Migration is explicit and offline; app and worker must be stopped, and the existing encryption key must be used. Do not generate a replacement key for an existing database. Deploy app, worker, and frontend together.
+Schema v6 is the current schema. Migration is explicit and offline; app and worker must be stopped, and the existing encryption key must be used. Do not generate a replacement key for an existing database. Deploy app, worker, and frontend together.
 
 To restore, stop both services and preserve the current database and sidecars before restoring into an absent destination:
 

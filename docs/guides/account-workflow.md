@@ -16,6 +16,6 @@ The window first shows a read-only monitor. Request takeover for interactive con
 
 ## Recovery and compatibility
 
-Schema v4 migration and backup/restore procedures are documented in the [deployment guide](deployment.md). Dependency IDs survive deletion of an old prerequisite so recovery can interrupt an orphaned queued task; retention preserves prerequisites while dependent tasks remain active. Account and target deletion still rejects active tasks.
+Schema migration and backup/restore procedures are documented in the [deployment guide](deployment.md). Dependency IDs survive deletion of an old prerequisite so recovery can interrupt an orphaned queued task; retention preserves prerequisites while dependent tasks remain active. Account and target deletion still rejects active tasks.
 
 See [the roadmap](../roadmap.md) for acceptance status.
