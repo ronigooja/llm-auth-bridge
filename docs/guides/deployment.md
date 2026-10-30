@@ -122,6 +122,29 @@ A failed pull, migration, startup, health check, asset check, or probe stops the
 
 For every release, preserve a record containing the commit, app and worker digests, fast-gate result, complete pytest state, migration result and schema version, app/worker health, HTTPS and certificate result, synthetic endpoint result, and whether real login, long-term renewal, or Voice calls were verified. A release with `full_pytest=not run` is eligible only when the fast gate and online checks pass; it must not be described as a full regression pass.
 
+### Release record template
+
+Copy this template for each deployment. Keep the immutable image digests and the workflow run URL with the record.
+
+```text
+release_commit: <40-character commit>
+fast_gate: passed | failed
+app_image_digest: sha256:<64 hex characters>
+worker_image_digest: sha256:<64 hex characters>
+full_pytest: passed | failed | timed out | not run
+migration: passed | failed
+online_app_worker_health: passed | failed
+https_redirect_home_static_readyz: passed | failed
+websocket_sse_cliproxyapi_voice_synthetic: passed | failed | not run
+certificate_renewal: passed | failed | unverified
+real_account_login: verified | unverified
+long_term_renewal: verified | unverified
+voice_actual_call: verified | unverified
+rollback_or_old_bridge_cleanup: <action and timestamp>
+```
+
+The fast gate is the deployment conclusion. Complete pytest and real-account rows remain separate evidence and must retain their actual state.
+
 ### Required release hook configuration
 
 The script intentionally delegates site-specific traffic and management details to executable hooks. Set `FAST_GATE_URL` to the successful fast-gate workflow URL and `FAST_GATE_SHA` to the same commit as `RELEASE_COMMIT`; the script checks the GitHub API for a completed successful gate on that revision and rejects mismatched workflow provenance. For private repositories, provide a read-only `GH_TOKEN` to this server-side check. Set `SNAPSHOT_HOOK` to stop/quiesce the old bridge and write the key-matched SQLite snapshot to `$RELEASE_BACKUP_DIR/bridge.sqlite3`. `SWITCH_HOOK` changes the reverse proxy upstream to the candidate port, `ROLLBACK_HOOK` restores the old upstream, `RESUME_OLD_HOOK` starts the old bridge after a failed candidate, and `STOP_OLD_HOOK` stops it after acceptance. `CERT_CHECK_HOOK` checks certificate validity and automatic renewal, while `PROBE_HOOK` runs authenticated synthetic checks for `/readyz`, task WebSocket/SSE, CLIProxyAPI management, and Voice management. Hooks must be absolute executable paths and should fail closed.

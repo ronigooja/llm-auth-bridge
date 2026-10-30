@@ -23,6 +23,8 @@ relying on an integration.
 
 ## Documentation by reader
 
+Use the [documentation map](docs/README.md) to route questions and new records.
+
 | Reader | Entry points |
 | --- | --- |
 | Operator | [Deployment and recovery](docs/guides/deployment.md), [account workflow](docs/guides/account-workflow.md), [troubleshooting](docs/troubleshooting/) |
@@ -30,8 +32,8 @@ relying on an integration.
 | System maintainer | [Architecture overview](docs/architecture/overview.md), [runtime and browser devices](docs/architecture/runtime.md), [data and tasks](docs/architecture/data-and-tasks.md), [security boundaries](docs/architecture/security.md) |
 | API or adapter author | [HTTP API](docs/contracts/http-api.md), [worker/adapters](docs/contracts/worker-adapters.md), [account window transport](docs/contracts/account-window.md), [CLIProxyAPI](docs/contracts/integrations/cliproxyapi.md), [Voice](docs/contracts/integrations/voice.md) |
 | Product/UI contributor | [Authentication behavior](docs/product/authentication.md), [UI guidelines](docs/product/ui-guidelines.md) |
-| Acceptance reviewer | [Capabilities, evidence and open work](docs/roadmap.md) |
+| Acceptance reviewer | [Capabilities and open work](docs/roadmap.md), [evidence log](docs/evidence/2026-10-27-acceptance.md) |
 
-Architectural decisions are linked from the [architecture overview](docs/architecture/overview.md).
+Architectural decisions are indexed in the [ADR index](docs/architecture/decisions/README.md).
 Configuration belongs in the deployment guide; test commands belong in the
 development guide; current acceptance status belongs in the roadmap.
