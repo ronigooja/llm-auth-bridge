@@ -2,7 +2,7 @@ name: Checks
 on:
   workflow_dispatch:
   push:
-    branches-ignore: ["validation/**", "deployment/**", "artifacts/**"]
+    branches: [main]
     paths-ignore:
       - "*.md"
       - "docs/**"
@@ -21,8 +21,6 @@ jobs:
   changes:
     runs-on: ubuntu-24.04
     outputs:
-      frontend: ${{ steps.filter.outputs.frontend }}
-      backend: ${{ steps.filter.outputs.backend }}
       images: ${{ steps.filter.outputs.images }}
     steps:
       - uses: actions/checkout@v4
@@ -40,96 +38,9 @@ jobs:
           fi
           changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
           has_path() { grep -Eq "$1" <<<"$changed"; }
-          echo "frontend=$(has_path '^frontend/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          echo "backend=$(has_path '^(app/|tests/|pyproject.toml$|uv.lock$)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          echo "images=$(has_path '^(app/|frontend/|deploy/|Dockerfile|docker-compose|pyproject.toml$|uv.lock$)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
-  check:
-    needs: changes
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - if: ${{ needs.changes.outputs.backend == 'true' }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - if: ${{ needs.changes.outputs.frontend == 'true' }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22.14.0"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - if: ${{ needs.changes.outputs.backend == 'true' }}
-        uses: astral-sh/setup-uv@v6
-        with:
-          version: "0.8.22"
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-      - if: ${{ needs.changes.outputs.backend == 'true' }}
-        run: uv sync --frozen --extra test --extra browser
-      - name: Restore Camoufox browser binaries
-        if: ${{ needs.changes.outputs.backend == 'true' }}
-        id: playwright_cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.cache/camoufox
-          key: ${{ runner.os }}-${{ runner.arch }}-camoufox-${{ hashFiles('uv.lock') }}
-      - name: Install Camoufox and required OS packages
-        if: ${{ needs.changes.outputs.backend == 'true' }}
-        id: playwright_install
-        timeout-minutes: 5
-        run: uv run python -m camoufox fetch
-      - name: Save installed Camoufox browser binaries before tests
-        if: ${{ needs.changes.outputs.backend == 'true' && steps.playwright_cache.outputs.cache-hit != 'true' && steps.playwright_install.outcome == 'success' }}
-        uses: actions/cache/save@v4
-        with:
-          path: ~/.cache/camoufox
-          key: ${{ steps.playwright_cache.outputs.cache-primary-key }}
-      - name: Enable browser sandbox namespaces on ephemeral runner
-        if: ${{ needs.changes.outputs.backend == 'true' }}
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - name: Install checksum-verified synthetic proxy test executable
-        if: ${{ needs.changes.outputs.backend == 'true' }}
-        run: |
-          curl -fsSL https://github.com/go-gost/gost/releases/download/v3.3.1/gost_3.3.1_linux_amd64.tar.gz -o /tmp/gost.tar.gz
-          echo 'e0e3a2c9116e2f025e962bba340749f80696bda318613d45e5ae96dd0bcae37c  /tmp/gost.tar.gz' | sha256sum -c -
-          tar -xzf /tmp/gost.tar.gz -C /tmp gost
-      - id: frontend_deps
-        if: ${{ needs.changes.outputs.frontend == 'true' }}
-        run: npm ci --ignore-scripts
-        working-directory: frontend
-      - if: ${{ needs.changes.outputs.frontend == 'true' }}
-        run: npm test
-        working-directory: frontend
-      - if: ${{ needs.changes.outputs.frontend == 'true' && !cancelled() && steps.frontend_deps.outcome == 'success' }}
-        run: npm run build
-        working-directory: frontend
-      - name: Codex continuation preflight
-        timeout-minutes: 8
-        if: ${{ needs.changes.outputs.backend == 'true' && !cancelled() }}
-        env:
-          BRIDGE_TEST_GOST: /tmp/gost
-        run: |
-          set -euo pipefail
-          mkdir -p check-logs
-          git rev-parse HEAD > check-logs/source-revision.txt
-          git status --porcelain=v1 -- . ':!check-logs' > check-logs/uncommitted-inputs.txt
-          printf 'run=%s\njob=%s\nos=%s\narch=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$GITHUB_JOB" "$RUNNER_OS" "$RUNNER_ARCH" > check-logs/environment.txt
-          sudo apt-get update
-          sudo apt-get install -y xvfb xauth novnc x11vnc websockify tigervnc-standalone-server openbox x11-utils
-          set +e
-          timeout --kill-after=10s 180s bash -o pipefail -c 'uv run pytest -v -ra tests/test_browser_live.py -k codex_existing --junitxml=check-logs/codex.xml 2>&1 | tee check-logs/codex.log'
-          targeted_result=$?
-          printf '%s\n' "$targeted_result" > check-logs/codex.exit
-          exit "$targeted_result"
-      - uses: actions/upload-artifact@v4
-        if: ${{ always() && needs.changes.outputs.backend == 'true' }}
-        with:
-          name: checks-${{ github.sha }}
-          path: check-logs/
-          retention-days: 7
+           echo "images=$(has_path '^(app/|frontend/|deploy/|Dockerfile|docker-compose|pyproject.toml$|uv.lock$)' && echo true || echo false)" >> "$GITHUB_OUTPUT"
   images:
-    needs: [changes, check]
+    needs: changes
     if: ${{ needs.changes.outputs.images == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45

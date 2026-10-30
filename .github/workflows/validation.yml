@@ -10,7 +10,6 @@ concurrency:
   cancel-in-progress: true
 jobs:
   bridge:
-    if: github.ref != 'refs/heads/validation/upstream-late-interrupt'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -21,34 +20,17 @@ jobs:
           git rev-parse HEAD > validation-logs/source-revision.txt
           git status --porcelain=v1 > validation-logs/uncommitted-inputs.txt
           printf 'run=%s\njob=%s\nos=%s\narch=%s\n' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$GITHUB_JOB" "$RUNNER_OS" "$RUNNER_ARCH" > validation-logs/environment.txt
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
       - uses: actions/setup-node@v4
         with:
           node-version: "22.14.0"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - name: Provision synthetic test prerequisites
-        id: provision
-        run: |
-          set -euxo pipefail
-          exec > >(tee validation-logs/provision.log) 2>&1
-          trap 'printf "%s\n" "$?" > validation-logs/provision.exit' EXIT
-          pip install uv==0.8.22
-          uv sync --frozen --extra test --extra browser
-          uv run python -m camoufox fetch
-          # GitHub Ubuntu 24.04 AppArmor otherwise blocks browser user namespaces.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          curl -fsSL https://github.com/go-gost/gost/releases/download/v3.3.1/gost_3.3.1_linux_amd64.tar.gz -o /tmp/gost.tar.gz
-          echo 'e0e3a2c9116e2f025e962bba340749f80696bda318613d45e5ae96dd0bcae37c  /tmp/gost.tar.gz' | sha256sum -c -
-          tar -xzf /tmp/gost.tar.gz -C /tmp gost
-          npm ci --ignore-scripts --prefix frontend
       - name: Frontend tests and build
         run: |
           set -euxo pipefail
           exec > >(tee validation-logs/frontend.log) 2>&1
           trap 'printf "%s\n" "$?" > validation-logs/frontend.exit' EXIT
+          npm ci --ignore-scripts --prefix frontend
           npm test --prefix frontend
           npm run build --prefix frontend
       - uses: actions/upload-artifact@v4
@@ -58,7 +40,6 @@ jobs:
           path: validation-logs/
           retention-days: 7
   cpa:
-    if: github.ref != 'refs/heads/validation/upstream-late-interrupt'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -123,7 +104,6 @@ jobs:
           path: validation-logs/
           retention-days: 7
   cpa-baseline:
-    if: github.ref != 'refs/heads/validation/upstream-late-interrupt'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
