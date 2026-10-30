@@ -36,19 +36,12 @@ from serving requests; see the [deployment guide](../guides/deployment.md).
   execution fencing, cancellation, recovery and retention.
 - [Security boundaries](security.md) describes administrator access, secret
   storage, network routes and the live desktop trust boundary.
-- Architecture decisions explain [account routing](decisions/001-oauth-proxy.md),
-  [encrypted secrets](decisions/002-encrypted-secrets.md), and
-  [serial execution and handoff](decisions/003-execution-and-handoff.md).
+- Architecture decisions are indexed in the [ADR index](decisions/README.md).
 - Operational incidents and phase-by-phase diagnosis belong in
   [troubleshooting](../troubleshooting/), including the
   [login authentication guide](../troubleshooting/login-auth.md). This section
   records observed failures and operator investigation steps; it does not
   redefine runtime or API contracts.
-
-  New incident records must be added under `docs/troubleshooting/` and linked
-  from the relevant guide. Do not place operational incident notes in
-  `docs/archive/`, `docs/operations/`, or the architecture pages; those
-  locations have different ownership and purpose.
 
 Interface details have one home: [HTTP API](../contracts/http-api.md),
 [worker adapters](../contracts/worker-adapters.md) and
