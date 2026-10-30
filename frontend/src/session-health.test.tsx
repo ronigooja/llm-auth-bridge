@@ -44,27 +44,29 @@ describe("account session health", () => {
     fireEvent.click(screen.getByRole("button", { name: "查看任务 #8" }));
     expect(openTask).toHaveBeenCalledWith(8);
   });
-  it("distinguishes failed checks from sign-out and retains last successful time", () => {
+  it("distinguishes failed checks from sign-out and shows only the last check time", () => {
     render(<SessionHealth session={{ ...session, status: "error", error_code: "navigation_failed", activity: "checking", task_id: 9 }} targets={[]} openTask={vi.fn()} />);
     expect(screen.getByText("检查失败")).toBeTruthy();
     expect(screen.getByText("正在检查会话")).toBeTruthy();
     expect(screen.getByText(/navigation_failed/)).toBeTruthy();
     expect(screen.queryByText("已退出登录")).toBeNull();
-    expect(document.querySelectorAll("time")).toHaveLength(2);
+    expect(screen.getByText(/上次检查/)).toBeTruthy();
+    expect(screen.queryByText(/最近成功/)).toBeNull();
+    expect(document.querySelectorAll("time")).toHaveLength(1);
   });
-  it("prioritizes account deletion over an unhelpful never-successful message", () => {
+  it("shows unavailable accounts with the provider reason and no success wording", () => {
     render(<SessionHealth session={{ ...session, status: "unavailable", error_code: "account_deleted", last_success_at: null }} targets={[]} openTask={vi.fn()} />);
     expect(screen.getByText("账号不可用")).toBeTruthy();
     expect(screen.queryByText("检查失败")).toBeNull();
-    expect(screen.getByText(/最近检查/)).toBeTruthy();
+    expect(screen.getByText(/上次检查/)).toBeTruthy();
     expect(screen.getAllByText(/已被 OpenAI 删除/)).toHaveLength(1);
-    expect(screen.queryByText("从未成功")).toBeNull();
-    expect(screen.queryByText("尚无成功记录")).toBeNull();
+    expect(screen.queryByText(/成功/)).toBeNull();
   });
   it("does not repeat the status label as the reason and avoids the global error class", () => {
     render(<SessionHealth session={{ ...session, status: "error", error_code: "check_failed", last_success_at: null }} targets={[]} openTask={vi.fn()} />);
     expect(screen.getAllByText(/检查失败/)).toHaveLength(1);
-    expect(screen.getByText(/尚无成功记录/)).toBeTruthy();
+    expect(screen.getByText(/上次检查/)).toBeTruthy();
+    expect(screen.queryByText(/成功/)).toBeNull();
     const badge = screen.getByText("检查失败");
     expect(badge.classList.contains("badge")).toBe(true);
     expect(badge.classList.contains("error")).toBe(false);

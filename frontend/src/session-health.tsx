@@ -36,16 +36,11 @@ const errorLabels: Record<string, string> = {
   identity_mismatch: "账号身份不匹配",
   check_failed: "检查失败",
 };
-function isUnavailable(session?: WebSession) {
-  return session?.status === "unavailable";
-}
 function sessionMeta(session: WebSession | undefined, sep: ReactNode) {
   if (!session?.checked_at) return null;
-  const checked = <>最近检查 <HealthTime value={session.checked_at} /></>;
   const reasonText = session.error_code && (errorLabels[session.error_code] || session.error_code);
   const reason = reasonText && reasonText !== healthLabels[session.status] && <>{sep}{reasonText}</>;
-  if (isUnavailable(session)) return <>{checked}{reason}</>;
-  return <>{checked}{sep}{session.last_success_at != null ? <>最近成功 <HealthTime value={session.last_success_at} /></> : "尚无成功记录"}{reason}</>;
+  return <>上次检查 <HealthTime value={session.checked_at} />{reason}</>;
 }
 export function HealthTime({ value, now = Date.now() }: { value: number | null; now?: number }) {
   if (value === null) return <>暂无记录</>;
