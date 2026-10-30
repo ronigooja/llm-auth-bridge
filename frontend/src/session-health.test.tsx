@@ -44,6 +44,11 @@ describe("account session health", () => {
     fireEvent.click(screen.getByRole("button", { name: "查看任务 #8" }));
     expect(openTask).toHaveBeenCalledWith(8);
   });
+  it("lists Voice before CLIProxyAPI regardless of API order", () => {
+    render(<SessionHealth session={session} syncs={[{ ...sync, target_id: 3, kind: "cliproxyapi" }, { ...sync, target_id: 2 }]} targets={[{ id: 2, name: "Voice" }, { id: 3, name: "CPA" }]} openTask={vi.fn()} />);
+    const names = Array.from(document.querySelectorAll(".target-health strong")).map((el) => el.textContent);
+    expect(names).toEqual(["Voice", "CPA"]);
+  });
   it("distinguishes failed checks from sign-out and shows only the last check time", () => {
     render(<SessionHealth session={{ ...session, status: "error", error_code: "navigation_failed", activity: "checking", task_id: 9 }} targets={[]} openTask={vi.fn()} />);
     expect(screen.getByText("检查失败")).toBeTruthy();

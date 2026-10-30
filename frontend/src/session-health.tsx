@@ -68,7 +68,7 @@ export function SessionHealth({ session, syncs = [], targets, openTask }: {
         {sessionMeta(session, sep)}
       </span>
     </div>
-    {syncs.map((sync) => <div key={sync.target_id} className="health-row target-health">
+    {[...syncs].sort((a, b) => Number(b.kind === "chatgpt-web-voice") - Number(a.kind === "chatgpt-web-voice")).map((sync) => <div key={sync.target_id} className="health-row target-health">
       <strong>{targets.find((target) => target.id === sync.target_id)?.name || `目标 #${sync.target_id}`}</strong>
       <span className={`badge ${sync.state}`}>{syncLabels[sync.state] || "同步状态待确认"}</span>
       {sync.task_id != null && <button className="health-task" onClick={() => openTask(sync.task_id!)}>查看任务 #{sync.task_id}</button>}
