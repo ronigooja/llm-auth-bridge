@@ -222,7 +222,7 @@ export function useAccountWindow(enabled: boolean) {
         {task && active.has(task.state) && task.state !== "sync_pending" && !idle(task) && !interactive && <button disabled={busy || !available || takeoverRequested} onClick={() => void takeControl()}>{takeoverRequested ? "正在等待接管…" : "接管"}</button>}
         {task && task.state === "waiting_human" && !idle(task) && !rejected.has(task.phase || "") && <button disabled={busy} onClick={() => void continueTask()}>继续任务</button>}
       </header>
-      {task && !idle(task) && <p style={{ margin: "0 12px 12px" }}>关闭窗口仅关闭查看器，登录任务会继续。接管后请返回任务页点击“继续任务”。</p>}
+      {task && !idle(task) && <p style={{ margin: "0 12px 12px" }}>关闭窗口仅关闭查看器，登录任务会继续。接管并检查页面后，点击上方“继续任务”。</p>}
       {error && <p role="alert">{error}</p>}
       {available && <iframe title="账号浏览器" src={accountViewerUrl(task.id, interactive)} style={{ border: 0, width: "100%", flex: 1, minHeight: 0 }} />}
     </>, host)}
