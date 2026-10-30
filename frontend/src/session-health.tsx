@@ -83,4 +83,3 @@ export function SessionHealth({ session, syncs = [], targets, openTask }: {
     </div>)}
   </section>;
 }
-import type { ReactNode } from "react";
