@@ -14,7 +14,7 @@ export type TargetSync = {
   state: string;
   verified_at: number | null;
   next_check: number | null;
-  pause_reason: null | "signed_out" | "identity_mismatch" | "maintenance_disabled";
+  pause_reason: null | "signed_out" | "identity_mismatch" | "manual_required" | "maintenance_disabled";
   task_id: number | null;
 };
 const healthLabels = {
@@ -27,6 +27,7 @@ const syncLabels: Record<string, string> = {
 };
 const pauseLabels = {
   signed_out: "会话已退出，请重新登录", identity_mismatch: "账号身份不匹配", maintenance_disabled: "自动维护已关闭",
+  manual_required: "需要人工处理后再继续维护",
 };
 const errorLabels: Record<string, string> = {
   account_deleted: "账号已被 OpenAI 删除",

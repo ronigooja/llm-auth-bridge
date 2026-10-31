@@ -212,6 +212,17 @@ class Control:
             self.worker.stopping.wait(0.25)
 
 
+def pause_maintenance(conn, task, reason):
+    """Stop scheduling this account until a human repairs the web session."""
+    if task.get("kind") != "maintenance" or not task.get("target_id"):
+        return
+    conn.execute(
+        "UPDATE syncs SET last_error=?,next_check=NULL "
+        "WHERE account_id=? AND target_id=?",
+        (reason, task["account_id"], task["target_id"]),
+    )
+
+
 class Worker:
     def __init__(self, settings=None, runner=None, syncer=None):
         self.settings = settings or Settings()
@@ -467,6 +478,9 @@ class Worker:
         except HumanTimeout:
             if self._release_native(task, "native_recovery_failed", "Human input timed out; retry or cancel native authorization"):
                 return
+            with database(self.settings.db_path) as conn:
+                self.queue.owned(conn, task["id"], task["execution_id"])
+                pause_maintenance(conn, task, "human_timeout")
             self._finish(
                 task,
                 "interrupted",
@@ -509,6 +523,7 @@ class Worker:
                 if self._release_native(task, "native_recovery_failed", safe_message or "Native OAuth requires reconciliation; retry or cancel this task"):
                     return
                 reauth = "reauth_required" in str(exc)
+                identity_mismatch = "identity" in str(exc).lower() and "match" in str(exc).lower()
                 if reauth:
                     with database(self.settings.db_path) as conn:
                         self.queue.owned(conn, task["id"], task["execution_id"])
@@ -522,6 +537,10 @@ class Worker:
                             "UPDATE syncs SET state='reauth_required',last_error='reauth_required',next_check=NULL WHERE account_id=? AND target_id=?",
                             (task["account_id"], task["target_id"]),
                         )
+                elif identity_mismatch:
+                    with database(self.settings.db_path) as conn:
+                        self.queue.owned(conn, task["id"], task["execution_id"])
+                        pause_maintenance(conn, task, "identity_mismatch")
                 if not reauth and task.get("target_id"):
                     with database(self.settings.db_path) as conn:
                         target_row = conn.execute("SELECT kind FROM targets WHERE id=?", (task["target_id"],)).fetchone()

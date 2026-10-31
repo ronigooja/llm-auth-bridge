@@ -53,6 +53,20 @@ button.primary:hover {
 .danger {
   color: #aa3d36;
 }
+.task-times {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 10px 0 14px;
+  color: #66736d;
+  font-size: 13px;
+}
+.event-time {
+  display: block;
+  color: #66736d;
+  font-size: 12px;
+  margin-bottom: 3px;
+}
 .brand {
   font-size: 15px;
   font-weight: 800;

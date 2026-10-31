@@ -149,6 +149,29 @@ def test_human_timeout_becomes_interrupted(settings, resources):
     with database(settings.db_path) as conn:
         r = conn.execute("SELECT state,phase FROM tasks").fetchone()
         assert tuple(r) == ("interrupted", "human_timeout")
+        sync = conn.execute("SELECT next_check,last_error FROM syncs").fetchone()
+        assert sync is None
+
+
+def test_maintenance_human_timeout_pauses_future_checks(settings, resources):
+    a, t = resources
+    with database(settings.db_path) as conn:
+        conn.execute("UPDATE targets SET kind='chatgpt-web-voice' WHERE id=?", (t,))
+        conn.execute(
+            "INSERT INTO syncs(account_id,target_id,credential_type,state,next_check) VALUES(?,?,'chatgpt_web','verified',?)",
+            (a, t, time.time() - 1),
+        )
+    short = replace(settings, human_seconds=0.02)
+    worker = Worker(short, runner=lambda a, t, c, s: c.wait_human("Review"))
+    worker.maintenance()
+    worker.run_once()
+    with database(settings.db_path) as conn:
+        sync = conn.execute("SELECT next_check,last_error FROM syncs").fetchone()
+        assert sync[0] is None
+        assert sync[1] == "human_timeout"
+    worker.maintenance()
+    with database(settings.db_path) as conn:
+        assert conn.execute("SELECT count(*) FROM tasks WHERE kind='maintenance'").fetchone()[0] == 1
 
 
 def test_provider_rejection_pause_records_account_health(settings, resources):

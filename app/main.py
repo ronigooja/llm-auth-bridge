@@ -74,7 +74,12 @@ def public_account(conn, row):
     result["web_session"]["task_id"] = check["id"] if check else None
     result["target_syncs"] = [dict(r) for r in conn.execute("SELECT s.target_id,t.kind,s.state,s.verified_at,s.next_check,s.last_error FROM syncs s JOIN targets t ON t.id=s.target_id WHERE s.account_id=?", (row["id"],))]
     for item in result["target_syncs"]:
-        item["pause_reason"] = "signed_out" if item["state"] == "reauth_required" else None
+        item["pause_reason"] = (
+            "signed_out" if item["state"] == "reauth_required"
+            else "identity_mismatch" if item["last_error"] == "identity_mismatch"
+            else "manual_required" if item["last_error"] == "human_timeout"
+            else None
+        )
         active = conn.execute("SELECT id FROM tasks WHERE account_id=? AND target_id=? AND state IN ('queued','running','waiting_human','sync_pending') ORDER BY id DESC LIMIT 1", (row["id"], item["target_id"])).fetchone()
         item["task_id"] = active["id"] if active else None
     return result

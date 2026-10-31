@@ -44,6 +44,7 @@ type Task = {
   phase?: string;
   message?: string;
   created_at?: string;
+  updated_at?: string;
   takeover_available?: boolean;
 };
 type Page = "accounts" | "targets" | "tasks" | "settings";
@@ -55,6 +56,19 @@ type TaskEvent = {
   message?: string;
   created_at?: string;
 };
+function absoluteTime(value?: string) {
+  if (!value) return "暂无";
+  const date = new Date(value.includes("Z") ? value : `${value.replace(" ", "T")}Z`);
+  return Number.isNaN(date.valueOf()) ? value : date.toLocaleString("zh-CN", { timeZoneName: "short" });
+}
+function elapsedTime(start?: string, end?: string) {
+  if (!start) return "暂无";
+  const from = new Date(start.includes("Z") ? start : `${start.replace(" ", "T")}Z`).valueOf();
+  const to = end ? new Date(end.includes("Z") ? end : `${end.replace(" ", "T")}Z`).valueOf() : Date.now();
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return "暂无";
+  const seconds = Math.round((to - from) / 1000);
+  return seconds < 60 ? `${seconds} 秒` : seconds < 3600 ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds / 60) % 60} 分`;
+}
 function restoredNavigation(): { page: Page; task: number | null } {
   const match = window.location.hash.match(
     /^#(accounts|targets|tasks|settings)(?:\/(\d+))?$/,
@@ -636,6 +650,7 @@ export function App() {
                           <small>
                             {accounts?.find((a) => a.id === t.account_id)
                               ?.username || `账号 #${t.account_id}`}
+                            <br />创建：{absoluteTime(t.created_at)}
                           </small>
                         </span>
                         <Status value={t.state} />
@@ -1238,6 +1253,7 @@ function TaskDetail({ id, updated, openAccountWindow }: { id: number; updated: (
           state: v.state,
           phase: v.phase,
           message: v.message,
+          created_at: v.created_at,
         };
         mergeHistory([item]);
         // Event IDs identify log rows, never the task itself.
@@ -1307,6 +1323,11 @@ function TaskDetail({ id, updated, openAccountWindow }: { id: number; updated: (
       {task && (
         <>
           <p className="muted">任务类型：{taskKind(task.kind)}</p>
+          <div className="task-times">
+            <span>创建：{absoluteTime(task.created_at)}</span>
+            <span>更新：{absoluteTime(task.updated_at)}</span>
+            <span>持续：{elapsedTime(task.created_at, terminalStates.has(task.state) ? task.updated_at : undefined)}</span>
+          </div>
           <p className="phase">{label(task.phase || task.state)}</p>
           {task.message && <p>{task.message}</p>}
           {task.state === "waiting_human" && task.kind !== "browser_window" && task.phase !== "browser_window" && (
@@ -1412,14 +1433,15 @@ function TaskDetail({ id, updated, openAccountWindow }: { id: number; updated: (
             <ol role="log" aria-live="polite" aria-relevant="additions">
               {history.map((item) => (
                 <li key={item.event_id}>
-                  <span className="event-number">#{item.event_id}</span>
-                  <div>
-                    <Status value={item.state} />
-                    <span className="event-phase">
-                      {label(item.phase || item.state)}
-                    </span>
-                    {item.message && <p>{item.message}</p>}
-                  </div>
+                    <span className="event-number">#{item.event_id}</span>
+                    <div>
+                      <time className="event-time" dateTime={item.created_at}>{absoluteTime(item.created_at)}</time>
+                      <Status value={item.state} />
+                      <span className="event-phase">
+                        {label(item.phase || item.state)}
+                      </span>
+                      {item.message && <p>{item.message}</p>}
+                    </div>
                 </li>
               ))}
             </ol>
