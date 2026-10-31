@@ -61,10 +61,33 @@ function absoluteTime(value?: string) {
   const date = new Date(value.includes("Z") ? value : `${value.replace(" ", "T")}Z`);
   return Number.isNaN(date.valueOf()) ? value : date.toLocaleString("zh-CN", { timeZoneName: "short" });
 }
+function parseTime(value?: string) {
+  if (!value) return NaN;
+  return new Date(value.includes("Z") ? value : `${value.replace(" ", "T")}Z`).valueOf();
+}
+function relativeTime(value?: string) {
+  const timestamp = parseTime(value);
+  if (!Number.isFinite(timestamp)) return "暂无";
+  const delta = Date.now() - timestamp;
+  const seconds = Math.max(0, Math.round(delta / 1000));
+  if (seconds < 60) return "刚刚";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`;
+  return `${Math.floor(seconds / 86400)} 天前`;
+}
+function shortTime(value?: string) {
+  const timestamp = parseTime(value);
+  if (!Number.isFinite(timestamp)) return "暂无";
+  return new Date(timestamp).toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
 function elapsedTime(start?: string, end?: string) {
   if (!start) return "暂无";
-  const from = new Date(start.includes("Z") ? start : `${start.replace(" ", "T")}Z`).valueOf();
-  const to = end ? new Date(end.includes("Z") ? end : `${end.replace(" ", "T")}Z`).valueOf() : Date.now();
+  const from = parseTime(start);
+  const to = end ? parseTime(end) : Date.now();
   if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return "暂无";
   const seconds = Math.round((to - from) / 1000);
   return seconds < 60 ? `${seconds} 秒` : seconds < 3600 ? `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒` : `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds / 60) % 60} 分`;
@@ -650,7 +673,7 @@ export function App() {
                           <small>
                             {accounts?.find((a) => a.id === t.account_id)
                               ?.username || `账号 #${t.account_id}`}
-                            <br />创建：{absoluteTime(t.created_at)}
+                            <br />{relativeTime(t.created_at)}
                           </small>
                         </span>
                         <Status value={t.state} />
@@ -1325,7 +1348,7 @@ function TaskDetail({ id, updated, openAccountWindow }: { id: number; updated: (
           <p className="muted">任务类型：{taskKind(task.kind)}</p>
           <div className="task-times">
             <span>创建：{absoluteTime(task.created_at)}</span>
-            <span>更新：{absoluteTime(task.updated_at)}</span>
+            {terminalStates.has(task.state) && <span>完成：{absoluteTime(task.updated_at)}</span>}
             <span>持续：{elapsedTime(task.created_at, terminalStates.has(task.state) ? task.updated_at : undefined)}</span>
           </div>
           <p className="phase">{label(task.phase || task.state)}</p>
@@ -1435,7 +1458,7 @@ function TaskDetail({ id, updated, openAccountWindow }: { id: number; updated: (
                 <li key={item.event_id}>
                     <span className="event-number">#{item.event_id}</span>
                     <div>
-                      <time className="event-time" dateTime={item.created_at}>{absoluteTime(item.created_at)}</time>
+                      <time className="event-time" dateTime={item.created_at} title={absoluteTime(item.created_at)}>{shortTime(item.created_at)}</time>
                       <Status value={item.state} />
                       <span className="event-phase">
                         {label(item.phase || item.state)}
