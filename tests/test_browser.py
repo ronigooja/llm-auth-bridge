@@ -41,6 +41,22 @@ def test_pkce_and_authorization():
     assert "offline_access" in params["scope"][0]
 
 
+def test_automation_pause_uses_bounded_random_delay(monkeypatch):
+    import app.browser as module
+
+    waits = []
+
+    class Page:
+        def wait_for_timeout(self, milliseconds):
+            waits.append(milliseconds)
+
+    monkeypatch.setattr(module.secrets, "randbelow", lambda size: size - 1)
+    module._automation_pause(Page())
+
+    assert waits == [module.AUTOMATION_DELAY_MAX_MS]
+    assert module.AUTOMATION_DELAY_MIN_MS <= waits[0] <= module.AUTOMATION_DELAY_MAX_MS
+
+
 @pytest.mark.parametrize(
     "url",
     [

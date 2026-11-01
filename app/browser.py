@@ -31,6 +31,10 @@ FIREFOX_ARGS = []
 # than a password/code form that remains available for review.
 TRANSITION_WAIT_SECONDS = 30
 CHALLENGE_SETTLE_SECONDS = 4
+# Keep automated interactions from occurring as one uninterrupted burst while
+# retaining short, bounded waits that do not materially extend a login task.
+AUTOMATION_DELAY_MIN_MS = 250
+AUTOMATION_DELAY_MAX_MS = 900
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 REDIRECT_URI = "http://localhost:1455/auth/callback"
 SESSION_COOKIE_FILE = ".bridge-session-cookies.json"
@@ -508,12 +512,21 @@ def _form_submit(field):
     return handle.as_element()
 
 
+def _automation_pause(page):
+    """Add a short randomized pause before an automated browser action."""
+    delay_ms = AUTOMATION_DELAY_MIN_MS + secrets.randbelow(
+        AUTOMATION_DELAY_MAX_MS - AUTOMATION_DELAY_MIN_MS + 1
+    )
+    page.wait_for_timeout(delay_ms)
+
+
 def _submit(page, field=None):
     if field is not None:
         button = _form_submit(field)
         if button is None:
             # Never fall back to an arbitrary page-wide submit control here.
             raise BrowserError("Login form requires manual review")
+        _automation_pause(page)
         button.evaluate("element => element.click()")
         return
     button = _visible(page, 'button[type="submit"]:enabled, input[type="submit"]:enabled')
@@ -528,6 +541,7 @@ def _submit(page, field=None):
     # state loop below observes the resulting provider page and classifies it.
     # Dispatch through the DOM so a provider document replacement cannot make
     # Playwright wait on or invalidate the old page handle.
+    _automation_pause(page)
     button.evaluate("element => element.click()")
 
 
@@ -963,6 +977,7 @@ def _run_login(
                         if login_control is None:
                             raise BrowserError("Provider login control is unavailable")
                         try:
+                            _automation_pause(page)
                             login_control.evaluate("element => element.click()")
                         except PlaywrightError:
                             # A provider redirect can destroy the old
@@ -980,6 +995,7 @@ def _run_login(
                             else 'input[type="password"]'
                         )
                         field = _editable(page, selector)
+                        _automation_pause(page)
                         field.fill(
                             account["username" if stage == "email" else "password"]
                         )
@@ -994,6 +1010,7 @@ def _run_login(
                         code = generate_code(account["totp"])
                         if ("totp_code", code) not in submitted:
                             control.phase("totp", "Submitting authenticator code")
+                            _automation_pause(page)
                             _editable(
                                 page,
                                 'input[autocomplete="one-time-code"], input[name="code"], input[name="otp"]',
@@ -1012,6 +1029,7 @@ def _run_login(
                                       if stage == "account_chooser"
                                       else "Confirming requested authorization")
                         try:
+                            _automation_pause(page)
                             continuation.click(timeout=2000)
                         except PlaywrightError:
                             # Detached/covered controls and uncertain clicks
