@@ -116,6 +116,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb xauth
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Warm Camoufox fingerprint model
+        timeout-minutes: 3
+        run: |
+          set -Eeuo pipefail
+          env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u NO_PROXY \
+            uv run python -c 'from camoufox.sync_api import Camoufox; browser = Camoufox(headless=True); browser.start(); browser.close()'
       - name: Run synthetic browser preflight
         timeout-minutes: 5
         env: {BRIDGE_TEST_GOST: /tmp/gost}
