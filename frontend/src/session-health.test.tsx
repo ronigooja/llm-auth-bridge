@@ -36,11 +36,16 @@ describe("account session health", () => {
     expect(screen.queryByText(/维护已到期/)).toBeNull();
   });
   it("shows independent target outcomes and links their tasks", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
     const openTask = vi.fn();
-    render(<SessionHealth session={{ ...session, status: "signed_out" }} syncs={[sync, { ...sync, target_id: 3, state: "sync_pending", task_id: 8 }]} targets={[{ id: 2, name: "Voice" }, { id: 3, name: "CPA" }]} openTask={openTask} />);
+    render(<SessionHealth session={{ ...session, status: "signed_out" }} syncs={[sync, { ...sync, target_id: 3, kind: "cliproxyapi", state: "sync_pending", task_id: 8 }]} targets={[{ id: 2, name: "Voice" }, { id: 3, name: "CPA" }]} openTask={openTask} />);
     expect(screen.getByText("已退出登录")).toBeTruthy();
     expect(within(screen.getByText("Voice").closest(".target-health") as HTMLElement).getByText("已验证同步")).toBeTruthy();
     expect(within(screen.getByText("CPA").closest(".target-health") as HTMLElement).getByText("等待同步")).toBeTruthy();
+    expect(within(screen.getByText("Voice").closest(".target-health") as HTMLElement).getByText(/维护已到期，等待检查/)).toBeTruthy();
+    const cpa = within(screen.getByText("CPA").closest(".target-health") as HTMLElement);
+    expect(cpa.getByText(/令牌续期由 CLIProxyAPI 管理/)).toBeTruthy();
+    expect(cpa.queryByText(/维护/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "查看任务 #8" }));
     expect(openTask).toHaveBeenCalledWith(8);
   });
@@ -48,6 +53,34 @@ describe("account session health", () => {
     render(<SessionHealth session={session} syncs={[{ ...sync, target_id: 3, kind: "cliproxyapi" }, { ...sync, target_id: 2 }]} targets={[{ id: 2, name: "Voice" }, { id: 3, name: "CPA" }]} openTask={vi.fn()} />);
     const names = Array.from(document.querySelectorAll(".target-health strong")).map((el) => el.textContent);
     expect(names).toEqual(["Voice", "CPA"]);
+  });
+  it.each([
+    { next_check: now / 1000 - 60, pause_reason: null },
+    { next_check: now / 1000 + 3600, pause_reason: null },
+    { next_check: null, pause_reason: null },
+    { next_check: now / 1000 - 60, pause_reason: "maintenance_disabled" },
+    { next_check: now / 1000 - 60, pause_reason: "signed_out" },
+    { next_check: now / 1000 - 60, pause_reason: "identity_mismatch" },
+    { next_check: now / 1000 - 60, pause_reason: "manual_required" },
+  ] satisfies Pick<TargetSync, "next_check" | "pause_reason">[])("shows downstream-managed renewal for CLIProxyAPI with %j", (maintenance) => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const openTask = vi.fn();
+    render(<SessionHealth syncs={[{ ...sync, ...maintenance, kind: "cliproxyapi", task_id: 8 }]} targets={[{ id: 2, name: "CPA" }]} openTask={openTask} />);
+    expect(screen.getByText("已验证同步")).toBeTruthy();
+    expect(screen.getByText(/上次同步验证于/)).toBeTruthy();
+    expect(screen.getByText("2 小时前")).toBeTruthy();
+    expect(screen.getByText(/令牌续期由 CLIProxyAPI 管理/)).toBeTruthy();
+    expect(screen.queryByText(/维护/)).toBeNull();
+    expect(document.querySelectorAll("time")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "查看任务 #8" }));
+    expect(openTask).toHaveBeenCalledWith(8);
+  });
+  it("does not invent a CLIProxyAPI verification time before the first sync", () => {
+    render(<SessionHealth syncs={[{ ...sync, kind: "cliproxyapi", state: "unknown", verified_at: null, next_check: null }]} targets={[]} openTask={vi.fn()} />);
+    expect(screen.getByText("尚未同步")).toBeTruthy();
+    expect(screen.getByText("令牌续期由 CLIProxyAPI 管理")).toBeTruthy();
+    expect(screen.queryByText(/上次同步验证于|维护/)).toBeNull();
+    expect(document.querySelectorAll("time")).toHaveLength(0);
   });
   it("distinguishes failed checks from sign-out and shows only the last check time", () => {
     render(<SessionHealth session={{ ...session, status: "error", error_code: "navigation_failed", activity: "checking", task_id: 9 }} targets={[]} openTask={vi.fn()} />);

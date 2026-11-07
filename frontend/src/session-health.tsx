@@ -74,8 +74,8 @@ export function SessionHealth({ session, syncs = [], targets, openTask }: {
       <span className={`badge ${sync.state}`}>{syncLabels[sync.state] || "同步状态待确认"}</span>
       {sync.task_id != null && <button className="health-task" onClick={() => openTask(sync.task_id!)}>查看任务 #{sync.task_id}</button>}
       <span className="muted">
-        {sync.verified_at != null && <>验证于 <HealthTime value={sync.verified_at} />{sep}</>}
-        {sync.pause_reason ? <>维护已暂停：{pauseLabels[sync.pause_reason]}</> : sync.next_check !== null ? <>{sync.next_check * 1000 <= Date.now() ? "维护已到期，等待检查" : "下次维护"} <HealthTime value={sync.next_check} /></> : "维护时间尚未安排"}
+        {sync.verified_at != null && <>{sync.kind === "cliproxyapi" ? "上次同步验证于" : "验证于"} <HealthTime value={sync.verified_at} />{sep}</>}
+        {sync.kind === "cliproxyapi" ? "令牌续期由 CLIProxyAPI 管理" : sync.pause_reason ? <>维护已暂停：{pauseLabels[sync.pause_reason]}</> : sync.next_check !== null ? <>{sync.next_check * 1000 <= Date.now() ? "维护已到期，等待检查" : "下次维护"} <HealthTime value={sync.next_check} /></> : "维护时间尚未安排"}
       </span>
     </div>)}
   </section>;
