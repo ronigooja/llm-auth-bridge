@@ -19,6 +19,11 @@ PROVIDER_REJECTION_PHASES = frozenset(
 )
 
 
+class MaintenanceManualRequired(Exception):
+    def __init__(self, phase):
+        self.phase = phase
+
+
 class Control:
     def __init__(self, worker, task):
         self.worker, self.task = worker, task
@@ -162,6 +167,8 @@ class Control:
                          (encrypt(json.dumps(profile), self.worker.key), row["account_id"]))
 
     def wait_human(self, reason, *, phase="waiting_human"):
+        if self.task["kind"] == "maintenance":
+            raise MaintenanceManualRequired(phase)
         start = time.time()
         deadline = start + self.worker.settings.human_seconds
         self.queue.update(
@@ -475,6 +482,29 @@ class Worker:
                 "interrupted",
                 "Worker stopped; start a new authorization",
             )
+        except MaintenanceManualRequired as exc:
+            try:
+                with database(self.settings.db_path) as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    row = self.queue.owned(conn, task["id"], task["execution_id"])
+                    if exc.phase in PROVIDER_REJECTION_PHASES:
+                        conn.execute(
+                            "INSERT INTO web_session_health(account_id,status,checked_at,last_success_at,error_code) VALUES(?,?,?,?,?) "
+                            "ON CONFLICT(account_id) DO UPDATE SET status='unavailable',checked_at=excluded.checked_at,error_code=excluded.error_code",
+                            (task["account_id"], "unavailable", time.time(), None, exc.phase),
+                        )
+                    pause_maintenance(conn, task, "manual_required")
+                    state, phase, message = (
+                        ("cancelled", "cancelled", "Task cancelled") if row["cancel_requested"] else
+                        ("interrupted", "manual_required", "Maintenance stopped; start a new login to repair the session")
+                    )
+                    conn.execute(
+                        "UPDATE tasks SET state=?,phase=?,message=?,execution_id=NULL,lease_until=NULL,takeover_available=0,takeover_requested=0,command_cipher=NULL,human_deadline=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND execution_id=?",
+                        (state, phase, message, task["id"], task["execution_id"]),
+                    )
+                    event(conn, task["id"])
+            except LeaseLost:
+                pass
         except HumanTimeout:
             if self._release_native(task, "native_recovery_failed", "Human input timed out; retry or cancel native authorization"):
                 return

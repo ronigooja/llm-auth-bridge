@@ -77,7 +77,7 @@ def public_account(conn, row):
         item["pause_reason"] = (
             "signed_out" if item["state"] == "reauth_required"
             else "identity_mismatch" if item["last_error"] == "identity_mismatch"
-            else "manual_required" if item["last_error"] == "human_timeout"
+            else "manual_required" if item["last_error"] in ("human_timeout", "manual_required")
             else None
         )
         active = conn.execute("SELECT id FROM tasks WHERE account_id=? AND target_id=? AND state IN ('queued','running','waiting_human','sync_pending') ORDER BY id DESC LIMIT 1", (row["id"], item["target_id"])).fetchone()

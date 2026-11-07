@@ -113,8 +113,9 @@ The worker scans for due Voice maintenance every fifteen minutes using the saved
 web session; it does not resubmit the password. After verified handoff, the next
 check is scheduled at the earlier of six hours later or one hour before known
 expiry. Unknown expiry and transient retry use six-hour checks. Invalid sessions require reauthorization. `maintenance_enabled` controls
-automatic maintenance, not manual task admission. Maintenance failures that
-require human repair (including human timeout, reauthorization, or identity
+automatic maintenance, not manual task admission. When maintenance needs human
+takeover or input, it stops immediately rather than waiting for a human. Maintenance failures that
+require human repair (including manual intervention, historical human timeout, reauthorization, or identity
 mismatch) clear the next check and pause that account until a new login
 successfully restores the session; transient failures remain retryable. CPA
 refresh remains downstream-owned. See [worker.py](../../app/worker.py) and the

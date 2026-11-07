@@ -153,7 +153,8 @@ def test_human_timeout_becomes_interrupted(settings, resources):
         assert sync is None
 
 
-def test_maintenance_human_timeout_pauses_future_checks(settings, resources):
+@pytest.mark.parametrize("phase", ["waiting_human", "browser_review", "account_deleted"])
+def test_maintenance_manual_input_stops_and_pauses_future_checks(settings, resources, admin, phase):
     a, t = resources
     with database(settings.db_path) as conn:
         conn.execute("UPDATE targets SET kind='chatgpt-web-voice' WHERE id=?", (t,))
@@ -161,17 +162,51 @@ def test_maintenance_human_timeout_pauses_future_checks(settings, resources):
             "INSERT INTO syncs(account_id,target_id,credential_type,state,next_check) VALUES(?,?,'chatgpt_web','verified',?)",
             (a, t, time.time() - 1),
         )
-    short = replace(settings, human_seconds=0.02)
-    worker = Worker(short, runner=lambda a, t, c, s: c.wait_human("Review"))
+    worker = Worker(settings, runner=lambda a, t, c, s: c.wait_human("Review", phase=phase))
     worker.maintenance()
     worker.run_once()
     with database(settings.db_path) as conn:
         sync = conn.execute("SELECT next_check,last_error FROM syncs").fetchone()
         assert sync[0] is None
-        assert sync[1] == "human_timeout"
+        assert sync[1] == "manual_required"
+        assert tuple(conn.execute("SELECT state,phase FROM tasks").fetchone()) == ("interrupted", "manual_required")
+        assert not conn.execute("SELECT 1 FROM task_events WHERE state='waiting_human'").fetchone()
+        if phase == "account_deleted":
+            assert tuple(conn.execute("SELECT status,error_code FROM web_session_health WHERE account_id=?", (a,)).fetchone()) == ("unavailable", "account_deleted")
+    account = next(item for item in admin.get("/api/v1/accounts").json()["accounts"] if item["id"] == a)
+    assert next(item for item in account["target_syncs"] if item["target_id"] == t)["pause_reason"] == "manual_required"
     worker.maintenance()
     with database(settings.db_path) as conn:
         assert conn.execute("SELECT count(*) FROM tasks WHERE kind='maintenance'").fetchone()[0] == 1
+    if phase != "account_deleted":
+        def login(account, target, control, saved):
+            return {"credential_type": "chatgpt_web", "identity": account["username"], "credential": {"access_token": "synthetic"}, "expires_at": time.time() + 7200}
+        queue(settings).create(a, t)
+        repair = Worker(settings, runner=login, syncer=lambda *args: {"remote_id": "synthetic", "verified": True})
+        assert repair.run_once()
+        assert repair.run_once()
+        with database(settings.db_path) as conn:
+            restored = conn.execute("SELECT next_check,last_error FROM syncs").fetchone()
+            assert restored[0] > time.time()
+            assert restored[1] is None
+
+
+def test_maintenance_requested_takeover_stops_without_waiting(settings, resources):
+    a, t = resources
+    with database(settings.db_path) as conn:
+        conn.execute("UPDATE targets SET kind='chatgpt-web-voice' WHERE id=?", (t,))
+        conn.execute("INSERT INTO syncs(account_id,target_id,credential_type,state,next_check) VALUES(?,?,'chatgpt_web','verified',?)", (a, t, time.time() - 1))
+    def runner(account, target, control, saved):
+        control.browser_ready()
+        control.queue.action(control.id, "takeover")
+        control.checkpoint()
+    worker = Worker(settings, runner=runner)
+    worker.maintenance()
+    worker.run_once()
+    with database(settings.db_path) as conn:
+        assert tuple(conn.execute("SELECT state,phase,takeover_available FROM tasks").fetchone()) == ("interrupted", "manual_required", 0)
+        assert tuple(conn.execute("SELECT next_check,last_error FROM syncs").fetchone()) == (None, "manual_required")
+        assert not conn.execute("SELECT 1 FROM task_events WHERE state='waiting_human'").fetchone()
 
 
 def test_provider_rejection_pause_records_account_health(settings, resources):
